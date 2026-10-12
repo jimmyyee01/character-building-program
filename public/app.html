@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Program</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="app-shell">
+  <aside class="app-side">
+    <div class="head">
+      <img id="sideLogo" class="hidden" alt="">
+      <b id="sideName">Character Building</b>
+    </div>
+    <div class="sec">Program</div>
+    <button data-view="home" class="active">Dashboard</button>
+    <button data-view="modules">My Modules</button>
+    <div class="sec">Video menu</div>
+    <div id="videoMenu"><span class="small" style="color:#8ea2c6">Loading…</span></div>
+    <div class="sec">Library</div>
+    <button data-view="library">Books &amp; Letters</button>
+    <div class="sec">Records</div>
+    <button data-view="certificates">Certificates</button>
+    <button data-view="final" id="finalBtn">Final Records</button>
+    <div style="flex:1"></div>
+    <button id="logoutBtn">Log out</button>
+  </aside>
+
+  <main class="app-main">
+    <div id="dashStrip" class="dash-strip"></div>
+
+    <section id="view-home"></section>
+    <section id="view-modules" class="hidden"></section>
+    <section id="view-book" class="hidden"></section>
+    <section id="view-library" class="hidden"></section>
+    <section id="view-certificates" class="hidden"></section>
+    <section id="view-final" class="hidden"></section>
+    <section id="view-thoughts" class="hidden"></section>
+  </main>
+</div>
+
+<div id="modalRoot"></div>
+<div id="pinnedVideo" class="pinned-video hidden">
+  <video id="pinnedPlayer" controls playsinline></video>
+  <div class="bar">
+    <span>Video (minimised) — read the letter</span>
+    <span>
+      <button id="pinExpand" class="small ghost">Expand</button>
+      <button id="pinClose" class="small">Close</button>
+    </span>
+  </div>
+</div>
+
+<script src="/js/common.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

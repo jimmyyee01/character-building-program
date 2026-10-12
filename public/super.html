@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Super Admin — Character Building Program</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<!-- Login card: shown when /api/me fails with 401 (no valid super session) -->
+<div id="loginView">
+  <div class="auth-wrap">
+    <div class="auth-side">
+      <h2>Super Admin Console</h2>
+      <p>Manage portals, tenants, modules, library content and global settings
+         for the Character Building Program.</p>
+      <ul>
+        <li>One console for every portal and organization.</li>
+        <li>Modules, books, chapters and questions maintained centrally.</li>
+        <li>Reports show flagged submissions across all tenants.</li>
+      </ul>
+      <p><a href="/" style="color:#ffd979">← Back to portals</a></p>
+    </div>
+    <div class="auth-panel">
+      <h2>Sign in</h2>
+      <form id="superLoginForm">
+        <label>Username</label>
+        <input type="text" id="slUser" autocomplete="username" required>
+        <label>Password</label>
+        <input type="password" id="slPw" autocomplete="current-password" required>
+        <div class="mt"><button type="submit" style="width:100%">Sign in</button></div>
+        <p class="muted small center mt"><a href="/">Back to portals</a></p>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Console shell: visible once a super session exists -->
+<div id="appView" class="hidden">
+  <div class="topbar">
+    <div class="brand">Character Building — Super Admin</div>
+    <div class="spacer"></div>
+    <div class="who">
+      <span id="whoName">Super admin</span>
+      <a class="btn ghost small" href="/">Back to portals</a>
+      <button type="button" id="logoutBtn" class="ghost small">Logout</button>
+    </div>
+  </div>
+  <div class="shell">
+    <nav class="side">
+      <button type="button" class="nav-btn active" data-view="dashboard">Dashboard</button>
+      <button type="button" class="nav-btn" data-view="portals">Portals</button>
+      <button type="button" class="nav-btn" data-view="accounts">Accounts</button>
+      <button type="button" class="nav-btn" data-view="modules">Modules</button>
+      <button type="button" class="nav-btn" data-view="library">Library</button>
+      <button type="button" class="nav-btn" data-view="books">Books &amp; Chapters</button>
+      <button type="button" class="nav-btn" data-view="users">Users</button>
+      <button type="button" class="nav-btn" data-view="reports">Reports</button>
+      <button type="button" class="nav-btn" data-view="settings">Settings</button>
+    </nav>
+    <main class="main">
+      <section id="view-dashboard" class="view"></section>
+      <section id="view-portals" class="view hidden"></section>
+      <section id="view-accounts" class="view hidden"></section>
+      <section id="view-modules" class="view hidden"></section>
+      <section id="view-library" class="view hidden"></section>
+      <section id="view-books" class="view hidden"></section>
+      <section id="view-users" class="view hidden"></section>
+      <section id="view-reports" class="view hidden"></section>
+      <section id="view-settings" class="view hidden"></section>
+    </main>
+  </div>
+</div>
+
+<script src="/js/common.js"></script>
+<script src="/js/super.js"></script>
+</body>
+</html>

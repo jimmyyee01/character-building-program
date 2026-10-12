@@ -1,0 +1,15 @@
+{
+  "name": "character-building-program",
+  "version": "1.0.0",
+  "description": "Character Building Program - multi-portal system (Schools, Organization, Family, Married + custom portals) with modules, books, chapters, certificates.",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "fresh": "node server/seed.js --fresh"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "license": "MIT",
+  "private": true
+}

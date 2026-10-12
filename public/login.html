@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portal Login</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-side">
+    <h2 id="portalTitle">Portal</h2>
+    <p id="portalDesc">Sign in to continue with the Character Building Program.</p>
+    <ul>
+      <li>Register once — your account only shows your own data.</li>
+      <li>Chapters unlock one at a time after each submission.</li>
+      <li>Certificates are issued when a module is completed.</li>
+    </ul>
+    <p><a href="/" style="color:#ffd979">← Back to portal list</a></p>
+  </div>
+  <div class="auth-panel">
+    <div class="auth-logos">
+      <img id="logoTenant" class="hidden" alt="Organization logo">
+      <img id="logoProgram" class="hidden" alt="Program logo">
+    </div>
+    <h2 id="tenantName">Loading…</h2>
+    <div id="closedBanner" class="closed-banner hidden">This portal is currently closed. It opens on the scheduled dates.</div>
+
+    <div class="tabs">
+      <button id="tabLogin" class="active" type="button">Login</button>
+      <button id="tabRegister" type="button">Register</button>
+    </div>
+
+    <form id="loginForm">
+      <label>Email or Student Number</label>
+      <input type="text" id="liId" autocomplete="username" required>
+      <label>Password</label>
+      <input type="password" id="liPw" autocomplete="current-password" required>
+      <div class="mt"><button type="submit" style="width:100%">Sign in</button></div>
+      <p class="muted small center mt">No account? Use the <b>Register</b> tab.</p>
+    </form>
+
+    <form id="registerForm" class="hidden">
+      <label>Full name</label>
+      <input type="text" id="rgName" required>
+      <div id="roleRow">
+        <label>I am a</label>
+        <select id="rgRole"></select>
+      </div>
+      <div id="emailRow">
+        <label>Email</label>
+        <input type="email" id="rgEmail">
+      </div>
+      <div id="studentRow" class="hidden">
+        <label>Student number</label>
+        <input type="text" id="rgNumber">
+        <label>School class</label>
+        <input type="text" id="rgClass" placeholder="e.g. Grade 10A">
+      </div>
+      <div id="supRow" class="hidden">
+        <label>Supervisor access code</label>
+        <input type="text" id="rgSup" placeholder="Given by your supervisor">
+      </div>
+      <label>Profile picture</label>
+      <input type="file" id="rgPhoto" accept="image/*">
+      <label>Password (min 6 characters)</label>
+      <input type="password" id="rgPw" required>
+      <div class="mt"><button type="submit" style="width:100%">Create my account</button></div>
+    </form>
+  </div>
+</div>
+
+<script src="/js/common.js"></script>
+<script src="/js/login.js"></script>
+</body>
+</html>

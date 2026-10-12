@@ -1,0 +1,24 @@
+# Character Building Program — Apache routing (PHP + MySQL build)
+# Point your domain/subdomain document root (or XAMPP VirtualHost) at this folder.
+RewriteEngine On
+
+# JSON API -> PHP router (identical paths to the previous backend: /api/...)
+RewriteRule ^api/(.*)$ php/api.php?r=/$1 [QSA,L]
+
+# Pretty pages
+RewriteRule ^t/([A-Za-z0-9-]+)/?$ public/login.html [L]
+RewriteRule ^super/?$ public/super.html [L]
+RewriteRule ^admin/?$ public/admin.html [L]
+RewriteRule ^app/?$ public/app.html [L]
+RewriteRule ^$ public/index.html [L]
+
+# Static assets live in public/
+RewriteRule ^(css|js)/(.*)$ public/$1/$2 [L]
+
+# Uploads are stored at the project root /uploads/
+# (nothing to rewrite — served directly)
+
+# Keep PHP internals out of direct browser access except api.php/install.php
+<FilesMatch "^(config|engine|routes_.*|seed_data)\.php$">
+    Require all denied
+</FilesMatch>

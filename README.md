@@ -1,0 +1,160 @@
+# Character Building Program
+
+A complete multi-portal character-education system: **super admin console**, four
+default portals (Schools, Organization, Family, Married) plus unlimited custom
+portals, per-school/per-organization isolated accounts, a library-driven module
+engine (books → chapters → letters/summaries → certificates) and printable
+certificates.
+
+Zero dependencies. **Node.js 16+ is the only requirement** — no `npm install`,
+no build step, no database server.
+
+---
+
+## Quick start
+
+```bash
+node server/server.js
+# or: npm start
+```
+
+Then open:
+
+| URL | What it is |
+|---|---|
+| `http://localhost:3000/` | Landing page — all portals, live active/closed status |
+| `http://localhost:3000/super` | **Super admin** login |
+| `http://localhost:3000/t/greenfield-academy` | Demo school login page |
+| `http://localhost:3000/t/horizon-alliance` | Demo organization login page |
+
+Every school/organization gets its own login URL `/t/<slug>` created by the
+super admin — nothing about one school is visible to another.
+
+### Seeded accounts (change them from the consoles)
+
+| Account | Credentials |
+|---|---|
+| Super admin | `superadmin` / `SuperAdmin@123` |
+| School admin (Greenfield) | `admin@greenfield.edu` / `Admin@123` |
+| Student (Greenfield) | `STU-001` / `Student@123` |
+| Organization admin | `admin@horizon.org` / `Admin@123` |
+| Supervisor (Horizon) | `supervisor@horizon.org` / `Super@123` (code `SUP-7788`) |
+
+Reset the demo data any time with `npm run fresh` (deletes `data/db.json` and
+re-seeds).
+
+---
+
+## Feature map
+
+### Super admin (`/super`)
+- **Portals** — create/edit/disable any portal with schedule windows
+  (`MM-DD → MM-DD`). Schools default: **Feb 1 → Sep 20** and **Oct 1 → Feb 1**;
+  if no dates are selected the portal is *inactive*. Family & Married portals
+  are always active. Custom portals can be added at any time.
+- **Accounts** — create each school/organization with its own admin, slug URL,
+  school logo and program logo; see everything about each account.
+- **Modules** — the three seeded modules (GAMMA/BETA/ALPHA) plus the ability to
+  add more, set certificate names, summary prompts/colours and completion video.
+- **Library** — upload every book (PDF), letter and video; modules *pick* their
+  content from this library.
+- **Books & Chapters** — set chapters (title, content, page ranges) and enter
+  the objective questions (question, options, correct answer).
+- **Users / Reports / Settings** — all users across all tenants, all
+  submissions with copy-similarity flags, program name/logo, letter & letter
+  video, credentials.
+
+### School / Organization admin (`/admin`, also used by supervisors)
+- Users (students, teachers, members), supervisors with **100-user limit** and
+  shareable access codes for self-registration.
+- Own library uploads, picking books into modules, chapters, and **all
+  questions** (school/org admin or super admin only).
+- Submissions & copy-flags for their own people, certificates, branding.
+
+### Participant flow (`/app`)
+1. **Registration** — name, email (teachers) or student number (students),
+   class, photo, password. Data is scoped to the account only.
+2. **First login** — the Letter from Christ video pops over the letter; it can
+   be closed at any time and *pins itself to the corner*; letter feedback is
+   mandatory before continuing; then an **optional** video pops (dismissable).
+   Neither appears again once feedback is submitted.
+3. **Modules page** — module 1 active, others locked; finishing and submitting
+   everything in a module closes it and opens the next.
+4. **Module 1 — GAMMA (Building Character/Foundation)** — 3 books (more can be
+   added), chapters unlock one after another with **typed-only** summaries
+   (paste disabled, date/time shown, copy detection vs other students), a
+   letter unlocks after all chapters of a book, then the next book; at the end:
+   best-book prompt → completion video → **GAMMA CERTIFICATE**.
+5. **Module 2 — BETA (Personal Relationship & Applied Psychology)** — 3 books,
+   chapters end with **objectives shuffled on every login**, then 3 mandatory
+   colour-tagged summaries (injustices in the book → injustices in your
+   community → solutions) → best book → video → **BETA CERTIFICATE**.
+6. **Module 3 — ALPHA (Communication, Sex & Applied Character in Leadership)**
+   — 4 books, same objective + colour-summary flow (communication, sex,
+   character) → **ALPHA CERTIFICATE**.
+
+---
+
+## Architecture
+
+```
+character-building-program/
+├─ package.json           # no dependencies; npm start / npm run fresh
+├─ publish.ps1            # one-shot script to push this repo to GitHub
+├─ server/
+│  ├─ server.js           # HTTP server, static files, /t/<slug> pages, body parsing
+│  ├─ api.js              # every REST route + progress/gating engine + copy detection
+│  ├─ auth.js             # PBKDF2 password hashing, sessions, role guards
+│  ├─ db.js               # JSON file store (data/db.json, atomic writes)
+│  └─ seed.js             # first-run seed: portals, modules, books, questions, demo tenants
+├─ public/
+│  ├─ index.html          # portal landing page
+│  ├─ login.html          # per-tenant register/login (own logo & branding)
+│  ├─ super.html + js/super.js      # super admin console
+│  ├─ admin.html + js/admin.js      # school/org admin + supervisor console
+│  ├─ app.html  + js/app.js         # participant experience
+│  ├─ js/common.js        # API wrapper, auth state, uploads, helpers
+│  └─ css/style.css       # full design system (incl. printable certificate)
+├─ data/db.json           # created on first run (git-ignored)
+└─ uploads/               # uploaded PDFs/images/videos (git-ignored)
+```
+
+### Key design decisions / limitations
+- **JSON file storage** keeps deployment trivial; it comfortably handles a
+  school/organization rollout (thousands of records). Swap `db.js` for a real
+  database if you outgrow it.
+- **Copy detection** compares each free-text submission with every other user's
+  submission for the same chapter/summary (Jaccard word overlap; flagged at
+  ≥ 75%). It is an *assessment*, not a blocker — flagged work stays visible to
+  admins in Reports/Submissions with the similarity percentage.
+- **Paste prevention** is enforced in the UI *and* by a 30-character minimum
+  server-side; the copy check is the safety net for retyped copying.
+- File uploads arrive base64-encoded in JSON (keeps the server dependency-free);
+  keep individual uploads under ~40 MB.
+- Demo videos use a public sample MP4 URL — replace them with your own uploads
+  in the Library and pick the completion video per module.
+
+## Changing the port
+
+```bash
+set PORT=8080 && node server/server.js     # Windows
+PORT=8080 node server/server.js            # macOS/Linux
+```
+
+## Publishing to GitHub (`jimmyyee01`)
+
+Run `publish.ps1`, or manually:
+
+```bash
+cd character-building-program
+git init
+git add .
+git commit -m "Character Building Program: portals, modules, certificates"
+git branch -M main
+git remote add origin https://github.com/jimmyyee01/character-building-program.git
+git push -u origin main
+```
+
+Use a personal access token as the password, or configure SSH first.
+`data/` and `uploads/` are git-ignored, so no personal data is ever pushed.
+
