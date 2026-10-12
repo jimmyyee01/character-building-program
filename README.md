@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Character Building Program
 
 A complete multi-portal character-education system: **super admin console**, four
@@ -158,3 +159,6 @@ git push -u origin main
 Use a personal access token as the password, or configure SSH first.
 `data/` and `uploads/` are git-ignored, so no personal data is ever pushed.
 
+=======
+# character-building-program
+>>>>>>> 4e064eb957b22ecf9cb2bcae455206b0653637ca
