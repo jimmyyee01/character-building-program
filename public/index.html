@@ -10,7 +10,7 @@
   <div class="hero">
     <img id="progLogo" class="logo hidden" alt="Program logo">
     <h1 id="progName">Character Building Program</h1>
-    <p>Select your portal below. Each school and organization has its own private login page —
+    <p id="heroText">Select your portal below. Each school and organization has its own private login page —
        your data is visible only to your account.</p>
     <p><a class="btn ghost" href="/super">Super Admin Login</a></p>
   </div>
@@ -18,6 +18,76 @@
 
 <script src="/js/common.js"></script>
 <script>
+let ALL_PORTALS = [];
+let OPEN_PORTAL = null;
+
+function scheduleText(p) {
+  return p.scheduleMode === 'always' ? 'Open all year'
+    : p.scheduleMode === 'windows' && p.windows.length
+      ? p.windows.map(w => w.from + ' → ' + w.to).join('  |  ')
+      : 'No dates selected — system inactive';
+}
+
+function renderPortalList() {
+  OPEN_PORTAL = null;
+  document.getElementById('heroText').textContent =
+    'Select your portal below. Each school and organization has its own private login page — ' +
+    'your data is visible only to your account.';
+  const box = document.getElementById('portals');
+  box.innerHTML = '';
+  if (!ALL_PORTALS.length) { box.textContent = 'No portals have been created yet.'; return; }
+  ALL_PORTALS.forEach(function (p) {
+    const card = document.createElement('div');
+    card.className = 'portal-card';
+    card.style.cursor = 'pointer';
+    const badge = p.active
+      ? '<span class="badge ok">ACTIVE NOW</span>'
+      : '<span class="badge off">CLOSED</span>';
+    const count = (p.tenants || []).length;
+    card.innerHTML =
+      '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center">' +
+        '<h3>' + esc(p.name) + '</h3>' + badge + '</div>' +
+      '<div class="desc">' + esc(p.description || '') + '<br><span class="mono small">' + scheduleText(p) + '</span></div>' +
+      '<div class="muted small">' + count + (count === 1 ? ' account' : ' accounts') +
+        ' — click to view</div>';
+    card.onclick = function () { renderPortalDetail(p.key); };
+    box.appendChild(card);
+  });
+}
+
+function renderPortalDetail(key) {
+  const p = ALL_PORTALS.filter(function (x) { return x.key === key; })[0];
+  if (!p) { renderPortalList(); return; }
+  OPEN_PORTAL = p.key;
+  document.getElementById('heroText').textContent =
+    'Accounts with content under ' + p.name + ' — choose yours to sign in.';
+  const box = document.getElementById('portals');
+  box.innerHTML = '';
+  const badge = p.active
+    ? '<span class="badge ok">ACTIVE NOW</span>'
+    : '<span class="badge off">CLOSED</span>';
+  const card = document.createElement('div');
+  card.className = 'portal-card';
+  card.style.gridColumn = '1 / -1';
+  let tenants = '<div class="muted small">No accounts with content under this portal yet. ' +
+    'Ask the super administrator to create one.</div>';
+  if (p.tenants && p.tenants.length) {
+    tenants = p.tenants.map(function (t) {
+      return '<div class="tenant-chip">' +
+        (t.logo ? '<img src="' + esc(t.logo) + '" alt="">' : '') +
+        '<a href="/t/' + esc(t.slug) + '">' + esc(t.name) + '</a></div>';
+    }).join('');
+  }
+  card.innerHTML =
+    '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center">' +
+      '<h3>' + esc(p.name) + '</h3>' + badge + '</div>' +
+    '<div class="desc">' + esc(p.description || '') + '<br><span class="mono small">' + scheduleText(p) + '</span></div>' +
+    '<h4 class="mt">Accounts with content</h4>' + tenants +
+    '<div class="mt"><button id="backBtn" class="ghost">← All portals</button></div>';
+  box.appendChild(card);
+  document.getElementById('backBtn').onclick = renderPortalList;
+}
+
 async function load() {
   const box = document.getElementById('portals');
   try {
@@ -29,38 +99,14 @@ async function load() {
       img.src = data.programLogo;
       img.classList.remove('hidden');
     }
-    box.innerHTML = '';
-    if (!data.portals.length) { box.textContent = 'No portals have been created yet.'; return; }
-    data.portals.forEach(function (p) {
-      const card = document.createElement('div');
-      card.className = 'portal-card';
-      const badge = p.active
-        ? '<span class="badge ok">ACTIVE NOW</span>'
-        : '<span class="badge off">CLOSED</span>';
-      const schedule = p.scheduleMode === 'always' ? 'Open all year'
-        : p.scheduleMode === 'windows' && p.windows.length
-          ? p.windows.map(w => w.from + ' → ' + w.to).join(' &nbsp;|&nbsp; ')
-          : 'No dates selected — system inactive';
-      let tenants = '<div class="muted small">No accounts created under this portal yet.</div>';
-      if (p.tenants.length) {
-        tenants = p.tenants.map(function (t) {
-          return '<div class="tenant-chip">' +
-            (t.logo ? '<img src="' + esc(t.logo) + '" alt="">' : '') +
-            '<a href="/t/' + esc(t.slug) + '">' + esc(t.name) + '</a></div>';
-        }).join('');
-      }
-      card.innerHTML =
-        '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center">' +
-          '<h3>' + esc(p.name) + '</h3>' + badge + '</div>' +
-        '<div class="desc">' + esc(p.description || '') + '<br><span class="mono small">' + schedule + '</span></div>' +
-        tenants;
-      box.appendChild(card);
-    });
+    ALL_PORTALS = data.portals || [];
+    renderPortalList();
   } catch (e) {
     box.textContent = 'Could not load portals: ' + e.message;
   }
 }
 load();
+
 </script>
 </body>
 </html>

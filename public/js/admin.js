@@ -225,6 +225,159 @@ function userFormHtml(limit) {
     '<div class="fixed"><button type="submit">Create user</button></div>' +
     '</div></form></div>';
 }
+let bulkRows = [];
+let bulkResult = null;
+
+function bulkDefaultRole() {
+  const t = ME.portal ? ME.portal.type : null;
+  return t === 'schools' ? 'student' : 'member';
+}
+
+function parseBulkCsv(text) {
+  const rows = [];
+  String(text || '').split(/\r?\n/).forEach(function (line) {
+    line = line.trim();
+    if (!line) return;
+    const parts = line.split(',').map(function (p) { return p.trim(); });
+    if (/^full\s?name/i.test(parts[0])) return; // header row
+    rows.push({
+      fullName: parts[0] || '',
+      email: parts[1] || '',
+      studentNumber: parts[2] || '',
+      className: parts[3] || ''
+    });
+  });
+  return rows;
+}
+
+function bulkPanelHtml() {
+  const t = ME.portal ? ME.portal.type : null;
+  const hint = t === 'schools'
+    ? 'CSV columns: <b>fullName, email, studentNumber, className</b> — students need a student number, e.g. <span class="mono">Jane Doe,,STU-101,Grade 10A</span>'
+    : 'CSV columns: <b>fullName, email, studentNumber, className</b> — e.g. <span class="mono">John Doe,john@example.com,,Group A</span>';
+  const roles = t === 'schools'
+    ? [['student', 'Student'], ['teacher', 'Teacher']]
+    : [['member', t === 'organization' ? 'Member / User' : 'Member']];
+  const roleOpts = roles.map(function (o) {
+    return '<option value="' + o[0] + '"' + (bulkDefaultRole() === o[0] ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
+  }).join('');
+  let supRow = '';
+  if (isAdmin() && supOverview && supOverview.supervisors && supOverview.supervisors.length && t === 'organization') {
+    supRow = '<div><label>Assign all rows to supervisor</label><select id="bulkSup">' +
+      '<option value="">— none —</option>' +
+      supOverview.supervisors.map(function (s) {
+        return '<option value="' + esc(s.id) + '">' + esc(s.fullName) + '</option>';
+      }).join('') + '</select></div>';
+  }
+  let result = '';
+  if (bulkResult) {
+    result = '<div class="card" style="border-left:6px solid ' +
+      (bulkResult.errors.length ? 'var(--warn)' : 'var(--ok)') + '"><h3>Bulk insert result</h3>' +
+      '<p><b>' + bulkResult.created.length + '</b> created out of <b>' + bulkResult.total + '</b> rows.' +
+      (bulkResult.errors.length ? ' <b>' + bulkResult.errors.length + '</b> failed:' : ' All rows succeeded.') + '</p>';
+    if (bulkResult.errors.length) {
+      result += '<div class="table-wrap"><table><thead><tr><th>Row</th><th>Name</th><th>Error</th></tr></thead><tbody>' +
+        bulkResult.errors.map(function (ex) {
+          return '<tr><td>' + esc(ex.index) + '</td><td>' + esc(ex.name || '—') + '</td><td>' + esc(ex.error) + '</td></tr>';
+        }).join('') + '</tbody></table></div>';
+    }
+    result += '</div>';
+  }
+  return '<div class="card"><h3>Bulk insert users</h3>' +
+    '<p class="muted small">' + hint + '. Maximum 500 users per insert. Each row is validated like a single create — bad rows are skipped and listed below.</p>' +
+    '<div class="row">' +
+      '<div><label>Role for all rows</label><select id="bulkRole">' + roleOpts + '</select></div>' +
+      '<div><label>Default password (min 6, applies to all rows)</label>' +
+        '<input type="text" id="bulkPw" value="ChangeMe123" minlength="6"></div>' +
+      supRow +
+    '</div>' +
+    '<div class="row"><div><label>Paste CSV rows</label>' +
+      '<textarea id="bulkText" rows="4" placeholder="Jane Doe,,STU-101,Grade 10A"></textarea></div></div>' +
+    '<div class="row"><div><label>…or upload a .csv file</label>' +
+      '<input type="file" id="bulkFile" accept=".csv,text/csv,text/plain"></div>' +
+      '<div class="fixed" style="padding-bottom:2px">' +
+        '<button type="button" class="ghost" id="bulkTemplate">Download template</button> ' +
+        '<button type="button" class="ghost" id="bulkPreview">Preview</button> ' +
+        '<button type="button" id="bulkSubmit" disabled>Insert <span id="bulkCount">0</span> users</button>' +
+      '</div></div>' +
+    '<div id="bulkPreviewBox" class="mt"></div></div>' + result;
+}
+function renderBulkPreview() {
+  const box = document.getElementById('bulkPreviewBox');
+  const btn = document.getElementById('bulkSubmit');
+  if (!box) return;
+  if (!bulkRows.length) {
+    box.innerHTML = '<p class="muted small">No rows to preview.</p>';
+    if (btn) { btn.disabled = true; document.getElementById('bulkCount').textContent = '0'; }
+    return;
+  }
+  const show = bulkRows.slice(0, 10);
+  box.innerHTML = '<div class="table-wrap"><table><thead><tr><th>#</th><th>Full name</th>' +
+    '<th>Email</th><th>Student number</th><th>Class</th></tr></thead><tbody>' +
+    show.map(function (r, i) {
+      return '<tr><td>' + (i + 1) + '</td><td>' + esc(r.fullName) + '</td><td>' + esc(r.email) +
+        '</td><td>' + esc(r.studentNumber) + '</td><td>' + esc(r.className) + '</td></tr>';
+    }).join('') + '</tbody></table></div>' +
+    (bulkRows.length > 10 ? '<p class="muted small">…and ' + (bulkRows.length - 10) + ' more rows.</p>' : '');
+  if (btn) { btn.disabled = false; document.getElementById('bulkCount').textContent = String(bulkRows.length); }
+}
+
+function wireBulkPanel() {
+  const prev = document.getElementById('bulkPreview');
+  if (!prev) return;
+  prev.onclick = function () {
+    bulkRows = parseBulkCsv(document.getElementById('bulkText').value);
+    if (!bulkRows.length) toast('Paste or upload CSV rows first', 'err');
+    renderBulkPreview();
+  };
+  document.getElementById('bulkTemplate').onclick = function () {
+    const csv = 'fullName,email,studentNumber,className\n' +
+      (bulkDefaultRole() === 'student'
+        ? 'Jane Doe,,STU-101,Grade 10A\nJohn Doe,,STU-102,Grade 10A\n'
+        : 'John Doe,john@example.com,,\nMary Roe,mary@example.com,,\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'bulk-users-template.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+  document.getElementById('bulkFile').onchange = function (e) {
+    const f = e.target.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = function () {
+      document.getElementById('bulkText').value = String(r.result || '');
+      bulkRows = parseBulkCsv(String(r.result || ''));
+      renderBulkPreview();
+    };
+    r.readAsText(f);
+  };
+  document.getElementById('bulkSubmit').onclick = wrap(async function () {
+    if (!bulkRows.length) { toast('Nothing to insert', 'err'); return; }
+    const role = document.getElementById('bulkRole').value;
+    const pw = document.getElementById('bulkPw').value;
+    if (!pw || pw.length < 6) { toast('Default password must be at least 6 characters', 'err'); return; }
+    const supSel = document.getElementById('bulkSup');
+    const supId = supSel && supSel.value ? supSel.value : undefined;
+    const users = bulkRows.map(function (r) {
+      const b = { role: role, fullName: r.fullName, password: pw };
+      if (r.email) b.email = r.email;
+      if (r.studentNumber) b.studentNumber = r.studentNumber;
+      if (r.className) b.className = r.className;
+      if (supId) b.supervisorId = supId;
+      return b;
+    });
+    if (role === 'supervisor' && !isAdmin()) { toast('Not permitted', 'err'); return; }
+    const res = await API.post('/users/bulk', { users: users });
+    bulkRows = [];
+    bulkResult = res;
+    toast(res.created.length + ' users created' + (res.errors.length ? ', ' + res.errors.length + ' failed' : ''),
+      res.errors.length ? 'err' : 'ok');
+    renderUsers();
+  });
+}
+
 function usersTableHtml() {
   let h = '<div class="table-wrap"><table><thead><tr><th>User</th><th>Role</th>' +
     '<th>Email / Number</th><th>Class</th><th>Supervisor</th><th style="width:130px">Progress</th>' +
@@ -286,6 +439,7 @@ async function renderUsers() {
       '">Copy</button></p></div>';
   }
   html += userFormHtml(d.limit);
+  html += bulkPanelHtml();
   html += '<div class="card"><h3>' + heading + ' <span class="badge info">' +
     usersCache.length + '</span></h3>' +
     (usersCache.length ? usersTableHtml() : '<p class="muted">No users yet.</p>') + '</div>';
@@ -295,6 +449,7 @@ async function renderUsers() {
   roleSel.onchange = syncUserForm;
   syncUserForm();
   document.getElementById('userForm').onsubmit = wrap(createUser);
+  wireBulkPanel();
   el.onclick = wrap(userRowClick);
 }
 

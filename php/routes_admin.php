@@ -383,12 +383,11 @@ function r_users_list(array $user, array $body, array $params, ?string $token, a
     }
     return $out;
 }
-function r_users_create(array $user, array $body, array $params, ?string $token, array $query): array {
-    require_role($user, ['super','tenant_admin','supervisor']);
-    $role = $user['role'];
+function build_user_record(array $acting, array $body): array {
+    $role = $acting['role'];
     $tenantId = $body['tenantId'] ?? $body['tenant_id'] ?? null;
     if ($role === 'super') { need($tenantId, 'tenantId required'); }
-    else { $tenantId = $user['tenant_id']; }
+    else { $tenantId = $acting['tenant_id']; }
     $st = db()->prepare('SELECT * FROM tenants WHERE id=?'); $st->execute([$tenantId]); $ten = $st->fetch();
     need($ten, 'Tenant not found', 404);
     $reqRole = $body['role'] ?? 'member';
@@ -416,9 +415,9 @@ function r_users_create(array $user, array $body, array $params, ?string $token,
     }
     $supId = $body['supervisorId'] ?? $body['supervisor_id'] ?? null;
     if ($role === 'supervisor') {
-        $st = db()->prepare('SELECT COUNT(*) FROM users WHERE supervisor_id=?'); $st->execute([$user['id']]);
+        $st = db()->prepare('SELECT COUNT(*) FROM users WHERE supervisor_id=?'); $st->execute([$acting['id']]);
         need((int)$st->fetchColumn() < 100, 'Supervisor limit reached', 409);
-        $supId = $user['id'];
+        $supId = $acting['id'];
     }
     $pw = (string)($body['password'] ?? ''); need($pw !== '', 'password required');
     $code = null;
@@ -428,8 +427,40 @@ function r_users_create(array $user, array $body, array $params, ?string $token,
         ->execute([$id, $tenantId, $reqRole, $supId, $code, $fn, $email ?: null, $sn ?: null,
             $body['className'] ?? $body['class_name'] ?? null, $body['photo'] ?? null, hash_pw($pw), now_dt()]);
     $st = db()->prepare('SELECT * FROM users WHERE id=?'); $st->execute([$id]);
-    $row = $st->fetch(); $names = sup_names_for([$row]);
+    return $st->fetch();
+}
+
+function r_users_create(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super','tenant_admin','supervisor']);
+    $row = build_user_record($user, $body);
+    $names = sup_names_for([$row]);
     return admin_user_map($row, $names);
+}
+
+/* Bulk insert: same validation as single create, per-row results (partial
+   success allowed). Schools portal -> bulk students; organization -> bulk users. */
+function r_users_bulk(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super','tenant_admin','supervisor']);
+    $rows = $body['users'] ?? null;
+    need(is_array($rows) && count($rows), 'No rows supplied');
+    need(count($rows) <= 500, 'Maximum 500 users per bulk insert');
+    $created = []; $errors = [];
+    foreach ($rows as $i => $row) {
+        try {
+            $rec = build_user_record($user, is_array($row) ? $row : []);
+            $names = sup_names_for([$rec]);
+            $created[] = admin_user_map($rec, $names);
+        } catch (ApiError $e) {
+            $errors[] = ['index' => $i + 1,
+                'name' => is_array($row) ? (string)($row['fullName'] ?? $row['full_name'] ?? '') : '',
+                'error' => $e->getMessage()];
+        } catch (Throwable $e) {
+            $errors[] = ['index' => $i + 1,
+                'name' => is_array($row) ? (string)($row['fullName'] ?? $row['full_name'] ?? '') : '',
+                'error' => 'Failed'];
+        }
+    }
+    return ['total' => count($rows), 'created' => $created, 'errors' => $errors];
 }
 function user_can_manage(array $user, array $row): bool {
     if ($user['role'] === 'super') return true;

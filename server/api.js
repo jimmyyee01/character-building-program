@@ -1346,14 +1346,13 @@ route('GET', '/api/users', ({ req, user }) => {
     limit: user.role === 'supervisor' ? { max: 100, used: list.length } : null };
 });
 
-route('POST', '/api/users', ({ user, body }) => {
-  need(user, 'Sign in required', 401);
+function buildUserRecord(actingUser, body) {
   body = body || {};
-  let tenantId = user.tenantId;
-  if (user.role === 'super') {
+  let tenantId = actingUser.tenantId;
+  if (actingUser.role === 'super') {
     need(body.tenantId, 'Choose the account this user belongs to');
     tenantId = body.tenantId;
-  } else if (user.role !== 'tenant_admin' && user.role !== 'supervisor') {
+  } else if (actingUser.role !== 'tenant_admin' && actingUser.role !== 'supervisor') {
     need(false, 'Not permitted', 403);
   }
   const tenant = dbm.byId('tenants', tenantId);
@@ -1361,14 +1360,14 @@ route('POST', '/api/users', ({ user, body }) => {
   const portal = dbm.byId('portals', tenant.portalId);
 
   let role = body.role || 'member';
-  if (user.role === 'supervisor') {
-    const mine = dbm.db.users.filter(u => u.supervisorId === user.id);
+  if (actingUser.role === 'supervisor') {
+    const mine = dbm.db.users.filter(u => u.supervisorId === actingUser.id);
     need(mine.length < 100, 'A supervisor can only add a maximum of 100 users', 403);
     role = 'member';
-    tenantId = user.tenantId;
+    tenantId = actingUser.tenantId;
   } else {
-    const allowed = allowedRolesFor(portal.type, user.role);
-    need(role === 'tenant_admin' ? user.role === 'tenant_admin' || user.role === 'super'
+    const allowed = allowedRolesFor(portal.type, actingUser.role);
+    need(role === 'tenant_admin' ? actingUser.role === 'tenant_admin' || actingUser.role === 'super'
       : allowed.indexOf(role) !== -1, 'That role is not allowed on this portal', 403);
   }
   need(role !== 'super', 'Not permitted', 403);
@@ -1386,7 +1385,7 @@ route('POST', '/api/users', ({ user, body }) => {
 
   const h = auth.hashPassword(String(body.password));
   const u = { id: dbm.uid('usr'), tenantId, role,
-    supervisorId: user.role === 'supervisor' ? user.id : (body.supervisorId || null),
+    supervisorId: actingUser.role === 'supervisor' ? actingUser.id : (body.supervisorId || null),
     fullName: String(body.fullName).trim(), email, studentNumber: sn,
     className: body.className ? String(body.className).trim() : null,
     photo: body.photo || null, salt: h.salt, passwordHash: h.hash,
@@ -1395,9 +1394,42 @@ route('POST', '/api/users', ({ user, body }) => {
   if (role === 'supervisor') {
     u.supervisorCode = 'SUP-' + String(Math.floor(1000 + Math.random() * 9000));
   }
+  return u;
+}
+
+route('POST', '/api/users', ({ user, body }) => {
+  need(user, 'Sign in required', 401);
+  const u = buildUserRecord(user, body);
   dbm.collection('users').push(u);
   dbm.save();
   return { ok: true, user: publicUser(u) };
+});
+
+/* Bulk insert: same validation as single create, per-row results.
+   Schools portal → many students at once; organization portal → many users. */
+route('POST', '/api/users/bulk', ({ user, body }) => {
+  need(user, 'Sign in required', 401);
+  need(user.role === 'super' || user.role === 'tenant_admin' || user.role === 'supervisor',
+    'Not permitted', 403);
+  body = body || {};
+  const rows = body.users;
+  need(Array.isArray(rows) && rows.length, 'No rows supplied');
+  need(rows.length <= 500, 'Maximum 500 users per bulk insert');
+  const created = [];
+  const errors = [];
+  rows.forEach((row, i) => {
+    try {
+      const doc = buildUserRecord(user, row || {});
+      dbm.collection('users').push(doc);
+      created.push(publicUser(doc));
+    } catch (e) {
+      errors.push({ index: i + 1,
+        name: row && row.fullName ? String(row.fullName) : '',
+        error: (e && e.message) || 'Failed' });
+    }
+  });
+  dbm.save();
+  return { ok: true, total: rows.length, created, errors };
 });
 
 route('PUT', '/api/users/([a-z0-9_-]+)', ({ user, params, body }) => {

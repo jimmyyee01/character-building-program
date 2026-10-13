@@ -76,6 +76,7 @@ route('DELETE', '/api/objectives/([a-zA-Z0-9_-]+)', 'r_objectives_delete');
 /* User management */
 route('GET',    '/api/users', 'r_users_list');
 route('POST',   '/api/users', 'r_users_create');
+route('POST',   '/api/users/bulk', 'r_users_bulk');
 route('PUT',    '/api/users/([a-zA-Z0-9_-]+)', 'r_users_update');
 route('DELETE', '/api/users/([a-zA-Z0-9_-]+)', 'r_users_delete');
 route('PUT',    '/api/admin/branding', 'r_admin_branding');
