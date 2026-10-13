@@ -344,6 +344,13 @@ function r_super_users(array $user, array $body, array $params, ?string $token, 
     $names = sup_names_for($rows);
     return array_map(fn($u)=>admin_user_map($u, $names), $rows);
 }
+/* Super admin creates a user inside any tenant (same rules as POST /api/users). */
+function r_super_users_create(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super']);
+    $row = build_user_record($user, $body);
+    $names = sup_names_for([$row]);
+    return ['user' => admin_user_map($row, $names)];
+}
 function r_admin_overview(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin','supervisor']);
     if ($user['role'] === 'super') return r_super_overview($user, $body, $params, $token, $query);

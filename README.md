@@ -66,8 +66,9 @@ re-seeds).
   video, credentials.
 
 ### School / Organization admin (`/admin`, also used by supervisors)
-- Users (students, teachers, members), supervisors with **100-user limit** and
-  shareable access codes for self-registration.
+- Users (students, teachers, members), supervisors with **100-user limit**.
+  **Self-registration is disabled** — only super admin, tenant admins and
+  supervisors add users (single form or **bulk insert** up to 500 CSV rows).
 - Own library uploads, picking books into modules, chapters, and **all
   questions** (school/org admin or super admin only).
 - Submissions & copy-flags for their own people, certificates, branding.

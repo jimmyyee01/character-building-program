@@ -2,7 +2,9 @@
 let ME = null, ROLE = null, VIEW = 'dashboard';
 let supOverview = null, newSupCode = null, usersCache = [];
 const booksState = { modules: [], moduleId: null, books: [], openBookId: null };
-const submState = { flagged: false, type: '' };
+const submState = { flagged: false, type: '', search: '' };
+const usersState = { search: '' };
+const certState = { search: '' };
 const brandState = { logo: undefined, programLogo: undefined };
 const RENDER = {};
 
@@ -46,6 +48,33 @@ function typeBadge(t) {
     best_book: ['ok', 'Best book'], general_summary: ['warn', 'General summary'] };
   const m = map[t] || ['lock', t];
   return '<span class="badge ' + m[0] + '">' + esc(m[1]) + '</span>';
+}
+/* Builds a lowercase haystack from every visible field of a report row. */
+function searchText(o) {
+  const parts = [];
+  ['userName', 'userRole', 'type', 'label', 'chapter', 'book', 'text',
+    'fullName', 'email', 'studentNumber', 'className', 'supervisorName',
+    'role', 'name', 'title', 'code', 'userName', 'similarity'].forEach(function (k) {
+    if (o && o[k] != null) parts.push(String(o[k]));
+  });
+  if (o && o.score != null && o.total != null) parts.push(o.score + '/' + o.total);
+  if (o && o.createdAt) parts.push(fmtDate(o.createdAt));
+  if (o && o.issuedAt) parts.push(fmtDate(o.issuedAt));
+  if (o && Array.isArray(o.books)) parts.push(o.books.join(' '));
+  if (o && o.bestBook) parts.push(String(o.bestBook));
+  return parts.join(' | ').toLowerCase();
+}
+/* Filters rendered table rows by the text in a search input (no re-fetch). */
+function applyTableSearch(tableEl, inputEl, countEl) {
+  if (!tableEl || !inputEl) return;
+  const q = inputEl.value.trim().toLowerCase();
+  let shown = 0;
+  tableEl.querySelectorAll('tbody tr[data-search]').forEach(function (tr) {
+    const hit = !q || (tr.dataset.search || '').indexOf(q) !== -1;
+    tr.style.display = hit ? '' : 'none';
+    if (hit) shown++;
+  });
+  if (countEl) countEl.textContent = shown + ' shown';
 }
 function copyText(text) {
   const done = function () { toast('Copied: ' + text, 'ok'); };
@@ -107,7 +136,7 @@ function supTableHtml(sups) {
 function newSupCodeHtml() {
   if (!newSupCode) return '';
   return '<div class="card" style="border-left:6px solid var(--gold)"><h3>Supervisor created</h3>' +
-    '<p><b>' + esc(newSupCode.name) + '</b> — share this access code so members can self-register under this supervisor:</p>' +
+    '<p><b>' + esc(newSupCode.name) + '</b> — this supervisor\'s team code (use it when adding members under this supervisor):</p>' +
     '<p><span class="code-chip">' + esc(newSupCode.code) + '</span> ' +
     '<button type="button" class="ghost small" data-copy="' + esc(newSupCode.code) + '">Copy</button> ' +
     '<button type="button" class="ghost small" data-dismiss="1">Dismiss</button></p></div>';
@@ -404,7 +433,7 @@ function usersTableHtml() {
     }
     acts += '<button type="button" class="danger small" data-act="del" data-id="' +
       esc(u.id) + '">Delete</button>';
-    h += '<tr><td>' + av + '<b>' + esc(u.fullName) + '</b>' + code + '</td>' +
+    h += '<tr data-search="' + esc(searchText(u)) + '"><td>' + av + '<b>' + esc(u.fullName) + '</b>' + code + '</td>' +
       '<td>' + roleBadge(u.role) + '</td><td>' + det + '</td>' +
       '<td>' + esc(u.className || '—') + '</td><td>' + esc(u.supervisorName || '—') + '</td>' +
       '<td>' + prog + '</td><td>' + status + '</td>' +
@@ -433,15 +462,21 @@ async function renderUsers() {
   let html = newSupCodeHtml();
   if (!isAdmin() && ME.user.supervisorCode) {
     html += '<div class="card"><h3>My supervisor access code</h3>' +
-      '<p class="muted small">Share this code so new members can register under you.</p>' +
+      '<p class="muted small">Give this code to members of your team so an administrator can add them under you.</p>' +
       '<p><span class="code-chip">' + esc(ME.user.supervisorCode) + '</span> ' +
       '<button type="button" class="ghost small" data-copy="' + esc(ME.user.supervisorCode) +
       '">Copy</button></p></div>';
   }
   html += userFormHtml(d.limit);
   html += bulkPanelHtml();
-  html += '<div class="card"><h3>' + heading + ' <span class="badge info">' +
-    usersCache.length + '</span></h3>' +
+  html += '<div class="card"><div class="row" style="align-items:flex-end">' +
+    '<div style="min-width:200px"><label>Search users</label>' +
+      '<input type="text" id="usSearch" placeholder="Name, email, number, class…" value="' +
+      esc(usersState.search) + '"></div>' +
+    '<div class="fixed" style="padding-bottom:10px"><h3 style="margin:0">' + heading +
+      ' <span class="badge info">' + usersCache.length + '</span> ' +
+      '<span class="badge lock" id="usTableCount">' + usersCache.length + ' shown</span></h3></div>' +
+    '</div>' +
     (usersCache.length ? usersTableHtml() : '<p class="muted">No users yet.</p>') + '</div>';
   el.innerHTML = html;
 
@@ -450,6 +485,13 @@ async function renderUsers() {
   syncUserForm();
   document.getElementById('userForm').onsubmit = wrap(createUser);
   wireBulkPanel();
+  const usSearch = document.getElementById('usSearch');
+  const usTable = el.querySelector('table');
+  usSearch.addEventListener('input', function () {
+    usersState.search = this.value;
+    applyTableSearch(usTable, usSearch, document.getElementById('usTableCount'));
+  });
+  applyTableSearch(usTable, usSearch, document.getElementById('usTableCount'));
   el.onclick = wrap(userRowClick);
 }
 
@@ -1075,6 +1117,9 @@ async function renderSubmissions() {
       '>' + esc(t[1]) + '</option>';
   });
   el.innerHTML = '<div class="card"><div class="row" style="align-items:flex-end">' +
+    '<div style="min-width:200px"><label>Search submissions</label>' +
+      '<input type="text" id="sfSearch" placeholder="Name, chapter, book, text…" value="' +
+      esc(submState.search) + '"></div>' +
     '<div class="fixed"><label style="margin-bottom:10px">' +
     '<input type="checkbox" id="sfFlag"' + (submState.flagged ? ' checked' : '') +
     '> Flagged only</label></div>' +
@@ -1088,6 +1133,11 @@ async function renderSubmissions() {
     submState.type = this.value;
     loadSubmRows();
   };
+  document.getElementById('sfSearch').addEventListener('input', function () {
+    submState.search = this.value;
+    applyTableSearch(document.querySelector('#submRows table'),
+      document.getElementById('sfSearch'), document.getElementById('sfTableCount'));
+  });
   await loadSubmRows();
 }
 
@@ -1108,7 +1158,7 @@ async function loadSubmRows() {
     return;
   }
   let html = '<div class="card"><h3>Submissions <span class="badge info">' + rows.length +
-    '</span></h3>';
+    '</span> <span class="badge lock" id="sfTableCount">' + rows.length + ' shown</span></h3>';
   if (!rows.length) {
     html += '<p class="muted">No submissions match these filters.</p>';
   } else {
@@ -1127,7 +1177,7 @@ async function loadSubmRows() {
           esc(s.label) + '</div>'
         : '';
       const loc = [s.book, s.chapter].filter(Boolean).map(esc).join(' — ');
-      html += '<tr><td><b>' + esc(s.userName || '—') + '</b>' +
+      html += '<tr data-search="' + esc(searchText(s)) + '"><td><b>' + esc(s.userName || '—') + '</b>' +
         (s.userRole ? '<div class="small muted">' + esc(s.userRole) + '</div>' : '') + '</td>' +
         '<td>' + typeBadge(s.type) + label + '</td>' +
         '<td>' + (loc || '<span class="muted">—</span>') + '</td>' +
@@ -1140,6 +1190,8 @@ async function loadSubmRows() {
     html += '</tbody></table></div>';
   }
   box.innerHTML = html + '</div>';
+  applyTableSearch(box.querySelector('table'),
+    document.getElementById('sfSearch'), document.getElementById('sfTableCount'));
 }
 /* ========================================================= certificates ==== */
 async function renderCertificates() {
@@ -1154,8 +1206,13 @@ async function renderCertificates() {
     toast(msg(e), 'err');
     return;
   }
-  let html = '<div class="card"><h3>Certificates <span class="badge info">' + certs.length +
-    '</span></h3>';
+  let html = '<div class="card"><div class="row" style="align-items:flex-end">' +
+    '<div style="min-width:200px"><label>Search certificates</label>' +
+      '<input type="text" id="ctSearch" placeholder="Code, title, user, book…" value="' +
+      esc(certState.search) + '"></div>' +
+    '<div class="fixed" style="padding-bottom:10px"><h3 style="margin:0">Certificates ' +
+      '<span class="badge info">' + certs.length + '</span> ' +
+      '<span class="badge lock" id="ctTableCount">' + certs.length + ' shown</span></h3></div></div>';
   if (!certs.length) {
     html += '<p class="muted">No certificates issued yet.</p>';
   } else {
@@ -1164,7 +1221,7 @@ async function renderCertificates() {
     certs.forEach(function (c) {
       const books = c.books && c.books.length ? c.books : (c.bestBook ? [c.bestBook] : []);
       const perf = c.performance != null ? esc(c.performance) + '%' : '<span class="muted">—</span>';
-      html += '<tr><td class="mono">' + esc(c.code || '—') + '</td>' +
+      html += '<tr data-search="' + esc(searchText(c)) + '"><td class="mono">' + esc(c.code || '—') + '</td>' +
         '<td>' + esc(c.title || '—') + '</td>' +
         '<td><b>' + esc(c.userName || '—') + '</b></td>' +
         '<td class="small">' + (books.length ? esc(books.join(', '))
@@ -1175,6 +1232,15 @@ async function renderCertificates() {
     html += '</tbody></table></div>';
   }
   el.innerHTML = html + '</div>';
+  const ctSearch = document.getElementById('ctSearch');
+  const ctTable = el.querySelector('table');
+  if (ctSearch && ctTable) {
+    ctSearch.addEventListener('input', function () {
+      certState.search = this.value;
+      applyTableSearch(ctTable, ctSearch, document.getElementById('ctTableCount'));
+    });
+    applyTableSearch(ctTable, ctSearch, document.getElementById('ctTableCount'));
+  }
   el.onclick = function (e) {
     const b = e.target.closest('button[data-cert]');
     if (!b) return;

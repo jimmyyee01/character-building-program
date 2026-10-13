@@ -164,53 +164,10 @@ route('GET', '/api/public/tenant/([a-z0-9-]+)', ({ params }) => {
   };
 });
 
-route('POST', '/api/auth/register', ({ body, req, res }) => {
-  body = body || {};
-  const tenant = dbm.db.tenants.find(t => t.slug === body.slug);
-  need(tenant, 'Portal not found', 404);
-  const portal = dbm.byId('portals', tenant.portalId);
-  need(portalActive(portal), 'This portal is closed right now. Registration opens during the scheduled dates.', 403);
-  need(body.fullName && String(body.fullName).trim().length >= 3, 'Enter your full name');
-  need(body.password && String(body.password).length >= 6, 'Password must be at least 6 characters');
-
-  let role = body.role;
-  let supervisorId = null;
-  if (portal.type === 'schools') {
-    role = body.role === 'teacher' ? 'teacher' : 'student';
-    if (role === 'student') need(body.studentNumber && String(body.studentNumber).trim(), 'Student number is required');
-    else need(body.email && String(body.email).trim(), 'Email is required for teachers');
-  } else if (portal.type === 'organization') {
-    role = 'member';
-    const code = String(body.supervisorCode || '').trim();
-    need(code, 'A supervisor access code is required to join this organization');
-    const sup = dbm.db.users.find(u => u.tenantId === tenant.id && u.role === 'supervisor' && u.supervisorCode === code);
-    need(sup, 'Invalid supervisor access code');
-    need(dbm.db.users.filter(u => u.supervisorId === sup.id).length < 100, 'This supervisor has reached the 100 user limit');
-    supervisorId = sup.id;
-  } else {
-    role = role === 'teacher' ? 'teacher' : (role === 'student' ? 'student' : 'member');
-  }
-
-  const email = body.email ? String(body.email).trim().toLowerCase() : null;
-  const sn = body.studentNumber ? String(body.studentNumber).trim() : null;
-  need(email || sn, 'Provide your email or student number');
-  const clash = dbm.db.users.find(u => u.tenantId === tenant.id &&
-    ((email && u.email && u.email.toLowerCase() === email) || (sn && u.studentNumber && u.studentNumber.toLowerCase() === sn.toLowerCase())));
-  need(!clash, 'An account with those details already exists', 409);
-
-  const h = auth.hashPassword(String(body.password));
-  const user = {
-    id: dbm.uid('usr'), tenantId: tenant.id, role, supervisorId,
-    fullName: String(body.fullName).trim(), email, studentNumber: sn,
-    className: body.className ? String(body.className).trim() : null,
-    photo: body.photo || null, salt: h.salt, passwordHash: h.hash,
-    createdAt: dbm.nowISO(), letterFeedbackAt: null, optionalVideoSeen: false,
-    watchedVideos: [], suspended: false
-  };
-  dbm.collection('users').push(user);
-  dbm.save();
-  const token = auth.createSession(req, res, user);
-  return { ok: true, token, user: publicUser(user) };
+/* Self-registration is disabled: only admins (and supervisors for members)
+   create accounts through POST /api/users (or /api/users/bulk). */
+route('POST', '/api/auth/register', () => {
+  need(false, 'Self-registration is disabled. Ask your administrator to add you to the system.', 403);
 });
 
 route('POST', '/api/auth/login', ({ body, req, res }) => {
@@ -1430,6 +1387,16 @@ route('POST', '/api/users/bulk', ({ user, body }) => {
   });
   dbm.save();
   return { ok: true, total: rows.length, created, errors };
+});
+
+/* Super admin creates a user inside any tenant (uses the same rules as POST /api/users). */
+route('POST', '/api/super/users', ({ user, body }) => {
+  need(user, 'Sign in required', 401);
+  need(user.role === 'super', 'Not permitted', 403);
+  const u = buildUserRecord(user, body);
+  dbm.collection('users').push(u);
+  dbm.save();
+  return { ok: true, user: publicUser(u) };
 });
 
 route('PUT', '/api/users/([a-z0-9_-]+)', ({ user, params, body }) => {

@@ -62,88 +62,11 @@ function r_public_tenant($user, $body, $params, $token, $query): array {
     ];
 }
 
+/* Self-registration is disabled: only admins (and supervisors for members)
+   create accounts through POST /api/users (or /api/users/bulk). */
 function r_auth_register($user, $body, $params, $token, $query): array {
-    $body = is_array($body) ? $body : [];
-    $slug = trim((string)($body['slug'] ?? ''));
-    need($slug !== '', 'Tenant required', 400);
-    $st = db()->prepare('SELECT * FROM tenants WHERE slug=? LIMIT 1');
-    $st->execute([$slug]);
-    $t = $st->fetch();
-    need($t, 'Tenant not found', 404);
-    $st = db()->prepare('SELECT * FROM portals WHERE id=? LIMIT 1');
-    $st->execute([$t['portal_id']]);
-    $p = $st->fetch();
-    need($p, 'Tenant not found', 404);
-    need(portal_active($p), 'Portal closed', 403);
-    $ptype = strtolower((string)($p['type'] ?? 'custom'));
-
-    $fullName = trim((string)($body['fullName'] ?? ''));
-    need($fullName !== '', 'Full name required', 400);
-    $pw = (string)($body['password'] ?? '');
-    need($pw !== '', 'Password required', 400);
-    $email = trim((string)($body['email'] ?? ''));
-    $email = $email !== '' ? $email : null;
-    $sn = trim((string)($body['studentNumber'] ?? ''));
-    $sn = $sn !== '' ? $sn : null;
-    $className = trim((string)($body['className'] ?? ''));
-    $className = $className !== '' ? $className : null;
-    $photoIn = $body['photo'] ?? null;
-    $photo = null;
-    if (is_array($photoIn) && !empty($photoIn['base64'])) {
-        $photo = save_upload($photoIn);
-    } elseif (is_string($photoIn) && trim($photoIn) !== '') {
-        $photo = trim($photoIn);
-    }
-    $reqRole = strtolower(trim((string)($body['role'] ?? '')));
-    $supCodeIn = trim((string)($body['supervisorCode'] ?? ''));
-
-    $role = 'member';
-    $supId = null;
-    $supCode = null;
-    if ($ptype === 'schools') {
-        $role = $reqRole !== '' ? $reqRole : 'student';
-        need(in_array($role, ['student', 'teacher'], true), 'Invalid role', 400);
-        if ($role === 'student') need($sn !== null, 'Student number required', 400);
-        else need($email !== null, 'Email required', 400);
-    } elseif ($ptype === 'organization') {
-        $role = 'member';
-        need($supCodeIn !== '', 'Supervisor code required', 400);
-        $ss = db()->prepare('SELECT * FROM users WHERE tenant_id=? AND supervisor_code=? LIMIT 1');
-        $ss->execute([$t['id'], $supCodeIn]);
-        $sup = $ss->fetch();
-        need($sup, 'Invalid supervisor code', 400);
-        $cs = db()->prepare('SELECT COUNT(*) FROM users WHERE supervisor_id=?');
-        $cs->execute([$sup['id']]);
-        need((int)$cs->fetchColumn() < 100, 'Supervisor group is full', 403);
-        $supId = $sup['id'];
-        $supCode = $supCodeIn;
-    } else {
-        if ($reqRole === '') $role = 'member';
-        else {
-            need(in_array($reqRole, ['member', 'teacher', 'student'], true), 'Invalid role', 400);
-            $role = $reqRole;
-        }
-    }
-
-    if ($email !== null) {
-        $cs = db()->prepare('SELECT id FROM users WHERE tenant_id=? AND email IS NOT NULL AND LOWER(email)=LOWER(?) LIMIT 1');
-        $cs->execute([$t['id'], $email]);
-        need(!$cs->fetch(), 'Email already registered', 409);
-    }
-    if ($sn !== null) {
-        $cs = db()->prepare('SELECT id FROM users WHERE tenant_id=? AND student_number=? LIMIT 1');
-        $cs->execute([$t['id'], $sn]);
-        need(!$cs->fetch(), 'Student number already registered', 409);
-    }
-
-    $id = uid('usr');
-    $ins = db()->prepare('INSERT INTO users (id, tenant_id, role, supervisor_id, supervisor_code, full_name, email, student_number, class_name, photo, salt, password_hash, letter_feedback_at, optional_video_seen, watched_videos_json, suspended, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,NULL,0,?)');
-    $ins->execute([$id, $t['id'], $role, $supId, $supCode, $fullName, $email, $sn, $className, $photo, '', hash_pw($pw), now_dt()]);
-    $st = db()->prepare('SELECT * FROM users WHERE id=? LIMIT 1');
-    $st->execute([$id]);
-    $row = normalize_user($st->fetch());
-    $tok = create_session($row);
-    return ['token' => $tok, 'user' => public_user($row)];
+    need(false, 'Self-registration is disabled. Ask your administrator to add you to the system.', 403);
+    return [];
 }
 
 function r_auth_login($user, $body, $params, $token, $query): array {

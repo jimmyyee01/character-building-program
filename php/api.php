@@ -101,6 +101,7 @@ route('DELETE', '/api/super/modules/([a-zA-Z0-9_-]+)', 'r_super_module_delete');
 route('PUT',    '/api/super/settings', 'r_super_settings');
 route('GET',    '/api/super/submissions', 'r_super_submissions');
 route('GET',    '/api/super/users', 'r_super_users');
+route('POST',   '/api/super/users', 'r_super_users_create');
 
 /* ---------------------------------------------------------- dispatch -- */
 try {

@@ -5,10 +5,10 @@ const S = {
   view: 'dashboard',
   portals: null, tenants: null, modules: null, library: null, videos: null,
   books: [], bookModuleId: '',
-  users: [], usersTenant: '',
+  users: [], usersTenant: '', usersSearch: '',
   editPortalId: null, editTenantId: null, editModuleId: null, editLibraryId: null,
   editChapterId: null,
-  rpFlagged: false, rpType: '',
+  rpFlagged: false, rpType: '', rpSearch: '',
   settings: {}
 };
 
@@ -1051,7 +1051,7 @@ function userRow(u) {
   if (u.email) ident.push(esc(u.email));
   if (u.studentNumber) ident.push(esc(u.studentNumber));
   if (!ident.length) ident.push('<span class="muted">—</span>');
-  return '<tr><td><b>' + esc(u.fullName || '—') + '</b><div>' + roleBadge(u.role) + '</div></td>' +
+  return '<tr data-search="' + esc(searchText(u)) + '"><td><b>' + esc(u.fullName || '—') + '</b><div>' + roleBadge(u.role) + '</div></td>' +
     '<td class="small">' + ident.join('<br>') + '</td>' +
     '<td class="small">' + esc(u.className || '—') + '</td>' +
     '<td class="small">' + esc(u.supervisorName || '—') + '</td>' +
@@ -1121,14 +1121,23 @@ async function renderUsers() {
       '<div class="mt"><button type="submit">Create user</button></div>' +
     '</form></div>' +
     '<div class="card"><div class="row" style="align-items:flex-end">' +
+      '<div style="min-width:200px"><label>Search users</label>' +
+        '<input type="text" id="usSearch" placeholder="Name, email, number, class…" value="' +
+        esc(S.usersSearch) + '"></div>' +
       '<div><label>Tenant filter</label><select id="usTenant">' + filterOpts + '</select></div>' +
       '<div class="fixed" style="padding-bottom:10px">' +
-        '<span class="badge info">' + users.length + ' users</span></div>' +
+        '<span class="badge info">' + users.length + ' users</span> ' +
+        '<span class="badge lock" id="usTableCount">' + users.length + ' shown</span></div>' +
     '</div>' +
-    '<table><thead><tr>' +
+    '<table id="usTable"><thead><tr>' +
       '<th>Name</th><th>Email / number</th><th>Class</th><th>Supervisor</th>' +
       '<th>Progress</th><th>Status</th><th>Actions</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  $('usSearch').addEventListener('input', function () {
+    S.usersSearch = this.value;
+    applyTableSearch('usTable', 'usSearch');
+  });
+  applyTableSearch('usTable', 'usSearch');
 }
 async function createUser(e) {
   e.preventDefault();
@@ -1174,13 +1183,40 @@ async function deleteUser(id) {
 }
 
 /* ======================================================== reports ======== */
+/* Builds a lowercase haystack from every visible field of a report row. */
+function searchText(o) {
+  const parts = [];
+  ['userName', 'userRole', 'type', 'label', 'chapter', 'book', 'text',
+    'fullName', 'email', 'studentNumber', 'className', 'supervisorName',
+    'role', 'name', 'slug', 'title', 'code', 'user', 'similarity'].forEach(function (k) {
+    if (o && o[k] != null) parts.push(String(o[k]));
+  });
+  if (o && o.score != null && o.total != null) parts.push(o.score + '/' + o.total);
+  if (o && o.createdAt) parts.push(fmtDate(o.createdAt));
+  return parts.join(' | ').toLowerCase();
+}
+/* Filters rendered table rows by the text in a search input (no re-fetch). */
+function applyTableSearch(tableId, inputId) {
+  const input = $(inputId);
+  const table = document.getElementById(tableId);
+  if (!input || !table) return;
+  const q = input.value.trim().toLowerCase();
+  let shown = 0;
+  table.querySelectorAll('tbody tr[data-search]').forEach(function (tr) {
+    const hit = !q || (tr.dataset.search || '').indexOf(q) !== -1;
+    tr.style.display = hit ? '' : 'none';
+    if (hit) shown++;
+  });
+  const badge = document.getElementById(tableId + 'Count');
+  if (badge) badge.textContent = shown + ' shown';
+}
 function submissionRow(s) {
   const sim = s.similarity == null ? '—' : Math.round(Number(s.similarity)) + '%';
   const label = s.label
     ? '<div class="small" style="color:' + esc(s.color || 'inherit') + '">' +
       esc(s.label) + '</div>'
     : '';
-  return '<tr><td><b>' + esc(s.userName || '—') + '</b>' +
+  return '<tr data-search="' + esc(searchText(s)) + '"><td><b>' + esc(s.userName || '—') + '</b>' +
     '<div>' + roleBadge(s.userRole) + '</div></td>' +
     '<td class="small">' + esc(s.type || '—') + label + '</td>' +
     '<td class="small">' + esc(s.chapter || '—') +
@@ -1213,6 +1249,9 @@ async function renderReports() {
 
   v.innerHTML = '<h2>Reports</h2>' +
     '<div class="card"><div class="row" style="align-items:flex-end">' +
+      '<div style="min-width:220px"><label>Search reports</label>' +
+        '<input type="text" id="rpSearch" placeholder="Name, email, chapter, book, text…" value="' +
+        esc(S.rpSearch) + '"></div>' +
       '<div class="fixed" style="padding-bottom:10px">' +
         '<label style="margin:0"><input type="checkbox" id="rpFlagged"' +
           (S.rpFlagged ? ' checked' : '') + '> Flagged only</label></div>' +
@@ -1226,12 +1265,18 @@ async function renderReports() {
           '>Final summary</option>' +
       '</select></div>' +
       '<div class="fixed" style="padding-bottom:10px">' +
-        '<span class="badge info">' + subs.length + ' submissions</span></div>' +
+        '<span class="badge info">' + subs.length + ' submissions</span> ' +
+        '<span class="badge lock" id="rpTableCount">' + subs.length + ' shown</span></div>' +
     '</div></div>' +
-    '<div class="card"><table><thead><tr>' +
+    '<div class="card"><table id="rpTable"><thead><tr>' +
       '<th>User</th><th>Type</th><th>Chapter / book</th><th>Submitted</th>' +
       '<th>Similarity</th><th>Status</th><th>Text</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  $('rpSearch').addEventListener('input', function () {
+    S.rpSearch = this.value;
+    applyTableSearch('rpTable', 'rpSearch');
+  });
+  applyTableSearch('rpTable', 'rpSearch');
 }
 /* ======================================================= settings ======== */
 function selectOption(value, label, current, extraSelected) {
