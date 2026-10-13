@@ -1280,6 +1280,9 @@ route('DELETE', '/api/objectives/([a-z0-9_-]+)', ({ user, params }) => {
 function allowedRolesFor(portalType, creatorRole) {
   if (creatorRole === 'supervisor') return ['member'];
   if (portalType === 'schools') return ['student', 'teacher', 'supervisor'];
+  /* Organization portal: the admin only adds supervisors; supervisors then add
+     their own users (max 100 each). Super admin bypasses this restriction. */
+  if (portalType === 'organization' && creatorRole === 'tenant_admin') return ['supervisor'];
   return ['member', 'supervisor'];
 }
 
@@ -1342,7 +1345,8 @@ function buildUserRecord(actingUser, body) {
 
   const h = auth.hashPassword(String(body.password));
   const u = { id: dbm.uid('usr'), tenantId, role,
-    supervisorId: actingUser.role === 'supervisor' ? actingUser.id : (body.supervisorId || null),
+    supervisorId: actingUser.role === 'supervisor' ? actingUser.id
+      : (role === 'supervisor' ? null : (body.supervisorId || null)),
     fullName: String(body.fullName).trim(), email, studentNumber: sn,
     className: body.className ? String(body.className).trim() : null,
     photo: body.photo || null, salt: h.salt, passwordHash: h.hash,

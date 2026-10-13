@@ -215,10 +215,11 @@ function roleSelectHtml() {
   const t = ME.portal ? ME.portal.type : null;
   let opts;
   if (t === 'schools') opts = [['student', 'Student'], ['teacher', 'Teacher']];
-  else if (t === 'organization') opts = [['member', 'Member / User']];
+  /* Organization portal: the admin only adds supervisors (they add the users). */
+  else if (t === 'organization') opts = [['supervisor', 'Supervisor']];
   else if (t === 'family' || t === 'married') opts = [['member', 'Member']];
   else opts = [['student', 'Student'], ['teacher', 'Teacher'], ['member', 'Member']];
-  opts.push(['supervisor', 'Supervisor']);
+  if (t !== 'organization') opts.push(['supervisor', 'Supervisor']);
   let h = '<select id="ufRole">';
   opts.forEach(function (o) { h += '<option value="' + o[0] + '">' + esc(o[1]) + '</option>'; });
   return h + '</select>';
@@ -232,7 +233,9 @@ function userFormHtml(limit) {
       bar(Math.round(used / max * 100));
   }
   let supRow = '';
-  if (isAdmin() && supOverview && supOverview.supervisors && supOverview.supervisors.length) {
+  /* Organization portal: the admin only adds supervisors — no assignment. */
+  if (isAdmin() && supOverview && supOverview.supervisors && supOverview.supervisors.length &&
+      !(ME.portal && ME.portal.type === 'organization')) {
     supRow = '<div><label>Assign to supervisor (optional)</label><select id="ufSup">' +
       '<option value="">— none —</option>';
     supOverview.supervisors.forEach(function (s) {
@@ -259,7 +262,10 @@ let bulkResult = null;
 
 function bulkDefaultRole() {
   const t = ME.portal ? ME.portal.type : null;
-  return t === 'schools' ? 'student' : 'member';
+  if (t === 'schools') return 'student';
+  /* Organization portal: the admin only adds supervisors via bulk. */
+  if (t === 'organization' && isAdmin()) return 'supervisor';
+  return 'member';
 }
 
 function parseBulkCsv(text) {
@@ -281,23 +287,19 @@ function parseBulkCsv(text) {
 
 function bulkPanelHtml() {
   const t = ME.portal ? ME.portal.type : null;
+  const orgAdmin = t === 'organization' && isAdmin();
   const hint = t === 'schools'
     ? 'CSV columns: <b>fullName, email, studentNumber, className</b> — students need a student number, e.g. <span class="mono">Jane Doe,,STU-101,Grade 10A</span>'
-    : 'CSV columns: <b>fullName, email, studentNumber, className</b> — e.g. <span class="mono">John Doe,john@example.com,,Group A</span>';
+    : orgAdmin
+      ? 'CSV columns: <b>fullName, email</b> — each row creates a <b>supervisor</b> (access code generated automatically), e.g. <span class="mono">Sam Supervisor,sam@example.com</span>'
+      : 'CSV columns: <b>fullName, email, studentNumber, className</b> — e.g. <span class="mono">John Doe,john@example.com,,Group A</span>';
   const roles = t === 'schools'
     ? [['student', 'Student'], ['teacher', 'Teacher']]
-    : [['member', t === 'organization' ? 'Member / User' : 'Member']];
+    : (orgAdmin ? [['supervisor', 'Supervisor']]
+      : [['member', t === 'organization' ? 'Member / User' : 'Member']]);
   const roleOpts = roles.map(function (o) {
     return '<option value="' + o[0] + '"' + (bulkDefaultRole() === o[0] ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
   }).join('');
-  let supRow = '';
-  if (isAdmin() && supOverview && supOverview.supervisors && supOverview.supervisors.length && t === 'organization') {
-    supRow = '<div><label>Assign all rows to supervisor</label><select id="bulkSup">' +
-      '<option value="">— none —</option>' +
-      supOverview.supervisors.map(function (s) {
-        return '<option value="' + esc(s.id) + '">' + esc(s.fullName) + '</option>';
-      }).join('') + '</select></div>';
-  }
   let result = '';
   if (bulkResult) {
     result = '<div class="card" style="border-left:6px solid ' +
@@ -318,7 +320,6 @@ function bulkPanelHtml() {
       '<div><label>Role for all rows</label><select id="bulkRole">' + roleOpts + '</select></div>' +
       '<div><label>Default password (min 6, applies to all rows)</label>' +
         '<input type="text" id="bulkPw" value="ChangeMe123" minlength="6"></div>' +
-      supRow +
     '</div>' +
     '<div class="row"><div><label>Paste CSV rows</label>' +
       '<textarea id="bulkText" rows="4" placeholder="Jane Doe,,STU-101,Grade 10A"></textarea></div></div>' +

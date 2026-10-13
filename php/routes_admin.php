@@ -401,10 +401,14 @@ function build_user_record(array $acting, array $body): array {
     if ($role === 'supervisor') $reqRole = 'member';
     need($reqRole !== 'super', 'Cannot create super', 403);
     $isSchool = ($ten['type'] ?? '') === 'school' || ($ten['type'] ?? '') === 'schools';
+    $isOrg = ($ten['type'] ?? '') === 'organization';
     if ($role !== 'super' && $role !== 'tenant_admin') {
         need(in_array($reqRole, ['member'], true), 'Not permitted', 403);
     } else {
-        $allowed = $isSchool ? ['student','teacher','supervisor'] : ['member','supervisor'];
+        /* Organization portal: the admin only adds supervisors; supervisors then
+           add their own users (max 100 each). Super admin bypasses this. */
+        $allowed = $isSchool ? ['student','teacher','supervisor']
+            : ($isOrg && $role !== 'super' ? ['supervisor'] : ['member','supervisor']);
         if ($role !== 'supervisor') $allowed[] = 'tenant_admin';
         need(in_array($reqRole, $allowed, true), 'Role not allowed for this portal', 400);
     }
@@ -428,7 +432,7 @@ function build_user_record(array $acting, array $body): array {
     }
     $pw = (string)($body['password'] ?? ''); need($pw !== '', 'password required');
     $code = null;
-    if ($reqRole === 'supervisor') $code = 'SUP-' . rand(1000, 9999);
+    if ($reqRole === 'supervisor') { $code = 'SUP-' . rand(1000, 9999); $supId = null; }
     $id = uid('usr');
     db()->prepare('INSERT INTO users (id,tenant_id,role,supervisor_id,supervisor_code,full_name,email,student_number,class_name,photo,password_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
         ->execute([$id, $tenantId, $reqRole, $supId, $code, $fn, $email ?: null, $sn ?: null,
