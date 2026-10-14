@@ -51,6 +51,25 @@ Reset the demo data any time with `npm run fresh` (deletes `data/db.json` and
 re-seeds). On an **existing PHP database**, `php ensure_logins.php` adds any of
 the logins above that are missing (safe to re-run — it never overwrites).
 
+### Automated tests
+
+```bash
+node tools/api-test.js http://localhost:3000     # Node backend (npm start)
+node tools/api-test.js http://localhost:8080     # PHP backend (see below)
+```
+
+58 checks covering every seeded login, the per-portal role rules (schools /
+organization / family / married), the supervisor 100-user cap, account colour,
+reports, certificates and the participant flow. It prints a PASS/FAIL summary
+and exits non-zero if anything fails.
+
+Run the PHP build without Apache (useful for local testing — `php -S` does not
+read `.htaccess`, so the bundled router does the rewriting):
+
+```bash
+php -S 127.0.0.1:8080 -t . tools/php-router.php
+```
+
 ---
 
 ## Feature map

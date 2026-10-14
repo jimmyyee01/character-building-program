@@ -1,0 +1,183 @@
+/* End-to-end API test suite — runs against either backend:
+     node api_test.js http://127.0.0.1:3000   (Node)
+     node api_test.js http://127.0.0.1:8080   (PHP)                                   */
+const base = process.argv[2] || 'http://127.0.0.1:3000';
+let pass = 0, fail = 0;
+const fails = [];
+
+async function call(path, opts, token) {
+  opts = opts || {};
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  const init = { method: opts.method || 'GET', headers };
+  if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
+  const res = await fetch(base + '/api' + path, init);
+  let data = {};
+  try { data = await res.json(); } catch (e) { /* non-JSON */ }
+  return { status: res.status, ok: res.ok, data: data };
+}
+function check(name, cond, extra) {
+  if (cond) { pass++; console.log('  PASS  ' + name); }
+  else { fail++; fails.push(name + (extra ? '  [' + extra + ']' : '')); console.log('  FAIL  ' + name + (extra ? '  [' + extra + ']' : '')); }
+}
+
+async function main() {
+  console.log('=== API test suite: ' + base + ' ===');
+
+  let r = await call('/public/portals');
+  check('GET /public/portals', r.ok && r.data.ok && (r.data.portals || []).length >= 4);
+
+  r = await call('/public/tenant/greenfield-academy');
+  check('GET /public/tenant/<slug>', r.ok && r.data.tenant && r.data.tenant.name, 'status ' + r.status);
+  check('tenant branding exposes themeColor', !!(r.data.branding && 'themeColor' in r.data.branding));
+
+  const sr = await call('/auth/super-login', { method: 'POST', body: { username: 'superadmin', password: 'SuperAdmin@123' } });
+  check('super admin login', sr.ok && sr.data.token, JSON.stringify(sr.data).slice(0, 120));
+  const superToken = sr.data.token;
+
+  r = await call('/super/tenants', null, superToken);
+  check('GET /super/tenants', r.ok && (r.data.tenants || []).length >= 4, 'status ' + r.status);
+  r = await call('/super/users', null, superToken);
+  check('GET /super/users', r.ok && (r.data.users || []).length >= 8, 'count ' + (r.data.users || []).length);
+
+  const portals = [
+    ['greenfield-academy', 'admin@greenfield.edu', 'Admin@123', 'schools'],
+    ['horizon-alliance', 'admin@horizon.org', 'Admin@123', 'organization'],
+    ['beloved-family', 'admin@family.example', 'Admin@123', 'family'],
+    ['covenant-couples', 'admin@married.example', 'Admin@123', 'married']
+  ];
+  const tok = {};
+  for (const p of portals) {
+    r = await call('/auth/login', { method: 'POST', body: { slug: p[0], identifier: p[1], password: p[2] } });
+    check('login ' + p[3] + ' admin', r.ok && r.data.token, JSON.stringify(r.data).slice(0, 120));
+    tok[p[3]] = r.data.token;
+  }
+
+  for (const t of Object.keys(tok)) {
+    r = await call('/me', null, tok[t]);
+    check('/me ' + t + ' -> tenant_admin', r.ok && r.data.user && r.data.user.role === 'tenant_admin');
+    check('/me ' + t + ' branding.themeColor', !!(r.data.branding && 'themeColor' in r.data.branding));
+  }
+
+  r = await call('/admin/branding', { method: 'PUT', body: { themeColor: '#0f766e' } }, tok.schools);
+  check('PUT /admin/branding sets colour', r.ok, JSON.stringify(r.data).slice(0, 120));
+  r = await call('/me', null, tok.schools);
+  check('colour persisted', r.data.branding && r.data.branding.themeColor === '#0f766e', JSON.stringify(r.data.branding || {}));
+  r = await call('/admin/branding', { method: 'PUT', body: { themeColor: 'javascript:alert(1)' } }, tok.schools);
+  check('invalid colour accepted but sanitised', r.ok, 'status ' + r.status);
+  r = await call('/me', null, tok.schools);
+  check('invalid colour stored as null', !r.data.branding.themeColor, JSON.stringify(r.data.branding || {}));
+
+  await part2(r, tok, check);
+  await part3(r, tok, check);
+  console.log('\n' + pass + ' passed, ' + fail + ' failed');
+  if (fail) { console.log('FAILURES:\n - ' + fails.join('\n - ')); }
+  process.exit(fail ? 1 : 0);
+}
+main().catch(function (e) { console.log('FATAL ' + e.message); process.exit(1); });
+
+async function part2(r, tok, check) {
+  r = await call('/users', { method: 'POST', body: { role: 'teacher', fullName: 'API Teacher', email: 'api.teacher@greenfield.edu', password: 'Teacher@123' } }, tok.schools);
+  check('schools admin creates teacher', r.ok, JSON.stringify(r.data).slice(0, 140));
+  r = await call('/users', { method: 'POST', body: { role: 'student', fullName: 'API Student', studentNumber: 'STU-API', password: 'Student@123' } }, tok.schools);
+  check('schools admin creates student', r.ok, JSON.stringify(r.data).slice(0, 140));
+
+  r = await call('/users', { method: 'POST', body: { role: 'member', fullName: 'Nope', email: 'nope@horizon.org', password: 'Member@123' } }, tok.organization);
+  check('org admin CANNOT create member (403)', r.status === 403, 'status ' + r.status);
+  r = await call('/users', { method: 'POST', body: { role: 'supervisor', fullName: 'API Supervisor', email: 'api.sup@horizon.org', password: 'Super@123' } }, tok.organization);
+  check('org admin creates supervisor', r.ok, JSON.stringify(r.data).slice(0, 160));
+  const newSup = r.data.user || {};
+  check('supervisor gets an access code', !!newSup.supervisorCode, JSON.stringify(newSup).slice(0, 140));
+  check('supervisor is not nested under another', newSup.supervisorId === null || newSup.supervisorId === undefined);
+
+  if (newSup.id) {
+    const sl = await call('/auth/login', { method: 'POST', body: { slug: 'horizon-alliance', identifier: 'api.sup@horizon.org', password: 'Super@123' } });
+    check('new supervisor can log in', sl.ok && sl.data.token, JSON.stringify(sl.data).slice(0, 120));
+    const st = sl.data.token;
+    r = await call('/users', { method: 'POST', body: { role: 'member', fullName: 'Sup Member', email: 'sup.member1@horizon.org', password: 'Member@123' } }, st);
+    check('supervisor creates member under self', r.ok && r.data.user && r.data.user.supervisorId === newSup.id, JSON.stringify(r.data.user || {}).slice(0, 160));
+    r = await call('/users', null, st);
+    check('supervisor quota max = 100 (GET /users)', r.data.limit && r.data.limit.max === 100, JSON.stringify(r.data.limit || {}));
+    r = await call('/users', { method: 'POST', body: { role: 'tenant_admin', fullName: 'No Escalate', email: 'no.escalate@horizon.org', password: 'Abc12345' } }, st);
+    check('supervisor cannot escalate (created as member or 403)',
+      (r.status === 403) || (r.ok && r.data.user && r.data.user.role === 'member'),
+      'status ' + r.status + ' role ' + ((r.data.user || {}).role));
+    r = await call('/users', { method: 'POST', body: { role: 'supervisor', fullName: 'No Sup', email: 'no.sup@horizon.org', password: 'Abc12345' } }, st);
+    check('supervisor cannot create supervisors (member or 403)',
+      (r.status === 403) || (r.ok && r.data.user && r.data.user.role === 'member'),
+      'status ' + r.status + ' role ' + ((r.data.user || {}).role));
+  }
+
+  r = await call('/admin/overview', null, tok.schools);
+  check('GET /admin/overview', r.ok && !!r.data.counts, 'status ' + r.status);
+  r = await call('/admin/submissions', null, tok.schools);
+  check('GET /admin/submissions', r.ok && Array.isArray(r.data.submissions), 'status ' + r.status);
+  r = await call('/admin/certificates', null, tok.schools);
+  check('GET /admin/certificates', r.ok && Array.isArray(r.data.certificates), 'status ' + r.status);
+  r = await call('/modules', null, tok.schools);
+  check('GET /modules', r.ok && (r.data.modules || []).length >= 3, 'count ' + (r.data.modules || []).length);
+  r = await call('/library', null, tok.schools);
+  check('GET /library', r.ok && Array.isArray(r.data.library), 'status ' + r.status);
+  r = await call('/books?moduleId=mod_gamma', null, tok.schools);
+  check('GET /books?moduleId=mod_gamma', r.ok && (r.data.books || []).length >= 3, 'count ' + (r.data.books || []).length);
+
+  const stu = await call('/auth/login', { method: 'POST', body: { slug: 'greenfield-academy', identifier: 'STU-001', password: 'Student@123' } });
+  check('student login', stu.ok && stu.data.token, JSON.stringify(stu.data).slice(0, 120));
+  r = await call('/flow', null, stu.data.token);
+  check('GET /flow (student) has modules + performance',
+    r.ok && Array.isArray(r.data.modules) && r.data.performance !== undefined, 'status ' + r.status);
+  check('GET /flow (student) first-login flags', r.data.showLetter !== undefined && r.data.letterDone !== undefined);
+  r = await call('/certificates', null, stu.data.token);
+  check('GET /certificates (student)', r.ok && Array.isArray(r.data.certificates), 'status ' + r.status);
+  r = await call('/admin/overview', null, stu.data.token);
+  check('student blocked from admin report (403)', r.status === 403, 'status ' + r.status);
+  r = await call('/not-a-real-endpoint', null, stu.data.token);
+  check('unknown endpoint -> 404', r.status === 404, 'status ' + r.status);
+
+  r = await call('/admin/overview');
+  check('no token -> 401 (not 500)', r.status === 401, 'status ' + r.status);
+  r = await call('/admin/branding', { method: 'PUT', body: { themeColor: '#123456' } });
+  check('no token on PUT -> 401 (not 500)', r.status === 401, 'status ' + r.status);
+}
+
+
+/* Super-console pages, the tenant-admin user list and the participant extras —
+   these are the endpoints whose payload keys the consoles read directly. */
+async function part3(r, tok, check) {
+  const sup = await call('/auth/super-login', { method: 'POST', body: { username: 'superadmin', password: 'SuperAdmin@123' } });
+  const st = sup.data.token;
+  r = await call('/super/portals', null, st);
+  check('GET /super/portals -> {portals}', r.ok && Array.isArray(r.data.portals) && r.data.portals.length >= 4, 'status ' + r.status);
+  r = await call('/super/tenants', null, st);
+  check('GET /super/tenants -> {tenants}', r.ok && Array.isArray(r.data.tenants) && r.data.tenants.length >= 4, 'status ' + r.status);
+  r = await call('/super/modules', null, st);
+  check('GET /super/modules -> {modules}', r.ok && Array.isArray(r.data.modules) && r.data.modules.length >= 3, 'status ' + r.status);
+  r = await call('/super/users', null, st);
+  check('GET /super/users -> {users}', r.ok && Array.isArray(r.data.users) && r.data.users.length >= 8, 'count ' + ((r.data.users || []).length));
+  r = await call('/super/submissions', null, st);
+  check('GET /super/submissions -> {submissions}', r.ok && Array.isArray(r.data.submissions), 'status ' + r.status);
+  r = await call('/super/settings', null, st);
+  check('GET /super/settings', r.ok, 'status ' + r.status);
+
+  r = await call('/users', null, tok.schools);
+  check('GET /users (tenant admin) -> {users}', r.ok && Array.isArray(r.data.users), 'status ' + r.status);
+
+  const stu = await call('/auth/login', { method: 'POST', body: { slug: 'greenfield-academy', identifier: 'STU-001', password: 'Student@123' } });
+  const stuTok = stu.data.token;
+  r = await call('/videos', null, stuTok);
+  check('GET /videos -> {videos}', r.ok && Array.isArray(r.data.videos), 'status ' + r.status);
+  r = await call('/thoughts', null, stuTok);
+  check('GET /thoughts -> {thoughts}', r.ok && Array.isArray(r.data.thoughts), 'status ' + r.status);
+  r = await call('/final', null, stuTok);
+  check('GET /final (403 until every module is done)', r.ok || r.status === 403, 'status ' + r.status);
+
+  const certs = await call('/certificates', null, stuTok);
+  const first = (certs.data.certificates || [])[0];
+  if (first) {
+    r = await call('/certificate/' + encodeURIComponent(first.id), null, stuTok);
+    check('GET /certificate/:id -> {certificate, branding}', r.ok && !!r.data.certificate && !!r.data.branding, 'status ' + r.status);
+  } else {
+    check('GET /certificate/:id (no certificate issued yet — skipped)', true);
+  }
+}
+

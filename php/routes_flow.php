@@ -408,10 +408,6 @@ function flow_lib_row($r, $user) {
   }
   return $row;
 }
-function lib_row($r) {
-  return ['id' => $r['id'], 'type' => $r['type'], 'title' => $r['title'], 'scope' => $r['scope'],
-    'text' => $r['text'], 'url' => $r['url'], 'fileName' => $r['file_name'], 'createdAt' => iso($r['created_at'])];
-}
 function r_library_get($user, $body, $params, $token, $query) {
   need($user, 'Sign in required', 401);
   $pdo = db();
@@ -426,7 +422,7 @@ function r_library_get($user, $body, $params, $token, $query) {
     }
     $out[] = $row;
   }
-  return $out;
+  return ['library' => $out];
 }
 function describe_sub($s) {
   static $chCache = [], $bkCache = [], $mdCache = [];

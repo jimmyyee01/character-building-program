@@ -1070,6 +1070,13 @@ route('DELETE', '/api/super/modules/([a-z0-9_-]+)', ({ user, params }) => {
   return { ok: true };
 });
 
+route('GET', '/api/super/settings', ({ user }) => {
+  requireRole(user, ['super']);
+  const s = dbm.db.settings;
+  return { ok: true, settings: { programName: s.programName, programLogo: s.programLogo,
+    letterId: s.letterId, letterVideoId: s.letterVideoId } };
+});
+
 route('PUT', '/api/super/settings', ({ user, body }) => {
   requireRole(user, SUPER);
   body = body || {};
@@ -1402,6 +1409,19 @@ route('POST', '/api/users/bulk', ({ user, body }) => {
 });
 
 /* Super admin creates a user inside any tenant (uses the same rules as POST /api/users). */
+/* The super console lists every user through /api/super/users (same payload
+   as GET /api/users, optionally filtered with ?tenantId=). */
+route('GET', '/api/super/users', ({ req, user }) => {
+  requireRole(user, ['super']);
+  const tid = qp(req, 'tenantId');
+  const list = tid ? dbm.db.users.filter(u => u.tenantId === tid) : dbm.db.users;
+  return { ok: true,
+    users: list.map(u => Object.assign(publicUser(u), {
+      supervisorName: u.supervisorId ? ((dbm.byId('users', u.supervisorId) || {}).fullName || null) : null,
+      progress: PARTICIPANTS.indexOf(u.role) !== -1 ? performance(u).overall : null })),
+    limit: null };
+});
+
 route('POST', '/api/super/users', ({ user, body }) => {
   need(user, 'Sign in required', 401);
   need(user.role === 'super', 'Not permitted', 403);

@@ -131,7 +131,7 @@ function r_super_portals(array $user, array $body, array $params, ?string $token
         $st = db()->prepare('SELECT COUNT(*) FROM tenants WHERE portal_id=?'); $st->execute([$p['id']]);
         $pp = portal_public($p); $pp['tenantCount'] = (int)$st->fetchColumn(); $out[] = $pp;
     }
-    return $out;
+    return ['portals' => $out];
 }
 function r_super_portal_create(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super']);
@@ -198,7 +198,7 @@ function r_super_tenants(array $user, array $body, array $params, ?string $token
         $tr['active'] = portal_active($pmap[$t['portal_id']] ?? null);
         $out[] = $tr;
     }
-    return $out;
+    return ['tenants' => $out];
 }
 function r_super_tenant_create(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super']);
@@ -264,7 +264,7 @@ function r_super_modules(array $user, array $body, array $params, ?string $token
         $st = db()->prepare('SELECT COUNT(*) FROM books WHERE module_id=?'); $st->execute([$m['id']]);
         $n = n_module($m); $n['bookCount'] = (int)$st->fetchColumn(); $out[] = $n;
     }
-    return $out;
+    return ['modules' => $out];
 }
 function r_super_module_create(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super']);
@@ -315,6 +315,16 @@ function r_super_module_delete(array $user, array $body, array $params, ?string 
     db()->prepare('DELETE FROM modules WHERE id=?')->execute([$id]);
     return ['deleted' => true];
 }
+function r_super_settings_get(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super']);
+    $s = get_settings();
+    return ['settings' => [
+        'programName' => $s['program_name'] ?? 'Character Building Program',
+        'programLogo' => $s['program_logo'] ?? null,
+        'letterId' => $s['letter_id'] ?? null,
+        'letterVideoId' => $s['letter_video_id'] ?? null,
+    ]];
+}
 function r_super_settings(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super']);
     $set = []; $args = [];
@@ -341,13 +351,13 @@ function r_super_settings(array $user, array $body, array $params, ?string $toke
 }
 function r_super_submissions(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super']);
-    return admin_submissions($user, $query);
+    return ['submissions' => admin_submissions($user, $query)];
 }
 function r_super_users(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super']);
     $rows = scoped_user_rows($user, $query);
     $names = sup_names_for($rows);
-    return array_map(fn($u)=>admin_user_map($u, $names), $rows);
+    return ['users' => array_map(fn($u)=>admin_user_map($u, $names), $rows)];
 }
 /* Super admin creates a user inside any tenant (same rules as POST /api/users). */
 function r_super_users_create(array $user, array $body, array $params, ?string $token, array $query): array {
@@ -393,7 +403,7 @@ function r_users_list(array $user, array $body, array $params, ?string $token, a
     if ($user['role'] === 'supervisor') {
         return ['users'=>$out,'limit'=>['max'=>100,'used'=>count($rows)]];
     }
-    return $out;
+    return ['users' => $out, 'limit' => null];
 }
 function build_user_record(array $acting, array $body): array {
     $role = $acting['role'];
@@ -415,7 +425,7 @@ function build_user_record(array $acting, array $body): array {
         $allowed = $isSchool ? ['student','teacher','supervisor']
             : ($isOrg && $role !== 'super' ? ['supervisor'] : ['member','supervisor']);
         if ($role !== 'supervisor') $allowed[] = 'tenant_admin';
-        need(in_array($reqRole, $allowed, true), 'Role not allowed for this portal', 400);
+        need(in_array($reqRole, $allowed, true), 'Role not allowed for this portal', 403);
     }
     $fn = trim((string)($body['fullName'] ?? $body['full_name'] ?? '')); need($fn !== '', 'fullName required');
     $email = trim((string)($body['email'] ?? '')); $sn = trim((string)($body['studentNumber'] ?? $body['student_number'] ?? ''));
@@ -450,7 +460,7 @@ function r_users_create(array $user, array $body, array $params, ?string $token,
     require_role($user, ['super','tenant_admin','supervisor']);
     $row = build_user_record($user, $body);
     $names = sup_names_for([$row]);
-    return admin_user_map($row, $names);
+    return ['user' => admin_user_map($row, $names)];
 }
 
 /* Bulk insert: same validation as single create, per-row results (partial
@@ -556,7 +566,7 @@ function r_admin_branding(array $user, array $body, array $params, ?string $toke
 }
 function r_admin_submissions(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin','supervisor']);
-    return admin_submissions($user, $query);
+    return ['submissions' => admin_submissions($user, $query)];
 }
 function r_admin_certificates(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin','supervisor']);
@@ -570,12 +580,12 @@ function r_admin_certificates(array $user, array $body, array $params, ?string $
     } else {
         $st = db()->prepare('SELECT id FROM users WHERE supervisor_id=?'); $st->execute([$user['id']]);
         $ids = $st->fetchAll(PDO::FETCH_COLUMN);
-        if (!count($ids)) return [];
+        if (!count($ids)) return ['certificates' => []];
         $ph = implode(',', array_fill(0, count($ids), '?'));
         $st = db()->prepare("SELECT * FROM certificates WHERE user_id IN ($ph) ORDER BY issued_at DESC LIMIT 400");
         $st->execute($ids); $rows = $st->fetchAll();
     }
-    return array_map('n_cert', $rows);
+    return ['certificates' => array_map('n_cert', $rows)];
 }
 function r_books_list(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin']);
@@ -606,7 +616,7 @@ function r_books_list(array $user, array $body, array $params, ?string $token, a
         }
         $br['chapters'] = $chs; $out[] = $br;
     }
-    return $out;
+    return ['books' => $out];
 }
 function r_books_create(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin']);

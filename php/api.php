@@ -98,6 +98,7 @@ route('GET',    '/api/super/modules', 'r_super_modules');
 route('POST',   '/api/super/modules', 'r_super_module_create');
 route('PUT',    '/api/super/modules/([a-zA-Z0-9_-]+)', 'r_super_module_update');
 route('DELETE', '/api/super/modules/([a-zA-Z0-9_-]+)', 'r_super_module_delete');
+route('GET',    '/api/super/settings', 'r_super_settings_get');
 route('PUT',    '/api/super/settings', 'r_super_settings');
 route('GET',    '/api/super/submissions', 'r_super_submissions');
 route('GET',    '/api/super/users', 'r_super_users');
@@ -125,7 +126,16 @@ try {
         // numeric $params[0] AND named $params['id'].
         $params = array_slice($m, 1);
         if (isset($params[0]) && !isset($params['id'])) $params['id'] = $params[0];
-        $out = $fn($user, $body, $params, $token, $query);
+        try {
+            $out = $fn($user, $body, $params, $token, $query);
+        } catch (TypeError $e) {
+            /* Handlers are declared with a typed array $user; a request without a
+               session must answer 401 (like the Node backend), not 500. */
+            if ($user === null && strpos($e->getMessage(), 'Argument #1') !== false) {
+                send_json(401, ['ok' => false, 'error' => 'Sign in required']);
+            }
+            throw $e;
+        }
         if (!is_array($out)) $out = [];
         send_json(200, array_merge(['ok' => true], $out));
     }
