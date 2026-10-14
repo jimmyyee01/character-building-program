@@ -477,6 +477,8 @@ async function renderUsers() {
     '<div class="fixed" style="padding-bottom:10px"><h3 style="margin:0">' + heading +
       ' <span class="badge info">' + usersCache.length + '</span> ' +
       '<span class="badge lock" id="usTableCount">' + usersCache.length + ' shown</span></h3></div>' +
+'<div class="row export-buttons"><button type="button" class="ghost" data-export="print">Print</button><button type="button" class="ghost" data-export="pdf">PDF</button><button type="button" class="ghost" data-export="excel">Excel</button><button type="button" class="ghost" data-export="word">Word</button></div>' +
+(usersCache.length ? usersTableHtml() : '<p class="muted">No users yet.</p>') + '</div>';
     '</div>' +
     (usersCache.length ? usersTableHtml() : '<p class="muted">No users yet.</p>') + '</div>';
   el.innerHTML = html;
@@ -1139,7 +1141,7 @@ async function renderSubmissions() {
     '<input type="checkbox" id="sfFlag"' + (submState.flagged ? ' checked' : '') +
     '> Flagged only</label></div>' +
     '<div><label>Type</label><select id="sfType">' + opts + '</select></div>' +
-    '</div></div><div id="submRows"><div class="card"><p class="muted">Loading…</p></div></div>';
+         '</div></div><div class="row export-buttons" data-target="#submRows"><button type="button" class="ghost" data-export="print">Print</button><button type="button" class="ghost" data-export="pdf">PDF</button><button type="button" class="ghost" data-export="excel">Excel</button><button type="button" class="ghost" data-export="word">Word</button></div><div id="submRows"><div class="card"><p class="muted">Loading…</p></div></div>';
   document.getElementById('sfFlag').onchange = function () {
     submState.flagged = this.checked;
     loadSubmRows();
@@ -1227,7 +1229,9 @@ async function renderCertificates() {
       esc(certState.search) + '"></div>' +
     '<div class="fixed" style="padding-bottom:10px"><h3 style="margin:0">Certificates ' +
       '<span class="badge info">' + certs.length + '</span> ' +
-      '<span class="badge lock" id="ctTableCount">' + certs.length + ' shown</span></h3></div></div>';
+      '<span class="badge lock" id="ctTableCount">' + certs.length + ' shown</span></h3></div></div>' +
+    '<div class="row export-buttons"><button type="button" class="ghost" data-export="print">Print</button><button type="button" class="ghost" data-export="pdf">PDF</button><button type="button" class="ghost" data-export="word">Word</button></div>' +
+
   if (!certs.length) {
     html += '<p class="muted">No certificates issued yet.</p>';
   } else {
@@ -1284,7 +1288,7 @@ function openCertModal(c) {
       esc(c.objectiveScore) + '</p>' : '') +
     '<div class="foot"><span>Code: <b class="mono">' + esc(c.code || '—') + '</b></span>' +
     '<span>Issued: ' + fmtDate(c.issuedAt) + '</span></div></div>' +
-    '<div class="no-print center mt"><button type="button" id="certPrint">Print certificate</button></div>';
+    '<div class="no-print center mt"><div class="row export-buttons"><button type="button" class="ghost" data-export="cert-pdf">PDF</button><button type="button" class="ghost" data-export="cert-word">Word</button><button type="button" class="ghost" data-export="cert-print">Print</button></div></div>';
   openModal(sheet, true);
   document.getElementById('certPrint').onclick = function () { window.print(); };
 }

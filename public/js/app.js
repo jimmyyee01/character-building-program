@@ -718,21 +718,10 @@ async function showCertificate(id) {
         '<span>Issued: ' + fmtDate(c.issuedAt) + '</span></div>' +
       '</div>' +
       '<div class="mt center no-print">' +
-        '<button id="printCert">Print / Save as PDF</button> ' +
-        '<button id="dlCert" class="ghost">Download</button> ' +
+        '<div class="row export-buttons"><button type="button" class="ghost" data-export="cert-print">Print</button><button type="button" class="ghost" data-export="cert-pdf">PDF</button><button type="button" class="ghost" data-export="cert-word">Word</button></div>' +
         '<button data-close class="ghost">Close</button></div>',
       { wide: true });
-    $('printCert').onclick = function () { window.print(); };
-    $('dlCert').onclick = function () {
-      downloadText(c.code + '-' + c.type + '.txt',
-        c.title + '\n\nAwarded to: ' + c.userName + '\nInstitution: ' + (c.tenantName || '-') +
-        '\n\nBooks attended:\n- ' + (c.books || []).join('\n- ') +
-        (c.bestBook ? '\nBest book: ' + c.bestBook : '') +
-        '\nPerformance: ' + c.performance + '%' +
-        '\nCertificate code: ' + c.code + '\nIssued: ' + fmtDate(c.issuedAt) +
-        '\nProgramme: ' + b.programName);
-      toast('Certificate downloaded.', 'ok');
-    };
+
   } catch (e) { toast(e.message, 'err'); }
 }
 
@@ -747,7 +736,7 @@ async function renderCertificates() {
             '<h4 class="mt">' + esc(c.title) + '</h4>' +
             '<div class="small muted">Code ' + esc(c.code) + ' — ' + fmtDate(c.issuedAt) + '</div>' +
             '<div class="small">Performance ' + esc(String(c.performance)) + '%</div>' +
-            '<div class="mt"><button data-cert="' + esc(c.id) + '">View / Print</button></div></div>';
+            '<div class="mt"><button data-cert="' + esc(c.id) + '">View certificate</button></div></div>';
         }).join('') + '</div>'
       : '<div class="card"><p class="muted">No certificates yet — complete a module to earn one.</p></div>');
   $('view-certificates').querySelectorAll('[data-cert]').forEach(function (b) {

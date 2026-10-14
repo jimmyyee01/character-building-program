@@ -1158,6 +1158,7 @@ async function renderUsers() {
         '<span class="badge info">' + users.length + ' users</span> ' +
         '<span class="badge lock" id="usTableCount">' + users.length + ' shown</span></div>' +
     '</div>' +
+    '<div class="row export-buttons"><button type="button" class="ghost" data-export="print">Print</button><button type="button" class="ghost" data-export="pdf">PDF</button><button type="button" class="ghost" data-export="excel">Excel</button><button type="button" class="ghost" data-export="word">Word</button></div>' +
     '<table id="usTable"><thead><tr>' +
       '<th>Name</th><th>Email / number</th><th>Class</th><th>Supervisor</th>' +
       '<th>Progress</th><th>Status</th><th>Actions</th>' +
@@ -1297,7 +1298,7 @@ async function renderReports() {
         '<span class="badge info">' + subs.length + ' submissions</span> ' +
         '<span class="badge lock" id="rpTableCount">' + subs.length + ' shown</span></div>' +
     '</div></div>' +
-    '<div class="card"><table id="rpTable"><thead><tr>' +
+    '<div class="card"><div class="row export-buttons"><button type="button" class="ghost" data-export="print">Print</button><button type="button" class="ghost" data-export="pdf">PDF</button><button type="button" class="ghost" data-export="excel">Excel</button><button type="button" class="ghost" data-export="word">Word</button></div><table id="rpTable"><thead><tr>' +
       '<th>User</th><th>Type</th><th>Chapter / book</th><th>Submitted</th>' +
       '<th>Similarity</th><th>Status</th><th>Text</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table></div>';

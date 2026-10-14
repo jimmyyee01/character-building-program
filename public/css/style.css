@@ -296,3 +296,6 @@ tr:hover td { background: #f8faff; }
   border-color: #24508c;
   color: #fff;
 }
+.export-buttons{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 10px}
+.export-buttons button{padding:5px 10px;font-size:12px;border-radius:6px}
+
