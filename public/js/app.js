@@ -54,6 +54,14 @@ async function loadFlow() {
   return S.flow;
 }
 
+function pdfHtml(url) {
+  const isPdf = typeof url === 'string' && /\.pdf$/i.test(url);
+  return isPdf
+    ? '<iframe class="pdf-frame" src="' + esc(url) + '" title="PDF preview" loading="lazy"></iframe>'
+    : '<a class="btn ghost small" href="' + esc(url) + '">Open ↗</a>';
+}
+
+
 function renderStrip() {
   const f = S.flow;
   if (!f) return;
@@ -412,7 +420,7 @@ function renderBook() {
     '<div class="card"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">' +
       '<div><h3 style="margin:0">' + esc(d.book.title) + '</h3>' +
       '<span class="muted small">' + esc(d.module.title) + '</span></div>' +
-      '<div>' + (d.book.pdf ? '<a class="btn ghost small" href="' + esc(d.book.pdf) + '" target="_blank">Open PDF book</a> ' : '') +
+      '<div>' + (d.book.pdf ? pdfHtml(d.book.pdf) : '') +
       '<button class="ghost small" id="backToBooks3">← Books</button></div>' +
     '</div></div>' +
     '<div class="reader">' + listHtml + '<div id="chapterBody">' + body + '</div></div>';
@@ -443,7 +451,7 @@ function chapterPanel(d, ch) {
     (ch.content
       ? '<div class="content">' + esc(ch.content) + '</div>'
       : '<p class="muted">No written content for this chapter — read the pages of the PDF book.</p>') +
-    (d.book.pdf ? '<p class="small mt"><a href="' + esc(d.book.pdf) + '" target="_blank">Open the PDF book ↗</a></p>' : '');
+    (d.book.pdf ? '<div class="small mt">' + pdfHtml(d.book.pdf) + '</div>' : '');
 
   if (ch.submission) {
     html += '<hr><p class="timestamp">Submitted: <b>' + fmtDate(ch.submission.createdAt) + '</b></p>' +
@@ -757,7 +765,7 @@ function openLibraryItem(item) {
     return;
   }
   modal('<h3>' + esc(item.title) + '</h3>' +
-    (item.url ? '<p><a class="btn ghost small" href="' + esc(item.url) + '" target="_blank">Open attachment ↗</a></p>' : '') +
+    (item.url ? '<p>' + pdfHtml(item.url) + '</p>' : '') +
     (item.text ? '<div class="letter-box">' + esc(item.text) + '</div>'
                : '<p class="muted">No text content for this entry.</p>') +
     '<div class="mt"><button data-close class="ghost">Close</button></div>', { wide: true });

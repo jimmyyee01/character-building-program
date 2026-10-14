@@ -620,10 +620,18 @@ async function renderSupervisors() {
   };
 }
 /* =============================================================== library === */
+
+function pdfHtml(url) {
+  const isPdf = typeof url === 'string' && /\.pdf$/i.test(url);
+  return isPdf
+    ? '<iframe class="pdf-frame" src="' + esc(url) + '" title="PDF preview" loading="lazy"></iframe>'
+    : '<a class="btn ghost small" href="' + esc(url) + '">Open ↗</a>';
+}
+
 function libIndicator(it) {
   if (it.fileName) return '<span class="mono small">' + esc(it.fileName) + '</span>';
   if (it.text) return '<span class="badge warn">Text · ' + String(it.text).length + ' chars</span>';
-  if (it.url) return '<a href="' + esc(it.url) + '" target="_blank" rel="noopener">Open link</a>';
+  if (it.url) return pdfHtml(it.url);
   return '<span class="muted">—</span>';
 }
 async function renderLibrary() {
@@ -686,7 +694,7 @@ async function renderLibrary() {
     html += '<div class="table-wrap"><table><thead><tr><th>Title</th><th>Link</th><th>Status</th></tr></thead><tbody>';
     videos.forEach(function (v) {
       html += '<tr><td><b>' + esc(v.title) + '</b></td><td>' +
-        (v.url ? '<a href="' + esc(v.url) + '" target="_blank" rel="noopener">Open</a>'
+        (v.url ? pdfHtml(v.url) +
                : '<span class="muted">—</span>') + '</td>' +
         '<td>' + (v.watched ? '<span class="badge ok">Watched</span>'
                             : '<span class="badge lock">Not watched</span>') + '</td></tr>';
@@ -913,8 +921,7 @@ function bookDetailHtml(book) {
   if (can) {
     h += '<form id="chForm" class="qform" style="margin-top:16px"><h4>Add chapter</h4><div class="row">' +
       '<div><label>Title</label><input type="text" id="chfTitle" required></div>' +
-      '<div><label>Page start</label><input type="number" id="chfStart" min="1"></div>' +
-      '<div><label>Page end</label><input type="number" id="chfEnd" min="1"></div>' +
+      '<div id="chfPages"><label>Select pages *</label></div>' +
       '<div><label>Order</label><input type="number" id="chfOrder" min="1"></div>' +
       '</div><label>Content</label>' +
       '<textarea id="chfContent" placeholder="Chapter text (optional)"></textarea>' +
@@ -1017,11 +1024,16 @@ function bindBookEvents(area) {
       const body = { title: document.getElementById('chfTitle').value.trim() };
       const content = document.getElementById('chfContent').value.trim();
       if (content) body.content = content;
-      const s = document.getElementById('chfStart').value;
-      const en = document.getElementById('chfEnd').value;
+      const pg = chForm.querySelectorAll('.pg-ck:checked');
+      if (pg.length) {
+        const arr = Array.prototype.map.call(pg, function (el) { return Number(el.value); })
+          .filter(function (n) { return n >= 1; });
+        if (arr.length) {
+          body.pageStart = Math.min.apply(null, arr);
+          body.pageEnd = Math.max.apply(null, arr);
+        }
+      }
       const o = document.getElementById('chfOrder').value;
-      if (s) body.pageStart = Number(s);
-      if (en) body.pageEnd = Number(en);
       if (o) body.order = Number(o);
       await API.post('/books/' + booksState.openBookId + '/chapters', body);
       toast('Chapter added', 'ok');
@@ -1080,10 +1092,7 @@ function openChapterEdit(id) {
     '<label>Title</label><input type="text" id="ceTitle" value="' + esc(ch.title) + '" required>' +
     '<label>Content</label><textarea id="ceContent">' + esc(ch.content || '') + '</textarea>' +
     '<div class="row">' +
-    '<div><label>Page start</label><input type="number" id="ceStart" value="' +
-      esc(ch.pageStart == null ? '' : ch.pageStart) + '"></div>' +
-    '<div><label>Page end</label><input type="number" id="ceEnd" value="' +
-      esc(ch.pageEnd == null ? '' : ch.pageEnd) + '"></div>' +
+    '<div id="cePages"><label>Select pages *</label></div>' +
     '<div><label>Order</label><input type="number" id="ceOrder" value="' +
       esc(ch.order == null ? '' : ch.order) + '"></div>' +
     '</div><div class="mt"><button type="submit">Save chapter</button></div></form>');
@@ -1093,11 +1102,16 @@ function openChapterEdit(id) {
       title: document.getElementById('ceTitle').value.trim(),
       content: document.getElementById('ceContent').value
     };
-    const s = document.getElementById('ceStart').value;
-    const en = document.getElementById('ceEnd').value;
+    const pg = document.getElementById('cePages').querySelectorAll('.pg-ck:checked');
+    if (pg.length) {
+      const arr = Array.prototype.map.call(pg, function (el) { return Number(el.value); })
+        .filter(function (n) { return n >= 1; });
+      if (arr.length) {
+        body.pageStart = Math.min.apply(null, arr);
+        body.pageEnd = Math.max.apply(null, arr);
+      }
+    }
     const o = document.getElementById('ceOrder').value;
-    body.pageStart = s ? Number(s) : null;
-    body.pageEnd = en ? Number(en) : null;
     if (o) body.order = Number(o);
     await API.put('/chapters/' + id, body);
     closeModal();

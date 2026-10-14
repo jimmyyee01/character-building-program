@@ -643,12 +643,19 @@ async function renderLibrary() {
       return '<option value="' + esc(String(t.id)) + '">' + esc(t.name) + '</option>';
     }).join('');
 
+
+function pdfHtml(url) {
+  const isPdf = typeof url === 'string' && /\.pdf$/i.test(url);
+  return isPdf
+    ? '<iframe class="pdf-frame" src="' + esc(url) + '" title="PDF preview" loading="lazy"></iframe>'
+    : '<a class="btn ghost small" href="' + esc(url) + '">Open ↗</a>';
+}
+
   const rows = items.length ? items.map(function (i) {
     const flags = [];
     if (i.fileName) flags.push('<span class="badge lock">FILE: ' + esc(i.fileName) + '</span>');
     if (i.text) flags.push('<span class="badge info">TEXT</span>');
-    if (i.url) flags.push('<a class="mono small" href="' + esc(i.url) +
-      '" target="_blank" rel="noopener">link</a>');
+    if (i.url) flags.push(pdfHtml(i.url));
     if (!flags.length) flags.push('<span class="muted">—</span>');
     return '<tr><td>' + libraryTypeBadge(i.type) + '</td>' +
       '<td><b>' + esc(i.title) + '</b></td>' +
@@ -814,18 +821,37 @@ async function renderBooks() {
     '</div>';
 }
 function chapterFieldsHTML(ch) {
+  const sel = pageSelection(ch);
   return '<div class="row">' +
     '<div><label>Title *</label><input type="text" class="ch-title" required value="' +
       esc(ch ? ch.title : '') + '"></div>' +
-    '<div><label>Page start</label><input type="number" class="ch-ps" value="' +
-      esc(ch && ch.pageStart != null ? ch.pageStart : '') + '"></div>' +
-    '<div><label>Page end</label><input type="number" class="ch-pe" value="' +
-      esc(ch && ch.pageEnd != null ? ch.pageEnd : '') + '"></div>' +
+    '<div class="page-pick"><label>Select pages *</label>' + pagePickerHTML(sel) + '</div>' +
     '<div><label>Order</label><input type="number" class="ch-order" value="' +
       esc(ch && ch.order != null ? ch.order : '') + '"></div>' +
   '</div>' +
   '<label>Content</label><textarea class="ch-content" style="min-height:110px">' +
     esc(ch ? (ch.content || '') : '') + '</textarea>';
+}
+function pageSelection(ch) {
+  const s = [];
+  if (ch && Array.isArray(ch.pageSelect) && ch.pageSelect.length) {
+    ch.pageSelect.forEach(function (p) { if (Number(p) >= 1) s.push(Number(p)); });
+  } else if (ch && (ch.pageStart != null || ch.pageEnd != null)) {
+    const a = [ch.pageStart, ch.pageEnd].filter(function (p) { return Number(p) >= 1; });
+    if (a.length) s.push(a[0], a[1]);
+  }
+  return s;
+}
+function pagePickerHTML(selected) {
+  const sel = new Set(selected || []);
+  let h = '<div class="pg-grid">';
+  for (let i = 1; i <= 99; i++) {
+    if (i % 20 === 1) h += '<div class="row" style="gap:4px;flex-wrap:nowrap;align-items:center">';
+    h += '<label class="chip pg-chip' + (sel.has(i) ? ' on' : '') + '"><input type="checkbox" class="pg-ck" value="' + i + '"' + (sel.has(i) ? ' checked' : '') + '> ' + i + '</label>';
+    if (i % 20 === 0) h += '</div>';
+  }
+  h += '</div>';
+  return h;
 }
 function qOptionRowHTML(name, text, checked) {
   return '<div class="row q-opt" style="align-items:center;margin-bottom:6px">' +
@@ -958,15 +984,18 @@ function chapterBody(form) {
   if (!body.title) throw new Error('Enter the chapter title');
   const content = form.querySelector('.ch-content').value.trim();
   if (content) body.content = content;
-  const ps = form.querySelector('.ch-ps').value;
-  if (ps !== '') body.pageStart = intOr(ps, null);
-  const pe = form.querySelector('.ch-pe').value;
-  if (pe !== '') body.pageEnd = intOr(pe, null);
   const ord = form.querySelector('.ch-order').value;
   if (ord !== '') body.order = intOr(ord, null);
-  if (body.pageStart == null) delete body.pageStart;
-  if (body.pageEnd == null) delete body.pageEnd;
   if (body.order == null) delete body.order;
+  const pg = form.querySelectorAll('.pg-ck:checked');
+  if (pg.length) {
+    const arr = Array.prototype.map.call(pg, function (el) { return Number(el.value); })
+      .filter(function (n) { return n >= 1; });
+    if (arr.length) {
+      body.pageStart = Math.min.apply(null, arr);
+      body.pageEnd = Math.max.apply(null, arr);
+    }
+  }
   return body;
 }
 async function addChapter(e) {
