@@ -694,43 +694,64 @@ async function issueCertificate(moduleId, videoId) {
   } catch (e) { toast(e.message, 'err'); }
 }
 
+function learnerCertSheet(c, b) {
+  b = b || {};
+  const booksHtml = (c.books && c.books.length)
+    ? '<b>Books attended:</b><ul>' + c.books.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>'
+    : '';
+  return '<div class="cert-sheet">' +
+    (b.programLogo ? '<img class="logo" src="' + esc(b.programLogo) + '" alt="">' : '') +
+    '<h1>' + esc(c.title) + '</h1>' +
+    '<p>This certificate is proudly presented to</p>' +
+    '<div class="name">' + esc(c.userName) + '</div>' +
+    '<p class="muted">' + esc(c.tenantName || '') + '</p>' +
+    '<div class="books">' + booksHtml +
+      (c.bestBook ? '<div><b>Best book:</b> ' + esc(c.bestBook) + '</div>' : '') +
+      '<div class="mt"><b>Performance:</b> ' + esc(String(c.performance)) + '%' +
+      (c.objectiveScore != null ? ' — objectives ' + esc(String(c.objectiveScore)) + '%' : '') + '</div>' +
+    '</div>' +
+    '<div class="foot"><span>Certificate code: <b>' + esc(c.code) + '</b></span>' +
+    '<span>Issued: ' + fmtDate(c.issuedAt) + '</span></div>' +
+  '</div>';
+}
 async function showCertificate(id) {
   try {
     const data = await API.get('/certificate/' + id);
-    const c = data.certificate;
-    const b = data.branding;
-    const booksHtml = (c.books && c.books.length)
-      ? '<b>Books attended:</b><ul>' + c.books.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>'
-      : '';
-    modal(
-      '<div class="cert-sheet">' +
-        (b.programLogo ? '<img class="logo" src="' + esc(b.programLogo) + '" alt="">' : '') +
-        '<h1>' + esc(c.title) + '</h1>' +
-        '<p>This certificate is proudly presented to</p>' +
-        '<div class="name">' + esc(c.userName) + '</div>' +
-        '<p class="muted">' + esc(c.tenantName || '') + '</p>' +
-        '<div class="books">' + booksHtml +
-          (c.bestBook ? '<div><b>Best book:</b> ' + esc(c.bestBook) + '</div>' : '') +
-          '<div class="mt"><b>Performance:</b> ' + esc(String(c.performance)) + '%' +
-          (c.objectiveScore != null ? ' — objectives ' + esc(String(c.objectiveScore)) + '%' : '') + '</div>' +
-        '</div>' +
-        '<div class="foot"><span>Certificate code: <b>' + esc(c.code) + '</b></span>' +
-        '<span>Issued: ' + fmtDate(c.issuedAt) + '</span></div>' +
-      '</div>' +
+    modal(learnerCertSheet(data.certificate, data.branding) +
       '<div class="mt center no-print">' +
         '<div class="row export-buttons"><button type="button" class="ghost" data-export="cert-print">Print</button><button type="button" class="ghost" data-export="cert-pdf">PDF</button><button type="button" class="ghost" data-export="cert-word">Word</button></div>' +
         '<button data-close class="ghost">Close</button></div>',
       { wide: true });
-
+  } catch (e) { toast(e.message, 'err'); }
+}
+/* Bulk download / print of every certificate the learner has earned. */
+async function exportAllCertificates(type) {
+  try {
+    const list = (await API.get('/certificates')).certificates || [];
+    if (!list.length) { toast('No certificates yet', 'err'); return; }
+    let sheets = '';
+    for (let i = 0; i < list.length; i++) {
+      try {
+        const d = await API.get('/certificate/' + encodeURIComponent(list[i].id));
+        sheets += '<div class="cert-page">' + learnerCertSheet(d.certificate, d.branding) + '</div>';
+      } catch (e) { /* skip anything that cannot be loaded */ }
+    }
+    if (!sheets) { toast('Could not load the certificates', 'err'); return; }
+    exportReport(type, 'My certificates (' + list.length + ')', sheets);
   } catch (e) { toast(e.message, 'err'); }
 }
 
 async function renderCertificates() {
   const data = await API.get('/certificates');
+  const certs = data.certificates || [];
   $('view-certificates').innerHTML =
     '<h2>My Certificates</h2>' +
-    (data.certificates.length
-      ? '<div class="grid cols-2">' + data.certificates.map(function (c) {
+    (certs.length
+      ? '<div class="row export-buttons"><span class="muted small" style="align-self:center">All my certificates:</span>' +
+        '<button type="button" class="ghost" id="ctAllPrint">Print all</button>' +
+        '<button type="button" class="ghost" id="ctAllPdf">Download all as PDF</button>' +
+        '<button type="button" class="ghost" id="ctAllWord">Download all as Word</button></div>' +
+        '<div class="grid cols-2">' + certs.map(function (c) {
           return '<div class="module-card"><span class="badge ' + (c.type === 'general' ? 'warn' : 'info') + '">' +
             (c.type === 'general' ? 'GENERAL' : 'MODULE') + '</span>' +
             '<h4 class="mt">' + esc(c.title) + '</h4>' +
@@ -742,6 +763,9 @@ async function renderCertificates() {
   $('view-certificates').querySelectorAll('[data-cert]').forEach(function (b) {
     b.onclick = function () { showCertificate(b.dataset.cert); };
   });
+  const ap = $('ctAllPrint'); if (ap) ap.onclick = function () { exportAllCertificates('print'); };
+  const ad = $('ctAllPdf'); if (ad) ad.onclick = function () { exportAllCertificates('pdf'); };
+  const aw = $('ctAllWord'); if (aw) aw.onclick = function () { exportAllCertificates('word'); };
 }
 
 /* ------------------------------------------------------------ library --- */

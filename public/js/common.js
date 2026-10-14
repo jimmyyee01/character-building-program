@@ -154,6 +154,8 @@ const reportPrintCss = [
   '  .foot { margin-top: 14px; font-size: 12px; color: #6b7280; }',
   '  .module-card { border: 1px solid #d0d7de; border-radius: 10px; padding: 16px; text-align: center; background: #fff; }',
   '  .module-card .badge { margin-top: 6px; }',
+  '  .cert-page { page-break-after: always; }',
+  '  .cert-page:last-child { page-break-after: auto; }',
   '  .export-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }',
   '  .export-buttons button { padding: 5px 10px; font-size: 12px; border-radius: 6px; border: 1px solid #d0d7de; background: #fff; cursor: pointer; }',
   '  .export-buttons button.ghost { border-color: #24508c; color: #24508c; }',
@@ -181,7 +183,7 @@ function exportReport(type, title, source) {
     d.open();
     d.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title>');
     d.write('<style>' + reportPrintCss + '</style></head><body>');
-    d.write(escapeHtml(source.innerHTML));
+    d.write(escapeHtml(source.nodeType === 1 ? (source.outerHTML || source.innerHTML) : source));
     d.write('</body></html>');
     d.close();
     win.focus();

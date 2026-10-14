@@ -1,6 +1,6 @@
 /* Tenant admin / supervisor console — served at /admin. */
 let ME = null, ROLE = null, VIEW = 'dashboard';
-let supOverview = null, newSupCode = null, usersCache = [];
+let supOverview = null, newSupCode = null, usersCache = [], certsCache = [];
 const booksState = { modules: [], moduleId: null, books: [], openBookId: null };
 const submState = { flagged: false, type: '', search: '' };
 const usersState = { search: '' };
@@ -1231,16 +1231,21 @@ async function renderCertificates() {
       '<span class="badge info">' + certs.length + '</span> ' +
       '<span class="badge lock" id="ctTableCount">' + certs.length + ' shown</span></h3></div></div>' +
     '<div class="row export-buttons"><button type="button" class="ghost" data-export="print">Print</button><button type="button" class="ghost" data-export="pdf">PDF</button><button type="button" class="ghost" data-export="word">Word</button></div>' +
+    '<div class="row export-buttons"><span class="muted small" style="align-self:center">Bulk certificates — tick the rows below, then:</span>' +
+      '<button type="button" class="ghost" data-bulk="print">Print selected</button>' +
+      '<button type="button" class="ghost" data-bulk="pdf">PDF selected</button>' +
+      '<button type="button" class="ghost" data-bulk="word">Word selected</button>' +
+      '<button type="button" class="ghost" data-bulk="all">Print all</button></div>' +
 
   if (!certs.length) {
     html += '<p class="muted">No certificates issued yet.</p>';
   } else {
-    html += '<div class="table-wrap"><table><thead><tr><th>Code</th><th>Title</th><th>User</th>' +
+    html += '<div class="table-wrap"><table><thead><tr><th class="no-print"><input type="checkbox" id="ctAll" title="Select all"></th><th>Code</th><th>Title</th><th>User</th>' +
       '<th>Books</th><th>Performance</th><th>Issued</th><th></th></tr></thead><tbody>';
     certs.forEach(function (c) {
       const books = c.books && c.books.length ? c.books : (c.bestBook ? [c.bestBook] : []);
       const perf = c.performance != null ? esc(c.performance) + '%' : '<span class="muted">—</span>';
-      html += '<tr data-search="' + esc(searchText(c)) + '"><td class="mono">' + esc(c.code || '—') + '</td>' +
+      html += '<tr data-search="' + esc(searchText(c)) + '"><td class="no-print"><input type="checkbox" class="ctPick" value="' + esc(c.id) + '"></td><td class="mono">' + esc(c.code || '—') + '</td>' +
         '<td>' + esc(c.title || '—') + '</td>' +
         '<td><b>' + esc(c.userName || '—') + '</b></td>' +
         '<td class="small">' + (books.length ? esc(books.join(', '))
@@ -1251,6 +1256,7 @@ async function renderCertificates() {
     html += '</tbody></table></div>';
   }
   el.innerHTML = html + '</div>';
+  certsCache = certs;
   const ctSearch = document.getElementById('ctSearch');
   const ctTable = el.querySelector('table');
   if (ctSearch && ctTable) {
@@ -1261,14 +1267,32 @@ async function renderCertificates() {
     applyTableSearch(ctTable, ctSearch, document.getElementById('ctTableCount'));
   }
   el.onclick = function (e) {
+    const bulk = e.target.closest('button[data-bulk]');
+    if (bulk) {
+      const mode = bulk.dataset.bulk;
+      const list = mode === 'all' ? certs.slice() : certPicked();
+      if (!list.length) { toast('Tick at least one certificate first', 'err'); return; }
+      const sheets = list.map(function (c) {
+        return '<div class="cert-page">' + certSheetHtml(c) + '</div>';
+      }).join('');
+      exportReport(mode === 'all' ? 'print' : mode, 'Certificates (' + list.length + ')', sheets);
+      return;
+    }
     const b = e.target.closest('button[data-cert]');
     if (!b) return;
     const c = certs.filter(function (x) { return x.id === b.dataset.cert; })[0];
     if (c) openCertModal(c);
   };
+  const ctAll = document.getElementById('ctAll');
+  if (ctAll) {
+    ctAll.onchange = function () {
+      const on = !!this.checked;
+      el.querySelectorAll('.ctPick').forEach(function (x) { x.checked = on; });
+    };
+  }
 }
 
-function openCertModal(c) {
+function certSheetHtml(c) {
   const b = ME.branding || {};
   const books = c.books && c.books.length ? c.books : (c.bestBook ? [c.bestBook] : []);
   let logos = '';
@@ -1276,7 +1300,7 @@ function openCertModal(c) {
   if (b.programLogo) logos += '<img class="logo" src="' + esc(b.programLogo) + '" alt="Program logo">';
   let bookList = '';
   books.forEach(function (t) { bookList += '<li>' + esc(t) + '</li>'; });
-  const sheet = '<div class="cert-sheet">' +
+  return '<div class="cert-sheet">' +
     (logos ? '<div class="cert-logos">' + logos + '</div>' : '') +
     '<h1>' + esc(c.title || 'Certificate') + '</h1>' +
     '<p>This certificate is proudly presented to</p>' +
@@ -1287,10 +1311,18 @@ function openCertModal(c) {
     (c.objectiveScore != null ? '<p class="small muted">Objective score: ' +
       esc(c.objectiveScore) + '</p>' : '') +
     '<div class="foot"><span>Code: <b class="mono">' + esc(c.code || '—') + '</b></span>' +
-    '<span>Issued: ' + fmtDate(c.issuedAt) + '</span></div></div>' +
-    '<div class="no-print center mt"><div class="row export-buttons"><button type="button" class="ghost" data-export="cert-pdf">PDF</button><button type="button" class="ghost" data-export="cert-word">Word</button><button type="button" class="ghost" data-export="cert-print">Print</button></div></div>';
-  openModal(sheet, true);
-  document.getElementById('certPrint').onclick = function () { window.print(); };
+    '<span>Issued: ' + fmtDate(c.issuedAt) + '</span></div></div>';
+}
+function certPicked() {
+  const ids = [];
+  document.querySelectorAll('#view-certificates .ctPick:checked').forEach(function (el) {
+    ids.push(el.value);
+  });
+  return certsCache.filter(function (c) { return ids.indexOf(c.id) !== -1; });
+}
+function openCertModal(c) {
+  openModal(certSheetHtml(c) +
+    '<div class="no-print center mt"><div class="row export-buttons"><button type="button" class="ghost" data-export="cert-pdf">PDF</button><button type="button" class="ghost" data-export="cert-word">Word</button><button type="button" class="ghost" data-export="cert-print">Print</button></div></div>', true);
 }
 /* ============================================================= branding ==== */
 function updateTopbarLogos() {
