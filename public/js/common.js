@@ -169,7 +169,7 @@ const reportPrintCss = [
   '.exp { display: none; }',
   '.exp[open] { display: block; }',
   'input, select, textarea, button { font: inherit; }',
-  '': '',
+  '',
 ].join('\n');
 function exportReport(type, title, source) {
   const isPrint = type === 'print';

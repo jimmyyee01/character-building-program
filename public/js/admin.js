@@ -696,7 +696,7 @@ async function renderLibrary() {
     html += '<div class="table-wrap"><table><thead><tr><th>Title</th><th>Link</th><th>Status</th></tr></thead><tbody>';
     videos.forEach(function (v) {
       html += '<tr><td><b>' + esc(v.title) + '</b></td><td>' +
-        (v.url ? pdfHtml(v.url) +
+        (v.url ? pdfHtml(v.url)
                : '<span class="muted">—</span>') + '</td>' +
         '<td>' + (v.watched ? '<span class="badge ok">Watched</span>'
                             : '<span class="badge lock">Not watched</span>') + '</td></tr>';
@@ -1235,7 +1235,7 @@ async function renderCertificates() {
       '<button type="button" class="ghost" data-bulk="print">Print selected</button>' +
       '<button type="button" class="ghost" data-bulk="pdf">PDF selected</button>' +
       '<button type="button" class="ghost" data-bulk="word">Word selected</button>' +
-      '<button type="button" class="ghost" data-bulk="all">Print all</button></div>' +
+      '<button type="button" class="ghost" data-bulk="all">Print all</button></div>';
 
   if (!certs.length) {
     html += '<p class="muted">No certificates issued yet.</p>';
