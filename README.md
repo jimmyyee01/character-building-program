@@ -27,6 +27,8 @@ Then open:
 | `http://localhost:3000/super` | **Super admin** login |
 | `http://localhost:3000/t/greenfield-academy` | Demo school login page |
 | `http://localhost:3000/t/horizon-alliance` | Demo organization login page |
+| `http://localhost:3000/t/beloved-family` | Demo family login page |
+| `http://localhost:3000/t/covenant-couples` | Demo married-couples login page |
 
 Every school/organization gets its own login URL `/t/<slug>` created by the
 super admin — nothing about one school is visible to another.
@@ -36,13 +38,18 @@ super admin — nothing about one school is visible to another.
 | Account | Credentials |
 |---|---|
 | Super admin | `superadmin` / `SuperAdmin@123` |
-| School admin (Greenfield) | `admin@greenfield.edu` / `Admin@123` |
+| **Schools admin** (Greenfield) | `admin@greenfield.edu` / `Admin@123` |
+| **Organization admin** (Horizon) | `admin@horizon.org` / `Admin@123` |
+| **Family admin** (Beloved Family) | `admin@family.example` / `Admin@123` |
+| **Married admin** (Covenant Couples) | `admin@married.example` / `Admin@123` |
+| Teacher (Greenfield) | `teacher@greenfield.edu` / `Teacher@123` |
 | Student (Greenfield) | `STU-001` / `Student@123` |
-| Organization admin | `admin@horizon.org` / `Admin@123` |
 | Supervisor (Horizon) | `supervisor@horizon.org` / `Super@123` (code `SUP-7788`) |
+| Member (under that supervisor) | `olive@horizon.org` / `Member@123` |
 
 Reset the demo data any time with `npm run fresh` (deletes `data/db.json` and
-re-seeds).
+re-seeds). On an **existing PHP database**, `php ensure_logins.php` adds any of
+the logins above that are missing (safe to re-run — it never overwrites).
 
 ---
 

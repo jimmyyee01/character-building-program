@@ -318,6 +318,8 @@ function main() {
   if (!dbm.db) {
     dbm.init(build());
     console.log('[seed] Database created with super admin "superadmin" / "SuperAdmin@123"');
+console.log('[seed] Portal admins (password Admin@123): admin@greenfield.edu (schools), admin@horizon.org (organization),');
+console.log('[seed]                               admin@family.example (family), admin@married.example (married)');
     console.log('[seed] Demo school: /t/greenfield-academy (student STU-001 / Student@123)');
   } else {
     console.log('[seed] Existing database loaded (' + dbm.DB_FILE + ')');

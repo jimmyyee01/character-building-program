@@ -199,8 +199,14 @@ try {
 
     echo '<h2>Character Building Program — installed successfully</h2><ul>';
     foreach ($log as $line) echo '<li>' . htmlspecialchars($line) . '</li>';
-    echo '</ul><p><b>Super admin:</b> superadmin / SuperAdmin@123<br>';
-    echo '<b>Demo school:</b> /t/greenfield-academy (student STU-001 / Student@123)</p>';
+    echo '</ul><p><b>Ready-to-use logins</b></p><ul>';
+    echo '<li><b>Super admin</b> — superadmin / SuperAdmin@123 (open /super)</li>';
+    echo '<li><b>Schools admin</b> — admin@greenfield.edu / Admin@123 (open /t/greenfield-academy)</li>';
+    echo '<li><b>Organization admin</b> — admin@horizon.org / Admin@123 (open /t/horizon-alliance)</li>';
+    echo '<li><b>Family admin</b> — admin@family.example / Admin@123 (open /t/beloved-family)</li>';
+    echo '<li><b>Married admin</b> — admin@married.example / Admin@123 (open /t/covenant-couples)</li>';
+    echo '<li>Demo student — STU-001 / Student@123</li>';
+    echo '</ul><p>On an existing database run <b>php ensure_logins.php</b> to add any of these that are missing.</p>';
     echo '<p style="color:#a00"><b>Delete install.php from production now.</b></p>';
 } catch (Throwable $e) {
     http_response_code(500);
