@@ -240,19 +240,19 @@ function demoTenants() {
 
   const school = {
     id: 'ten_greenfield', portalId: 'prt_schools', type: 'schools', slug: 'greenfield-academy',
-    name: 'Greenfield Academy', logo: null, programLogo: null, createdAt: iso()
+    name: 'Greenfield Academy', logo: null, programLogo: null, themeColor: null, createdAt: iso()
   };
   const org = {
     id: 'ten_horizon', portalId: 'prt_org', type: 'organization', slug: 'horizon-alliance',
-    name: 'Horizon Alliance', logo: null, programLogo: null, createdAt: iso()
+    name: 'Horizon Alliance', logo: null, programLogo: null, themeColor: null, createdAt: iso()
   };
   const family = {
     id: 'ten_beloved', portalId: 'prt_family', type: 'family', slug: 'beloved-family',
-    name: 'Beloved Family', logo: null, programLogo: null, createdAt: iso()
+    name: 'Beloved Family', logo: null, programLogo: null, themeColor: null, createdAt: iso()
   };
   const married = {
     id: 'ten_covenant', portalId: 'prt_married', type: 'married', slug: 'covenant-couples',
-    name: 'Covenant Couples', logo: null, programLogo: null, createdAt: iso()
+    name: 'Covenant Couples', logo: null, programLogo: null, themeColor: null, createdAt: iso()
   };
   tenants.push(school, org, family, married);
 

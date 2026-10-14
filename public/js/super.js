@@ -361,6 +361,13 @@ async function renderAccounts() {
               '" style="height:56px;border-radius:10px;border:1px solid var(--line);padding:4px;background:#fff"></div>' +
           '</div>' +
         '</div>' +
+        '<div class="row"><div><label>Account colour</label>' +
+          '<div class="row" style="align-items:center;gap:8px">' +
+            '<input type="color" id="tbTheme" value="' + (themeIsHex(et.themeColor) ? esc(et.themeColor) : '#24508c') + '" style="width:64px;height:38px;padding:2px">' +
+            '<span class="mono small">' + (themeIsHex(et.themeColor) ? esc(et.themeColor) : 'program default') + '</span></div>' +
+          '<label style="margin-top:8px"><input type="checkbox" id="tbThemeOff"' +
+            (et.themeColor ? '' : ' checked') + '> Use the default programme colour</label>' +
+          '<p class="muted small">Repaints this account\u2019s layout — header, menus, buttons and its login page.</p></div></div>' +
         '<div class="mt row">' +
           '<div class="fixed"><button type="submit">Save branding</button></div>' +
           '<div class="fixed"><button type="button" class="ghost" data-act="t-cancel">Cancel</button></div>' +
@@ -456,6 +463,8 @@ async function saveTenantBrand(e) {
     if (logo) body.logo = logo;
     const prog = await logoDataUrl($('tbProgLogo'));
     if (prog) body.programLogo = prog;
+    const themeOff = document.getElementById('tbThemeOff');
+    body.themeColor = (themeOff && themeOff.checked) ? null : val('tbTheme');
     await API.put('/super/tenants/' + encodeURIComponent(t.id), body);
     toast('Branding updated', 'ok');
     S.editTenantId = null;

@@ -145,6 +145,7 @@ async function boot() {
   if (S.me.user.role === 'super') { location.href = '/super'; return; }
   API.setUser(S.me.user);
   const b = S.me.branding;
+  applyThemeColor(b.themeColor);
   $('sideName').textContent = b.tenantName || b.programName;
   if (b.tenantLogo) { $('sideLogo').src = b.tenantLogo; $('sideLogo').classList.remove('hidden'); }
   document.title = (b.tenantName || 'My') + ' — ' + b.programName;

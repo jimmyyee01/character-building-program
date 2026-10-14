@@ -1349,6 +1349,7 @@ async function renderBranding() {
   const b = ME.branding || {};
   brandState.logo = undefined;
   brandState.programLogo = undefined;
+  brandState.themeColor = undefined;
   el.innerHTML = '<div class="card"><h3>Branding</h3>' +
     '<p class="muted small">Images must be under 1.5 MB (PNG, JPG or SVG). ' +
     'Pick a file to replace an image, or use the remove button to clear it.</p>' +
@@ -1365,6 +1366,18 @@ async function renderBranding() {
       : '<img id="pvProgram" class="thumb hidden" alt="Preview">') + '</div>' +
     '<input type="file" id="bfProgram" accept="image/*">' +
     '<p><button type="button" class="ghost small" id="clearProgram">Remove program logo</button></p></div>' +
+    '<div><label>Account colour</label>' +
+      '<div class="row" style="align-items:center;gap:8px">' +
+        '<input type="color" id="bfTheme" value="' + (themeIsHex(b.themeColor) ? esc(b.themeColor) : '#24508c') + '" style="width:64px;height:38px;padding:2px">' +
+        '<span class="mono small" id="bfThemeVal">' + (themeIsHex(b.themeColor) ? esc(b.themeColor) : 'program default') + '</span></div>' +
+      '<div class="row" id="themePresets" style="gap:6px;margin-top:8px">' +
+        ['#24508c', '#0f766e', '#7c3aed', '#b91c1c', '#b45309', '#15803d', '#0e7490', '#be185d'].map(function (c) {
+          return '<button type="button" class="ghost small" data-theme="' + c + '" title="' + c +
+            '" style="background:' + c + ';color:#fff;border-color:' + c + '">' + c + '</button>';
+        }).join('') +
+      '</div>' +
+      '<p class="muted small">Repaints this account\u2019s whole layout — header, menus, buttons and its login page.</p>' +
+      '<p><button type="button" class="ghost small" id="clearTheme">Use the default colour</button></p></div>' +
     '</div><div class="mt"><button type="submit">Save branding</button></div></form></div>';
 
   const bindPreview = function (inputId, previewId, key) {
@@ -1384,6 +1397,29 @@ async function renderBranding() {
   };
   bindPreview('bfLogo', 'pvTenant', 'logo');
   bindPreview('bfProgram', 'pvProgram', 'programLogo');
+
+  const themeInput = document.getElementById('bfTheme');
+  const themeVal = document.getElementById('bfThemeVal');
+  if (themeInput) {
+    themeInput.oninput = function () {
+      brandState.themeColor = this.value;
+      applyThemeColor(this.value);
+      if (themeVal) themeVal.textContent = this.value;
+    };
+    document.getElementById('themePresets').onclick = function (ev) {
+      const sw = ev.target.closest('button[data-theme]');
+      if (!sw) return;
+      themeInput.value = sw.dataset.theme;
+      brandState.themeColor = sw.dataset.theme;
+      applyThemeColor(sw.dataset.theme);
+      if (themeVal) themeVal.textContent = sw.dataset.theme;
+    };
+    document.getElementById('clearTheme').onclick = function () {
+      brandState.themeColor = null;
+      applyThemeColor(null);
+      if (themeVal) themeVal.textContent = 'program default';
+    };
+  }
 
   document.getElementById('clearLogo').onclick = function () {
     brandState.logo = null;
@@ -1405,13 +1441,18 @@ async function renderBranding() {
     const body = {};
     if (brandState.logo !== undefined) body.logo = brandState.logo;
     if (brandState.programLogo !== undefined) body.programLogo = brandState.programLogo;
-    if (body.logo === undefined && body.programLogo === undefined) {
-      toast('Choose a new image first', 'err');
+    if (brandState.themeColor !== undefined) body.themeColor = brandState.themeColor;
+    if (Object.keys(body).length === 0) {
+      toast('Change an image or pick a colour first', 'err');
       return;
     }
     await API.put('/admin/branding', body);
     if (body.logo !== undefined) ME.branding.tenantLogo = body.logo;
     if (body.programLogo !== undefined) ME.branding.programLogo = body.programLogo;
+    if (body.themeColor !== undefined) {
+      ME.branding.themeColor = body.themeColor;
+      applyThemeColor(body.themeColor);
+    }
     updateTopbarLogos();
     toast('Branding saved', 'ok');
     renderBranding();
@@ -1471,6 +1512,7 @@ async function boot() {
   ROLE = me.user.role;
   if (!ME.branding) ME.branding = {};
   if (!ME.portal) ME.portal = {};
+  applyThemeColor(ME.branding.themeColor);
   API.setUser(me.user);
 
   try {

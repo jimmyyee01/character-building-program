@@ -82,12 +82,19 @@ function publicUser(u) {
   };
 }
 
+/* Only a valid #rrggbb colour is stored; anything else clears the theme. */
+function hexColor(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const s = String(v).trim();
+  return /^#[0-9a-f]{6}$/i.test(s) ? s.toLowerCase() : null;
+}
 function tenantBranding(tenant) {
   const settings = dbm.db.settings;
   return {
     tenantName: tenant ? tenant.name : settings.programName,
     tenantLogo: tenant ? tenant.logo : null,
     programLogo: (tenant && tenant.programLogo) || settings.programLogo,
+    themeColor: (tenant && tenant.themeColor) || null,
     programName: settings.programName
   };
 }
@@ -987,6 +994,7 @@ route('PUT', '/api/super/tenants/([a-z0-9_-]+)', ({ user, params, body }) => {
   if (body.name) t.name = String(body.name).trim();
   if (body.logo !== undefined) t.logo = body.logo;
   if (body.programLogo !== undefined) t.programLogo = body.programLogo;
+  if (body.themeColor !== undefined) t.themeColor = hexColor(body.themeColor);
   dbm.save();
   return { ok: true, tenant: t };
 });
@@ -1457,6 +1465,7 @@ route('PUT', '/api/admin/branding', ({ user, body }) => {
   need(t, 'Account not found', 404);
   if (body.logo !== undefined) t.logo = body.logo;
   if (body.programLogo !== undefined) t.programLogo = body.programLogo;
+  if (body.themeColor !== undefined) t.themeColor = hexColor(body.themeColor);
   if (body.name && user.role === 'super') t.name = String(body.name).trim();
   dbm.save();
   return { ok: true, tenant: t };

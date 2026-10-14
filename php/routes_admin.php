@@ -35,7 +35,7 @@ function obj_row(array $r): array {
 function tenant_row(array $r): array {
     return ['id'=>$r['id'],'portalId'=>$r['portal_id'],'type'=>$r['type'],
         'slug'=>$r['slug'],'name'=>$r['name'],'logo'=>$r['logo'],
-        'programLogo'=>$r['program_logo'],'createdAt'=>iso($r['created_at'] ?? null)];
+        'programLogo'=>$r['program_logo'],'themeColor'=>($r['theme_color'] ?? null),'createdAt'=>iso($r['created_at'] ?? null)];
 }
 function admin_submissions(array $user, array $query): array {
     $role = $user['role'] ?? '';
@@ -232,6 +232,11 @@ function r_super_tenant_update(array $user, array $body, array $params, ?string 
     if (array_key_exists('logo', $body)) { $set[] = 'logo=?'; $args[] = $body['logo']; }
     $pl = $body['programLogo'] ?? $body['program_logo'] ?? null;
     if (array_key_exists('programLogo', $body) || array_key_exists('program_logo', $body)) { $set[] = 'program_logo=?'; $args[] = $pl; }
+    if (array_key_exists('themeColor', $body) || array_key_exists('theme_color', $body)) {
+        $c = $body['themeColor'] ?? $body['theme_color'] ?? null;
+        $c = (is_string($c) && preg_match('/^#[0-9a-fA-F]{6}$/', trim($c))) ? strtolower(trim($c)) : null;
+        $set[] = 'theme_color=?'; $args[] = $c;
+    }
     if (count($set)) { $args[] = $id; db()->prepare('UPDATE tenants SET ' . implode(',', $set) . ' WHERE id=?')->execute($args); }
     $st = db()->prepare('SELECT * FROM tenants WHERE id=?'); $st->execute([$id]);
     return tenant_row($st->fetch());
@@ -530,8 +535,22 @@ function r_admin_branding(array $user, array $body, array $params, ?string $toke
     if (array_key_exists('logo', $body)) { $set[] = 'logo=?'; $args[] = $body['logo']; }
     $pl = $body['programLogo'] ?? $body['program_logo'] ?? null;
     if (array_key_exists('programLogo', $body) || array_key_exists('program_logo', $body)) { $set[] = 'program_logo=?'; $args[] = $pl; }
+    if (array_key_exists('themeColor', $body) || array_key_exists('theme_color', $body)) {
+        $c = $body['themeColor'] ?? $body['theme_color'] ?? null;
+        $c = (is_string($c) && preg_match('/^#[0-9a-fA-F]{6}$/', trim($c))) ? strtolower(trim($c)) : null;
+        $set[] = 'theme_color=?'; $args[] = $c;
+    }
     if (isset($body['name'])) { need($user['role'] === 'super', 'Not permitted', 403); $set[] = 'name=?'; $args[] = $body['name']; }
-    if (count($set)) { $args[] = $tid; db()->prepare('UPDATE tenants SET ' . implode(',', $set) . ' WHERE id=?')->execute($args); }
+    if (count($set)) {
+        $args[] = $tid;
+        try {
+            db()->prepare('UPDATE tenants SET ' . implode(',', $set) . ' WHERE id=?')->execute($args);
+        } catch (PDOException $e) {
+            /* older installs: create the account-colour column on first use, then retry */
+            db()->exec('ALTER TABLE tenants ADD COLUMN theme_color VARCHAR(20) NULL');
+            db()->prepare('UPDATE tenants SET ' . implode(',', $set) . ' WHERE id=?')->execute($args);
+        }
+    }
     $st = db()->prepare('SELECT * FROM tenants WHERE id=?'); $st->execute([$tid]);
     return tenant_row($st->fetch());
 }

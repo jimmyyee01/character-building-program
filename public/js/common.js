@@ -241,3 +241,38 @@ document.addEventListener('click', function (e) {
   exportReport(t, title, source);
 });
 
+
+/* =================================================== tenant account theme == */
+function themeIsHex(color) {
+  return /^#[0-9a-f]{6}$/i.test(String(color == null ? '' : color).trim());
+}
+function themeShade(hex, amt) {
+  if (!themeIsHex(hex)) return hex;
+  const n = parseInt(String(hex).replace('#', ''), 16);
+  let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const f = function (v) {
+    return amt < 0 ? Math.round(v * (1 + amt)) : Math.round(v + (255 - v) * amt);
+  };
+  r = Math.max(0, Math.min(255, f(r)));
+  g = Math.max(0, Math.min(255, f(g)));
+  b = Math.max(0, Math.min(255, f(b)));
+  return '#' + [r, g, b].map(function (v) {
+    return ('0' + v.toString(16)).slice(-2);
+  }).join('');
+}
+/* Repaint the whole account layout with the tenant's colour (buttons, nav,
+   headers, links...). Called on boot by the admin console, login page and
+   participant app so a school account always matches its own colour. */
+function applyThemeColor(color) {
+  const root = document.documentElement;
+  if (!themeIsHex(color)) {
+    root.style.removeProperty('--brand');
+    root.style.removeProperty('--brand-2');
+    return false;
+  }
+  const c = String(color).trim();
+  root.style.setProperty('--brand', c);
+  root.style.setProperty('--brand-2', themeShade(c, -0.3));
+  return true;
+}
+

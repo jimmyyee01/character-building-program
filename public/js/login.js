@@ -21,6 +21,7 @@ async function init() {
     const i = document.getElementById('logoProgram');
     i.src = tenantInfo.branding.programLogo; i.classList.remove('hidden');
   }
+  applyThemeColor(tenantInfo.branding && tenantInfo.branding.themeColor);
   const closed = !tenantInfo.portal.active;
   document.getElementById('closedBanner').classList.toggle('hidden', !closed);
 }

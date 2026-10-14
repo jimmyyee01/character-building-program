@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS tenants (
   name VARCHAR(255) NOT NULL,
   logo LONGTEXT NULL,
   program_logo LONGTEXT NULL,
+  theme_color VARCHAR(20) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX (portal_id)
 ) ENGINE=InnoDB;

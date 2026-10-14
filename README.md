@@ -71,7 +71,9 @@ re-seeds).
   supervisors add users (single form or **bulk insert** up to 500 CSV rows).
 - Own library uploads, picking books into modules, chapters, and **all
   questions** (school/org admin or super admin only).
-- Submissions & copy-flags for their own people, certificates, branding.
+- Submissions & copy-flags for their own people, certificates, branding —
+  including an **account colour** that repaints the whole school/org layout
+  (console, menus, buttons, the account login page and the participant app).
 
 ### Participant flow (`/app`)
 1. **Registration** — name, email (teachers) or student number (students),

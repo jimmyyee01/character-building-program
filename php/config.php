@@ -159,6 +159,7 @@ function tenant_branding(?array $tenant): array {
         'tenantName' => $tenant ? $tenant['name'] : $s['program_name'],
         'tenantLogo' => $tenant ? $tenant['logo'] : null,
         'programLogo' => ($tenant && $tenant['program_logo']) ? $tenant['program_logo'] : $s['program_logo'],
+        'themeColor' => ($tenant && !empty($tenant['theme_color'])) ? $tenant['theme_color'] : null,
         'programName' => $s['program_name'],
     ];
 }
