@@ -727,12 +727,11 @@ function deploymentNoticeHtml(info) {
     '<p class="small" style="margin:6px 0 0">' + verdict + '</p>' +
     '<p class="small" style="margin:8px 0 0">On the server, in the folder the domain serves:</p>' +
     '<pre class="small" style="background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;' +
-      'overflow:auto">git pull && git log --oneline -1\n' +
+      'overflow:auto">bash tools/which-backend.sh   # names the process answering + how to restart it\n' +
+      'git pull && git log --oneline -1\n' +
       'grep -n "api/health" php/api.php        # present in the new build\n' +
-      'systemctl list-units \'php*-fpm.service\' # is PHP-FPM even installed?\n' +
-      'sudo systemctl restart apache2          # Apache + PHP (.htaccess build)\n' +
-      '#   nginx + PHP-FPM instead: sudo systemctl restart php$(php -r \'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;\')-fpm\n' +
-      '#   Node instead: pm2 restart <app>  |  npm start</pre>' +
+      '# then restart that backend: apache2 | httpd | phpX.Y-fpm | nginx | caddy | node\n' +
+      '#   (php -S dev server: kill the pid and start the same command again)</pre>' +
     '<p class="small" style="margin:6px 0 0">Then check ' +
       '<a href="/api/health" target="_blank" rel="noopener">/api/health</a> and ' +
       '<a href="/build.json" target="_blank" rel="noopener">/build.json</a> — both should show the same build.</p>' +

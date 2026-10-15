@@ -254,6 +254,7 @@ function dirty(label, html) {
         bothOld.indexOf('document root') !== -1 &&
         mismatch.indexOf('restart the backend') !== -1 &&
         filesNewBackendOld.indexOf('apache2') !== -1 &&
+        filesNewBackendOld.indexOf('which-backend.sh') !== -1 &&
         filesNewBackendOld.indexOf('php8.2-fpm') === -1;
     })());
 

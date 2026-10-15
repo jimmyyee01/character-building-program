@@ -124,22 +124,32 @@ commands to run and a *Try again* button (`#staleBuild` in `admin.html` /
 ### Restarting the backend (which command?)
 
 The new code is loaded by a **process**, so a `git pull` alone is not enough.
-There is no single service name — find the one you actually run:
+There is no single service name — `apache2`, `php8.2-fpm`, `httpd`, `nginx`,
+`caddy`, a Plesk stack or a hand-started `php -S` are all possible, and guessing
+gives you `Unit php8.2-fpm.service not found.` / `Unit apache2.service not found.`
+Instead, ask the machine:
 
 ```bash
-systemctl list-units --type=service --no-legend | grep -Ei 'php|apache|nginx|node'
+bash tools/which-backend.sh      # read-only: names the process answering + the restart to use
+```
 
-# 1) Apache + PHP (this repo's .htaccess build — the usual case)
-sudo systemctl restart apache2
-#    cPanel/Plesk: "Restart PHP" / "Restart Apache". Restarting Apache clears OPcache.
+It prints this folder's commit and build marker (and whether `php/api.php` has
+the `/api/health` route), the listening ports, the PHP/Node processes, the
+installed web/PHP services, what the local API answers, and then the restart
+command for what it found. If you would rather look yourself:
 
-# 2) nginx + PHP-FPM: the unit name is versioned, so derive it from PHP itself
-sudo systemctl restart "php$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')-fpm"
-#    Do not guess php8.2-fpm: if PHP-FPM is not installed you get
-#    "Unit php8.2-fpm.service not found." — that means Apache is running PHP itself.
+```bash
+ss -ltnp | grep -E ':(80|443|8080|3000)'                        # what is listening, with PIDs
+ps -ef | grep -Ei 'php|node|nginx|apache|httpd|caddy' | grep -v grep
+systemctl list-units --type=service --no-legend | grep -Ei 'php|apache|httpd|nginx|node'
 
-# 3) Node backend: restart the process
-pm2 restart <app>      # or: systemctl restart <your-service>
+sudo systemctl restart apache2        # Apache + mod_php (this repo's .htaccess)
+sudo systemctl restart httpd          # same, on distros that name it httpd
+sudo systemctl restart "php$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')-fpm"   # nginx + FPM
+sudo systemctl restart nginx          # only if nginx is in front of it
+pm2 restart <app>                     # Node backend (or: systemctl restart <service>)
+# php -S dev server: kill the PID shown above, then start the same command again
+# Plesk: Tools & Settings > Services Management > restart the web server
 ```
 
 Then confirm the running build (this needs no browser):
