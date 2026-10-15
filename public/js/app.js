@@ -701,7 +701,6 @@ function learnerCertSheet(c, b) {
     ? '<b>Books attended:</b><ul>' + c.books.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>'
     : '';
   return '<div class="cert-sheet">' +
-    (b.programLogo ? '<img class="logo" src="' + esc(b.programLogo) + '" alt="">' : '') +
     '<h1>' + esc(c.title) + '</h1>' +
     '<p>This certificate is proudly presented to</p>' +
     '<div class="name">' + esc(c.userName) + '</div>' +

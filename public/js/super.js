@@ -354,12 +354,6 @@ async function renderAccounts() {
               (et.logo ? '' : 'hidden') + '" src="' + esc(et.logo || '') +
               '" style="height:56px;border-radius:10px;border:1px solid var(--line);padding:4px;background:#fff"></div>' +
           '</div>' +
-          '<div><label>Program logo (max 1.5 MB)</label>' +
-            '<input type="file" id="tbProgLogo" accept="image/*">' +
-            '<div class="mt"><img id="tbProgLogoImg" alt="Program logo" class="' +
-              (et.programLogo ? '' : 'hidden') + '" src="' + esc(et.programLogo || '') +
-              '" style="height:56px;border-radius:10px;border:1px solid var(--line);padding:4px;background:#fff"></div>' +
-          '</div>' +
         '</div>' +
         '<div class="row"><div><label>Account colour</label>' +
           '<div class="row" style="align-items:center;gap:8px">' +
@@ -395,11 +389,6 @@ async function renderAccounts() {
         '<div><label>School logo (max 1.5 MB)</label>' +
           '<input type="file" id="tnLogo" accept="image/*">' +
           '<div class="mt"><img id="tnLogoImg" alt="School logo" class="hidden" ' +
-            'style="height:56px;border-radius:10px;border:1px solid var(--line);padding:4px;background:#fff"></div>' +
-        '</div>' +
-        '<div><label>Program logo (max 1.5 MB)</label>' +
-          '<input type="file" id="tnProgLogo" accept="image/*">' +
-          '<div class="mt"><img id="tnProgLogoImg" alt="Program logo" class="hidden" ' +
             'style="height:56px;border-radius:10px;border:1px solid var(--line);padding:4px;background:#fff"></div>' +
         '</div>' +
       '</div>' +
@@ -441,8 +430,6 @@ async function createTenant(e) {
     if (slug) body.slug = slug;
     const logo = await logoDataUrl($('tnLogo'));
     if (logo) body.logo = logo;
-    const prog = await logoDataUrl($('tnProgLogo'));
-    if (prog) body.programLogo = prog;
     const data = await API.post('/super/tenants', body);
     toast('Tenant created — admin login: ' +
       (data.loginUrl || ('/t/' + (body.slug || slugify(body.name)))), 'ok');
@@ -461,8 +448,6 @@ async function saveTenantBrand(e) {
     if (!body.name) throw new Error('Enter the name');
     const logo = await logoDataUrl($('tbLogo'));
     if (logo) body.logo = logo;
-    const prog = await logoDataUrl($('tbProgLogo'));
-    if (prog) body.programLogo = prog;
     const themeOff = document.getElementById('tbThemeOff');
     body.themeColor = (themeOff && themeOff.checked) ? null : val('tbTheme');
     await API.put('/super/tenants/' + encodeURIComponent(t.id), body);
@@ -1607,9 +1592,7 @@ function onChange(e) {
     return;
   }
   const previews = {
-    tnLogo: 'tnLogoImg', tnProgLogo: 'tnProgLogoImg',
-    tbLogo: 'tbLogoImg', tbProgLogo: 'tbProgLogoImg',
-    stLogo: 'stLogoImg'
+    tnLogo: 'tnLogoImg', tbLogo: 'tbLogoImg', stLogo: 'stLogoImg'
   };
   const imgId = previews[id];
   if (imgId) {

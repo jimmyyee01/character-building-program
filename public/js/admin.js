@@ -5,7 +5,7 @@ const booksState = { modules: [], moduleId: null, books: [], openBookId: null };
 const submState = { flagged: false, type: '', search: '' };
 const usersState = { search: '' };
 const certState = { search: '' };
-const brandState = { logo: undefined, programLogo: undefined };
+const brandState = { logo: undefined };
 const RENDER = {};
 
 function sec(name) { return document.getElementById('view-' + name); }
@@ -1297,7 +1297,6 @@ function certSheetHtml(c) {
   const books = c.books && c.books.length ? c.books : (c.bestBook ? [c.bestBook] : []);
   let logos = '';
   if (b.tenantLogo) logos += '<img class="logo" src="' + esc(b.tenantLogo) + '" alt="Logo">';
-  if (b.programLogo) logos += '<img class="logo" src="' + esc(b.programLogo) + '" alt="Program logo">';
   let bookList = '';
   books.forEach(function (t) { bookList += '<li>' + esc(t) + '</li>'; });
   return '<div class="cert-sheet">' +
@@ -1327,7 +1326,6 @@ function openCertModal(c) {
 /* ============================================================= branding ==== */
 function updateTopbarLogos() {
   const t = document.getElementById('logoTenant');
-  const p = document.getElementById('logoProgram');
   if (ME.branding.tenantLogo) {
     t.src = ME.branding.tenantLogo;
     t.classList.remove('hidden');
@@ -1335,20 +1333,12 @@ function updateTopbarLogos() {
     t.removeAttribute('src');
     t.classList.add('hidden');
   }
-  if (ME.branding.programLogo) {
-    p.src = ME.branding.programLogo;
-    p.classList.remove('hidden');
-  } else {
-    p.removeAttribute('src');
-    p.classList.add('hidden');
-  }
 }
 async function renderBranding() {
   const el = sec('branding');
   if (!isAdmin()) { setView('dashboard'); return; }
   const b = ME.branding || {};
   brandState.logo = undefined;
-  brandState.programLogo = undefined;
   brandState.themeColor = undefined;
   el.innerHTML = '<div class="card"><h3>Branding</h3>' +
     '<p class="muted small">Images must be under 1.5 MB (PNG, JPG or SVG). ' +
@@ -1360,12 +1350,6 @@ async function renderBranding() {
       : '<img id="pvTenant" class="thumb hidden" alt="Preview">') + '</div>' +
     '<input type="file" id="bfLogo" accept="image/*">' +
     '<p><button type="button" class="ghost small" id="clearLogo">Remove current logo</button></p></div>' +
-    '<div><label>Program logo</label>' +
-    '<div>' + (b.programLogo
-      ? '<img id="pvProgram" class="thumb" src="' + esc(b.programLogo) + '" alt="Current program logo">'
-      : '<img id="pvProgram" class="thumb hidden" alt="Preview">') + '</div>' +
-    '<input type="file" id="bfProgram" accept="image/*">' +
-    '<p><button type="button" class="ghost small" id="clearProgram">Remove program logo</button></p></div>' +
     '<div><label>Account colour</label>' +
       '<div class="row" style="align-items:center;gap:8px">' +
         '<input type="color" id="bfTheme" value="' + (themeIsHex(b.themeColor) ? esc(b.themeColor) : '#24508c') + '" style="width:64px;height:38px;padding:2px">' +
@@ -1396,7 +1380,6 @@ async function renderBranding() {
     });
   };
   bindPreview('bfLogo', 'pvTenant', 'logo');
-  bindPreview('bfProgram', 'pvProgram', 'programLogo');
 
   const themeInput = document.getElementById('bfTheme');
   const themeVal = document.getElementById('bfThemeVal');
@@ -1428,19 +1411,11 @@ async function renderBranding() {
     img.classList.add('hidden');
     document.getElementById('bfLogo').value = '';
   };
-  document.getElementById('clearProgram').onclick = function () {
-    brandState.programLogo = null;
-    const img = document.getElementById('pvProgram');
-    img.removeAttribute('src');
-    img.classList.add('hidden');
-    document.getElementById('bfProgram').value = '';
-  };
 
   document.getElementById('brandForm').onsubmit = wrap(async function (e) {
     e.preventDefault();
     const body = {};
     if (brandState.logo !== undefined) body.logo = brandState.logo;
-    if (brandState.programLogo !== undefined) body.programLogo = brandState.programLogo;
     if (brandState.themeColor !== undefined) body.themeColor = brandState.themeColor;
     if (Object.keys(body).length === 0) {
       toast('Change an image or pick a colour first', 'err');
@@ -1448,7 +1423,6 @@ async function renderBranding() {
     }
     await API.put('/admin/branding', body);
     if (body.logo !== undefined) ME.branding.tenantLogo = body.logo;
-    if (body.programLogo !== undefined) ME.branding.programLogo = body.programLogo;
     if (body.themeColor !== undefined) {
       ME.branding.themeColor = body.themeColor;
       applyThemeColor(body.themeColor);

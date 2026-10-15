@@ -176,6 +176,12 @@ async function part3(r, tok, check) {
   r = await call('/me', null, tok.organization);
   check('org colour can be cleared', r.data.branding && !r.data.branding.themeColor, JSON.stringify(r.data.branding || {}));
 
+  /* the programme logo belongs to the super admin account only */
+  r = await call('/admin/branding', { method: 'PUT', body: { programLogo: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==' } }, tok.organization);
+  check('tenant admin cannot set the programme logo', r.ok, 'status ' + r.status);
+  r = await call('/me', null, tok.organization);
+  check('programme logo untouched by tenant admin', !r.data.branding || !r.data.branding.programLogo, JSON.stringify(r.data.branding || {}));
+
   const stu = await call('/auth/login', { method: 'POST', body: { slug: 'greenfield-academy', identifier: 'STU-001', password: 'Student@123' } });
   const stuTok = stu.data.token;
   r = await call('/videos', null, stuTok);

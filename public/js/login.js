@@ -17,15 +17,11 @@ async function init() {
     const i = document.getElementById('logoTenant');
     i.src = tenantInfo.tenant.logo; i.classList.remove('hidden');
   }
-  if (tenantInfo.branding.programLogo) {
-    const i = document.getElementById('logoProgram');
-    i.src = tenantInfo.branding.programLogo; i.classList.remove('hidden');
-  }
   applyThemeColor(tenantInfo.branding && tenantInfo.branding.themeColor);
 
-  /* faint account logo on the right of the page (falls back to the program logo) */
+  /* faint account logo on the right of the page */
   const mark = document.getElementById('loginMark');
-  const markSrc = tenantInfo.tenant.logo || tenantInfo.branding.programLogo;
+  const markSrc = tenantInfo.tenant.logo;
   if (mark && markSrc) {
     mark.src = markSrc;
     mark.alt = tenantInfo.tenant.name + ' logo';

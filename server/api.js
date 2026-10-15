@@ -1484,7 +1484,8 @@ route('PUT', '/api/admin/branding', ({ user, body }) => {
   const t = user.role === 'super' ? dbm.byId('tenants', body.tenantId) : tenantOf(user);
   need(t, 'Account not found', 404);
   if (body.logo !== undefined) t.logo = body.logo;
-  if (body.programLogo !== undefined) t.programLogo = body.programLogo;
+  /* the programme logo belongs to the super admin only */
+  if (body.programLogo !== undefined && user.role === 'super') t.programLogo = body.programLogo;
   if (body.themeColor !== undefined) t.themeColor = hexColor(body.themeColor);
   if (body.name && user.role === 'super') t.name = String(body.name).trim();
   dbm.save();

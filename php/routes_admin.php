@@ -543,8 +543,11 @@ function r_admin_branding(array $user, array $body, array $params, ?string $toke
     need($t, 'Tenant not found', 404);
     $set = []; $args = [];
     if (array_key_exists('logo', $body)) { $set[] = 'logo=?'; $args[] = $body['logo']; }
-    $pl = $body['programLogo'] ?? $body['program_logo'] ?? null;
-    if (array_key_exists('programLogo', $body) || array_key_exists('program_logo', $body)) { $set[] = 'program_logo=?'; $args[] = $pl; }
+    /* the programme logo belongs to the super admin only */
+    if ($user['role'] === 'super') {
+        $pl = $body['programLogo'] ?? $body['program_logo'] ?? null;
+        if (array_key_exists('programLogo', $body) || array_key_exists('program_logo', $body)) { $set[] = 'program_logo=?'; $args[] = $pl; }
+    }
     if (array_key_exists('themeColor', $body) || array_key_exists('theme_color', $body)) {
         $c = $body['themeColor'] ?? $body['theme_color'] ?? null;
         $c = (is_string($c) && preg_match('/^#[0-9a-fA-F]{6}$/', trim($c))) ? strtolower(trim($c)) : null;
