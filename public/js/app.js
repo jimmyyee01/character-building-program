@@ -43,8 +43,9 @@ function closeModal() {
   root.classList.add('hidden');
 }
 
-function statCard(n, label) {
-  return '<div class="stat"><div class="n">' + esc(n) + '</div><div class="l">' + esc(label) + '</div></div>';
+function statCard(n, label, tone) {
+  return '<div class="stat' + (tone ? ' tone-' + tone : '') + '"><div class="n">' + esc(n) +
+    '</div><div class="l">' + esc(label) + '</div></div>';
 }
 
 async function loadFlow() {
@@ -69,11 +70,11 @@ function renderStrip() {
   const active = f.modules.find(function (m) { return m.status === 'active'; });
   const done = f.modules.filter(function (m) { return m.status === 'completed'; }).length;
   $('dashStrip').innerHTML =
-    statCard(Math.round(perf.overall) + '%', 'Overall performance') +
-    statCard(done + '/' + f.modules.length, 'Modules completed') +
-    statCard(f.allDone ? '100%' : (active ? active.percent + '%' : '—'), f.allDone ? 'Program finished' : 'Active module') +
-    statCard(perf.certificates, 'Certificates') +
-    statCard(perf.flagged, 'Copy flags');
+    statCard(Math.round(perf.overall) + '%', 'Overall performance', 'blue') +
+    statCard(done + '/' + f.modules.length, 'Modules completed', 'teal') +
+    statCard(f.allDone ? '100%' : (active ? active.percent + '%' : '—'), f.allDone ? 'Program finished' : 'Active module', 'violet') +
+    statCard(perf.certificates, 'Certificates', 'green') +
+    statCard(perf.flagged, 'Copy flags', 'red');
 }
 
 function renderModulesNav() {
@@ -239,8 +240,10 @@ async function renderHome() {
   const f = S.flow;
   const active = f.modules.find(function (m) { return m.status === 'active'; });
   let recentHtml = '<p class="muted">No submissions yet — open your first module to begin.</p>';
+  let recentRows = [];
   try {
     const d = await API.get('/dashboard');
+    recentRows = d.recent || [];
     if (d.recent.length) {
       recentHtml = '<table><tr><th>Date &amp; time</th><th>Work</th><th>Chapter / Book</th><th>Status</th></tr>' +
         d.recent.map(function (r) {
@@ -256,7 +259,7 @@ async function renderHome() {
   } catch (e) {}
 
   $('view-home').innerHTML =
-    '<div class="card"><h2>Welcome, ' + esc(S.me.user.fullName) + '</h2>' +
+    '<div class="card"><h2 class="home-title"><span class="motto">Be True</span>Welcome, ' + esc(S.me.user.fullName) + '</h2>' +
       (f.allDone
         ? '<p>Every module is complete — your summaries, certificates and library are waiting in the final records.</p>' +
           '<button id="goFinal">Open final records</button>'
@@ -272,6 +275,15 @@ async function renderHome() {
           '<div class="progress"><i style="width:' + m.percent + '%"></i></div>' +
           '<div class="small muted">' + m.percent + '% complete</div></div>';
       }).join('') +
+    '</div></div>' +
+    '<div class="card"><h3>My progress</h3><div class="chart-grid">' +
+      '<div class="chart-box"><h4>Module progress</h4>' +
+        chartProgress(f.modules.map(function (m) {
+          return { label: m.title, percent: m.percent || 0,
+            color: m.status === 'completed' ? '#1f7a44' : (m.status === 'active' ? undefined : '#94a3b8') };
+        })) + '</div>' +
+      '<div class="chart-box"><h4>My submissions per week</h4>' +
+        chartWeekly(recentRows, 8, { caption: 'Your activity over the last 8 weeks' }) + '</div>' +
     '</div></div>' +
     '<div class="card"><h3>Recent activity</h3>' + recentHtml + '</div>';
 

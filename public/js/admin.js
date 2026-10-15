@@ -27,9 +27,9 @@ function wrap(fn) {
   };
 }
 
-function statCard(n, l) {
-  return '<div class="stat"><div class="n">' + esc(n == null ? 0 : n) +
-    '</div><div class="l">' + esc(l) + '</div></div>';
+function statCard(n, l, tone) {
+  return '<div class="stat' + (tone ? ' tone-' + tone : '') + '"><div class="n">' +
+    esc(n == null ? 0 : n) + '</div><div class="l">' + esc(l) + '</div></div>';
 }
 function bar(p) {
   const v = Math.max(0, Math.min(100, Math.round(Number(p) || 0)));
@@ -146,14 +146,16 @@ function newSupCodeHtml() {
 async function renderDashboard() {
   const el = sec('dashboard');
   el.innerHTML = '<div class="card"><p class="muted">Loading dashboard…</p></div>';
-  let d, flagged = [];
+  let d, flagged = [], allSubs = [];
   try {
     const res = await Promise.all([
       API.get('/admin/overview'),
-      API.get('/admin/submissions?flagged=1').catch(function () { return { submissions: [] }; })
+      API.get('/admin/submissions?flagged=1').catch(function () { return { submissions: [] }; }),
+      API.get('/admin/submissions').catch(function () { return { submissions: [] }; })
     ]);
     d = res[0];
     flagged = res[1].submissions || [];
+    allSubs = res[2].submissions || [];
   } catch (e) {
     el.innerHTML = '<div class="card"><p class="muted">Could not load the dashboard: ' +
       esc(msg(e)) + '</p></div>';
@@ -163,14 +165,41 @@ async function renderDashboard() {
   supOverview = d;
   setFlagCount(flagged.length);
   const c = d.counts || {};
-  let html = '<h2>Dashboard</h2><div class="grid cols-4">' +
-    statCard(c.users, isAdmin() ? 'Users' : 'My members') +
-    statCard(c.submissions, 'Submissions') +
-    statCard(c.flagged, 'Flagged') +
-    statCard(c.certificates, 'Certificates');
-  if (isAdmin()) html += statCard(c.supervisors, 'Supervisors');
-  if (d.limit) html += statCard((d.limit.used || 0) + ' / ' + (d.limit.max || 0), 'Member quota');
+  let html = '<h2><span class="motto">Be True</span>Dashboard</h2><div class="grid cols-4">' +
+    statCard(c.users, isAdmin() ? 'Users' : 'My members', 'blue') +
+    statCard(c.submissions, 'Submissions', 'violet') +
+    statCard(c.flagged, 'Flagged', 'red') +
+    statCard(c.certificates, 'Certificates', 'green');
+  if (isAdmin()) html += statCard(c.supervisors, 'Supervisors', 'teal');
+  if (d.limit) html += statCard((d.limit.used || 0) + ' / ' + (d.limit.max || 0), 'Member quota', 'amber');
   html += '</div>';
+
+  /* ------------------------------------------------ statistics graphs --- */
+  const typeNames = { objectives: 'Objectives', chapter_summary: 'Chapter summary', letter_summary: 'Letter summary',
+    book_summary: 'Book summary', best_book: 'Best book', general_summary: 'General summary' };
+  const byType = {};
+  allSubs.forEach(function (s) { byType[s.type] = (byType[s.type] || 0) + 1; });
+  const learners = Math.max(0, (c.users || 0) - (c.supervisors || 0));
+  html += '<div class="card"><h3>Statistics</h3><div class="chart-grid">' +
+    '<div class="chart-box"><h4>Submissions by type</h4>' +
+      chartBars(Object.keys(byType).map(function (k) {
+        return { label: typeNames[k] || k, value: byType[k] };
+      })) + '</div>' +
+    '<div class="chart-box"><h4>Copy check</h4>' +
+      chartDonut([
+        { label: 'Original work', value: Math.max(0, (c.submissions || 0) - flagged.length), color: '#1f7a44' },
+        { label: 'Flagged', value: flagged.length, color: '#c62828' }
+      ], { centerLabel: 'submissions' }) + '</div>' +
+    '<div class="chart-box"><h4>Submissions per week</h4>' +
+      chartWeekly(allSubs, 8, { caption: 'Activity over the last 8 weeks' }) + '</div>' +
+    '<div class="chart-box"><h4>Account make-up</h4>' +
+      chartBarsH([
+        { label: 'Learners', value: learners, color: '#2f6fd0' },
+        { label: 'Supervisors', value: c.supervisors || 0, color: '#0f766e' },
+        { label: 'Certificates', value: c.certificates || 0, color: '#1f7a44' },
+        { label: 'Flagged', value: c.flagged || 0, color: '#c62828' }
+      ]) + '</div>' +
+  '</div></div>';
 
   if (isAdmin()) {
     html += '<div class="card"><h3>Supervisors</h3>' + supTableHtml(d.supervisors) +
@@ -1432,6 +1461,153 @@ async function renderBranding() {
     renderBranding();
   });
 }
+/* ======================================================= student progress == */
+/* How each learner is using the system, which level they are on, ranked by how
+   much of the programme they have covered. A summary can be expanded for every
+   learner who finished all the modules. */
+async function renderProgress() {
+  const el = sec('progress');
+  el.innerHTML = '<div class="card"><p class="muted">Loading student progress…</p></div>';
+  let d;
+  try { d = await API.get('/reports/students'); }
+  catch (e) {
+    el.innerHTML = '<div class="card"><p class="muted">' + esc(msg(e)) + '</p></div>';
+    toast(msg(e), 'err');
+    return;
+  }
+  const list = d.students || [];
+  const finished = function (s) { return s.moduleCount > 0 && s.modulesCompleted === s.moduleCount; };
+  const byLevel = {};
+  list.forEach(function (s) {
+    const k = s.level && s.level.title ? s.level.title : '—';
+    byLevel[k] = (byLevel[k] || 0) + 1;
+  });
+  const bands = [
+    { label: 'Finished all modules', value: list.filter(finished).length, color: '#1f7a44' },
+    { label: '75% or more', value: list.filter(function (s) { return !finished(s) && s.progress >= 75; }).length, color: '#2f6fd0' },
+    { label: '25 – 74%', value: list.filter(function (s) { return s.progress >= 25 && s.progress < 75; }).length, color: '#b45309' },
+    { label: 'Under 25%', value: list.filter(function (s) { return s.progress < 25; }).length, color: '#c62828' }
+  ];
+  el.innerHTML = '<h2><span class="motto">Be True</span>Student progress</h2>' +
+    '<div class="grid cols-4">' +
+      statCard(d.count, 'Learners', 'blue') +
+      statCard(d.average + '%', 'Average coverage', 'violet') +
+      statCard(d.finished, 'Finished all modules', 'green') +
+      statCard(d.notStarted, 'Never submitted', 'red') +
+    '</div>' +
+    '<div class="card"><h3>How the group is progressing</h3><div class="chart-grid">' +
+      '<div class="chart-box"><h4>Learners per level</h4>' +
+        chartBarsH(Object.keys(byLevel).map(function (k) { return { label: k, value: byLevel[k] }; })) + '</div>' +
+      '<div class="chart-box"><h4>Progress bands</h4>' +
+        chartDonut(bands, { centerLabel: 'learners' }) + '</div>' +
+      '<div class="chart-box"><h4>Most submissions</h4>' +
+        chartBarsH(list.slice(0, 10).map(function (s) {
+          return { label: s.fullName, value: s.submissions, color: '#6d3fd1' }; })) + '</div>' +
+      '<div class="chart-box"><h4>Certificates earned</h4>' +
+        chartBarsH(list.slice().sort(function (a, b) { return b.certificates - a.certificates; }).slice(0, 10)
+          .map(function (s) { return { label: s.fullName, value: s.certificates, color: '#b8217a' }; })) + '</div>' +
+    '</div></div>' +
+    '<div class="card"><div class="row" style="align-items:flex-end">' +
+      '<div style="min-width:200px"><label>Search learners</label>' +
+        '<input type="text" id="pgSearch" placeholder="Name, level, class…"></div>' +
+      '<div class="fixed" style="padding-bottom:10px"><h3 style="margin:0">Ranking ' +
+        '<span class="badge info">' + list.length + '</span> ' +
+        '<span class="badge lock" id="pgCount">' + list.length + ' shown</span></h3></div>' +
+    '</div>' +
+    '<div class="row export-buttons" data-target="#progressArea">' +
+      '<button type="button" class="ghost" data-export="print">Print</button>' +
+      '<button type="button" class="ghost" data-export="pdf">PDF</button>' +
+      '<button type="button" class="ghost" data-export="excel">Excel</button>' +
+      '<button type="button" class="ghost" data-export="word">Word</button></div>' +
+    '<p class="muted small">Ranked by how much of the programme each learner has covered. ' +
+      'A full summary can be opened for learners who finished every module.</p>' +
+    '<div id="progressArea">' + progressTableHtml(list) + '</div></div>';
+
+  const search = document.getElementById('pgSearch');
+  const table = el.querySelector('#progressArea table');
+  if (search && table) {
+    search.addEventListener('input', function () {
+      applyTableSearch(table, search, document.getElementById('pgCount'));
+    });
+    applyTableSearch(table, search, document.getElementById('pgCount'));
+  }
+  el.onclick = function (e) {
+    const b = e.target.closest('button[data-sum]');
+    if (!b) return;
+    const row = document.getElementById('sum-' + b.dataset.sum);
+    if (!row) return;
+    const nowHidden = row.classList.toggle('hidden');
+    b.textContent = nowHidden ? 'Summary' : 'Hide summary';
+  };
+}
+
+function progressTableHtml(list) {
+  if (!list.length) return '<p class="muted">No learners yet.</p>';
+  let h = '<div class="table-wrap"><table><thead><tr>' +
+    '<th>#</th><th>Learner</th><th>Level (module)</th><th>Covered</th>' +
+    '<th>Submissions</th><th>Certificates</th><th>Flagged</th><th>Last active</th><th>Summary</th>' +
+    '</tr></thead><tbody>';
+  list.forEach(function (s, i) {
+    const done = s.moduleCount > 0 && s.modulesCompleted === s.moduleCount;
+    const ident = [s.email, s.studentNumber].filter(Boolean).map(esc).join(' · ');
+    const level = s.level || {};
+    h += '<tr data-search="' + esc(searchText(s)) + '">' +
+      '<td><b>' + (i + 1) + '</b></td>' +
+      '<td><b>' + esc(s.fullName || '—') + '</b>' +
+        (ident ? '<div class="small muted">' + ident + '</div>' : '') +
+        (s.className ? '<div class="small muted">' + esc(s.className) + '</div>' : '') + '</td>' +
+      '<td class="small"><b>' + esc(level.title || '—') + '</b>' +
+        '<div class="muted">' + esc(level.state || '') +
+        (s.moduleCount ? ' · ' + s.modulesCompleted + '/' + s.moduleCount + ' modules' : '') + '</div></td>' +
+      '<td style="min-width:130px"><b>' + (s.progress || 0) + '%</b>' + bar(s.progress || 0) + '</td>' +
+      '<td>' + (s.submissions || 0) + '</td>' +
+      '<td>' + (s.certificates || 0) + '</td>' +
+      '<td>' + (s.flagged ? '<span class="badge off">' + s.flagged + '</span>' : '<span class="badge ok">0</span>') + '</td>' +
+      '<td class="small">' + (s.lastActiveAt ? fmtDate(s.lastActiveAt) : '<span class="muted">never</span>') + '</td>' +
+      '<td>' + (done
+        ? '<button type="button" class="small" data-sum="' + esc(s.id) + '">Summary</button>'
+        : '<span class="muted small">Not finished yet</span>') + '</td></tr>';
+    if (done) h += summaryRowHtml(s);
+  });
+  return h + '</tbody></table></div>';
+}
+
+/* Expanded summary row — rendered only for learners who finished everything. */
+function summaryRowHtml(s) {
+  const recent = (s.recent || []).map(function (r) {
+    const where = [r.book, r.chapter].filter(Boolean).map(esc).join(' — ') || esc(r.label || '—');
+    const status = r.flagged
+      ? '<span class="flag">Copied ' + esc(r.similarity) + '%</span>'
+      : (r.total ? '<span class="badge ok">' + esc(r.score) + '/' + esc(r.total) + '</span>'
+                 : '<span class="badge ok">Submitted</span>');
+    return '<tr><td class="small">' + fmtDate(r.createdAt) + '</td><td>' + typeBadge(r.type) + '</td>' +
+      '<td class="small">' + where + '</td><td>' + status + '</td></tr>';
+  }).join('');
+  return '<tr class="sum-row hidden" id="sum-' + esc(s.id) + '"><td colspan="9"><div class="sum-box">' +
+    '<div class="chart-grid">' +
+      '<div><h4>Programme coverage</h4>' +
+        chartProgress((s.modules || []).map(function (m) {
+          return { label: m.title, percent: m.percent,
+            color: m.status === 'completed' ? '#1f7a44' : (m.status === 'active' ? undefined : '#94a3b8') };
+        })) + '</div>' +
+      '<div><h4>Totals</h4><div class="grid cols-2">' +
+        '<div class="stat tone-blue"><div class="n">' + (s.submissions || 0) + '</div><div class="l">Submissions</div></div>' +
+        '<div class="stat tone-green"><div class="n">' + (s.certificates || 0) + '</div><div class="l">Certificates</div></div>' +
+        '<div class="stat tone-violet"><div class="n">' + (s.progress || 0) + '%</div><div class="l">Covered</div></div>' +
+        '<div class="stat tone-red"><div class="n">' + (s.flagged || 0) + '</div><div class="l">Copy flags</div></div>' +
+      '</div><p class="muted small mt">' +
+        (s.supervisorName ? 'Supervisor: <b>' + esc(s.supervisorName) + '</b> · ' : '') +
+        (s.tenantName ? 'Account: <b>' + esc(s.tenantName) + '</b> · ' : '') +
+        'Last active: <b>' + (s.lastActiveAt ? fmtDate(s.lastActiveAt) : 'never') + '</b></p></div>' +
+    '</div>' +
+    '<h4 class="mt">Recent work</h4>' +
+    (recent
+      ? '<div class="table-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>Chapter / book</th>' +
+        '<th>Result</th></tr></thead><tbody>' + recent + '</tbody></table></div>'
+      : '<p class="muted small">No submissions recorded.</p>') +
+  '</div></td></tr>';
+}
+
 /* =============================================================== wiring ==== */
 RENDER.dashboard = renderDashboard;
 RENDER.users = renderUsers;
@@ -1440,6 +1616,7 @@ RENDER.library = renderLibrary;
 RENDER.books = renderBooks;
 RENDER.submissions = renderSubmissions;
 RENDER.certificates = renderCertificates;
+RENDER.progress = renderProgress;
 RENDER.branding = renderBranding;
 
 const ADMIN_ONLY_VIEWS = ['supervisors', 'library', 'books', 'branding'];

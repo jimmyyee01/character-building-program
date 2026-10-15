@@ -19,11 +19,12 @@ async function init() {
   }
   applyThemeColor(tenantInfo.branding && tenantInfo.branding.themeColor);
 
-  /* faint account logo on the right of the page */
+  /* faint account logo on the right of the login card: the account's own logo,
+     or a monogram of the account name when no logo has been uploaded */
   const mark = document.getElementById('loginMark');
-  const markSrc = tenantInfo.tenant.logo;
-  if (mark && markSrc) {
-    mark.src = markSrc;
+  if (mark) {
+    const colour = themeIsHex(tenantInfo.branding.themeColor) ? tenantInfo.branding.themeColor : '#24508c';
+    mark.src = tenantInfo.tenant.logo || portalMarkSrc(tenantInfo.tenant.name, colour);
     mark.alt = tenantInfo.tenant.name + ' logo';
     mark.classList.remove('hidden');
   }

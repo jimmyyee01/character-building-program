@@ -101,7 +101,108 @@ async function requireSession(roles) {
   }
 }
 
-/* ================================================================ report export helpers (client side, no server libs) */
+/* ============================================================== charts === */
+/* Dependency-free chart helpers (inline SVG / CSS) used by every dashboard
+   and report. Each one returns an HTML string. */
+
+/* vertical bar chart: items = [{label, value, color?}] */
+function chartBars(items, opts) {
+  opts = opts || {};
+  const list = (items || []).slice(0, opts.max || 12);
+  if (!list.length) return '<div class="chart-empty">No data yet.</div>';
+  const w = 320, h = 158, gap = 8, baseY = h - 24, topPad = 18;
+  const max = Math.max(1, list.reduce(function (m, i) { return Math.max(m, Number(i.value) || 0); }, 0));
+  const bw = (w - gap * (list.length - 1)) / list.length;
+  let out = '';
+  list.forEach(function (it, i) {
+    const v = Number(it.value) || 0;
+    const bh = Math.max(2, Math.round((baseY - topPad) * (v / max)));
+    const x = i * (bw + gap);
+    const y = baseY - bh;
+    out += '<rect x="' + x.toFixed(1) + '" y="' + y + '" width="' + bw.toFixed(1) + '" height="' + bh +
+      '" rx="3" fill="' + (it.color || 'var(--brand)') + '"><title>' + esc(it.label + ': ' + v) + '</title></rect>' +
+      '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (y - 4) + '" text-anchor="middle" font-size="9" fill="#475569">' + esc(String(v)) + '</text>' +
+      '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (h - 8) + '" text-anchor="middle" font-size="8.5" fill="#64748b">' +
+        esc(String(it.label).slice(0, 12)) + '</text>';
+  });
+  return '<div class="chart"><svg viewBox="0 0 ' + w + ' ' + h + '" role="img">' + out + '</svg></div>' +
+    (opts.caption ? '<p class="chart-sub">' + esc(opts.caption) + '</p>' : '');
+}
+
+/* horizontal comparison bars: items = [{label, value, color?}] */
+function chartBarsH(items, opts) {
+  opts = opts || {};
+  const list = (items || []).filter(function (x) { return Number(x.value) > 0; }).slice(0, opts.max || 10);
+  if (!list.length) return '<div class="chart-empty">No data yet.</div>';
+  const max = Math.max.apply(null, list.map(function (i) { return Number(i.value) || 0; }));
+  return '<div class="bars">' + list.map(function (it) {
+    const v = Number(it.value) || 0;
+    const pct = Math.max(3, Math.round(v / max * 100));
+    return '<div class="bar-row"><span class="label" title="' + esc(it.label) + '">' + esc(it.label) + '</span>' +
+      '<span class="track"><i style="width:' + pct + '%;background:' + (it.color || 'var(--brand)') + '"></i></span>' +
+      '<b>' + esc(String(v)) + '</b></div>';
+  }).join('') + '</div>' + (opts.caption ? '<p class="chart-sub">' + esc(opts.caption) + '</p>' : '');
+}
+
+/* donut: segments = [{label, value, color?}] */
+function chartDonut(segments, opts) {
+  opts = opts || {};
+  const segs = (segments || []).filter(function (s) { return Number(s.value) > 0; });
+  const total = segs.reduce(function (a, s) { return a + (Number(s.value) || 0); }, 0);
+  if (!total) return '<div class="chart-empty">No data yet.</div>';
+  const r = 54, c = 2 * Math.PI * r;
+  let off = 0, arcs = '';
+  segs.forEach(function (s) {
+    const len = c * ((Number(s.value) || 0) / total);
+    arcs += '<circle r="' + r + '" cx="70" cy="70" fill="none" stroke="' + (s.color || 'var(--brand)') +
+      '" stroke-width="20" stroke-dasharray="' + len.toFixed(2) + ' ' + (c - len).toFixed(2) +
+      '" stroke-dashoffset="' + (-off).toFixed(2) + '" transform="rotate(-90 70 70)"></circle>';
+    off += len;
+  });
+  const legend = segs.map(function (s) {
+    return '<span><i style="background:' + (s.color || 'var(--brand)') + '"></i>' + esc(s.label) +
+      ' — <b>' + (Number(s.value) || 0) + '</b></span>';
+  }).join('');
+  const center = opts.center != null ? opts.center : total;
+  return '<div class="donut-wrap"><svg viewBox="0 0 140 140" class="donut" role="img">' + arcs +
+    '<text x="70" y="68" text-anchor="middle" font-size="22" font-weight="700" fill="#17203a">' + esc(String(center)) + '</text>' +
+    '<text x="70" y="86" text-anchor="middle" font-size="9" fill="#64748b">' + esc(opts.centerLabel || 'total') + '</text>' +
+    '</svg><div class="legend">' + legend + '</div></div>';
+}
+
+/* simple progress rows: items = [{label, percent, note?}] */
+function chartProgress(items) {
+  const list = items || [];
+  if (!list.length) return '<div class="chart-empty">No data yet.</div>';
+  return '<div class="bars">' + list.map(function (it) {
+    const pct = Math.max(0, Math.min(100, Math.round(Number(it.percent) || 0)));
+    return '<div class="bar-row"><span class="label" title="' + esc(it.label) + '">' + esc(it.label) + '</span>' +
+      '<span class="track"><i style="width:' + Math.max(2, pct) + '%;background:' + (it.color || 'var(--brand)') + '"></i></span>' +
+      '<b>' + pct + '%</b></div>';
+  }).join('') + '</div>';
+}
+
+/* groups dated rows into the last N ISO weeks: rows = [{createdAt}] */
+function chartWeekly(rows, weeks, opts) {
+  opts = opts || {};
+  const n = weeks || 8;
+  const now = new Date();
+  const buckets = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const end = new Date(now.getTime() - i * 7 * 24 * 3600 * 1000);
+    const start = new Date(end.getTime() - 7 * 24 * 3600 * 1000);
+    buckets.push({ start: start, end: end, label: (i === 0 ? 'now' : '-' + i + 'w'), value: 0 });
+  }
+  (rows || []).forEach(function (r) {
+    const t = new Date(r.createdAt || r.issuedAt || 0);
+    if (isNaN(t.getTime())) return;
+    for (let i = 0; i < buckets.length; i++) {
+      if (t > buckets[i].start && t <= buckets[i].end) { buckets[i].value++; return; }
+    }
+  });
+  return chartBars(buckets, { caption: opts.caption || 'Grouped into the last ' + n + ' weeks' });
+}
+
 function blobDownload(name, content, mime) {
   const blob = new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
@@ -263,6 +364,17 @@ function themeShade(hex, amt) {
 /* Repaint the whole account layout with the tenant's colour (buttons, nav,
    headers, links...). Called on boot by the admin console, login page and
    participant app so a school account always matches its own colour. */
+/* Inline-SVG monogram used as an account's faint mark when it has no logo yet
+   (first letters of the account name, drawn in the account colour). */
+function portalMarkSrc(name, colour) {
+  const initials = String(name || '?').trim().split(/\s+/).slice(0, 2)
+    .map(function (w) { return w.charAt(0).toUpperCase(); }).join('') || '?';
+  const fill = themeIsHex(colour) ? colour : '#24508c';
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">' +
+    '<text x="100" y="142" font-family="Segoe UI, Arial, sans-serif" font-size="120" font-weight="700"' +
+    ' text-anchor="middle" fill="' + fill + '">' + initials + '</text></svg>';
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+}
 function applyThemeColor(color) {
   const root = document.documentElement;
   if (!themeIsHex(color)) {

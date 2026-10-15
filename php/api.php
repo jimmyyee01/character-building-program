@@ -83,6 +83,7 @@ route('PUT',    '/api/admin/branding', 'r_admin_branding');
 route('GET',    '/api/admin/overview', 'r_admin_overview');
 route('GET',    '/api/admin/submissions', 'r_admin_submissions');
 route('GET',    '/api/admin/certificates', 'r_admin_certificates');
+route('GET',    '/api/reports/students', 'r_reports_students');
 
 /* Super admin */
 route('GET',    '/api/super/overview', 'r_super_overview');

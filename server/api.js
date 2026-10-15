@@ -1492,6 +1492,62 @@ route('PUT', '/api/admin/branding', ({ user, body }) => {
   return { ok: true, tenant: t };
 });
 
+/* ============================================ student progress report ===== */
+/* How each learner is using the system, which level they are on, ranked by
+   how much of the programme they have covered. */
+route('GET', '/api/reports/students', ({ req, user }) => {
+  requireRole(user, ADMINS.concat(['supervisor']));
+  let list = dbm.db.users.filter(u => PARTICIPANTS.indexOf(u.role) !== -1);
+  if (user.role === 'tenant_admin') list = list.filter(u => u.tenantId === user.tenantId);
+  else if (user.role === 'supervisor') list = list.filter(u => u.supervisorId === user.id);
+  else { const tid = qp(req, 'tenantId'); if (tid) list = list.filter(u => u.tenantId === tid); }
+
+  const students = list.map(u => {
+    const perf = performance(u);
+    const subs = dbm.where('submissions', s => s.userId === u.id);
+    const last = subs.reduce((a, s) => (!a || String(s.createdAt || '') > a) ? s.createdAt : a, null);
+    const mods = perf.modules || [];
+    const activeIdx = mods.map(m => m.status).indexOf('active');
+    const completed = mods.filter(m => m.status === 'completed').length;
+    let level;
+    if (activeIdx !== -1) {
+      level = { index: activeIdx + 1, title: mods[activeIdx].title, percent: mods[activeIdx].percent, state: 'In progress' };
+    } else if (mods.length && completed === mods.length) {
+      level = { index: mods.length, title: 'All modules completed', percent: 100, state: 'Completed' };
+    } else if (mods.length) {
+      level = { index: 1, title: mods[0].title, percent: mods[0].percent || 0, state: 'Not started' };
+    } else {
+      level = { index: 0, title: '—', percent: 0, state: 'Not started' };
+    }
+    const tenant = u.tenantId ? dbm.byId('tenants', u.tenantId) : null;
+    return {
+      id: u.id, fullName: u.fullName, email: u.email, studentNumber: u.studentNumber,
+      className: u.className, role: u.role, suspended: !!u.suspended,
+      tenantId: u.tenantId, tenantName: tenant ? tenant.name : null,
+      supervisorName: u.supervisorId ? ((dbm.byId('users', u.supervisorId) || {}).fullName || null) : null,
+      submissions: subs.length, lastActiveAt: last,
+      certificates: perf.certificates, flagged: perf.flagged,
+      progress: perf.overall, modulesCompleted: completed, moduleCount: mods.length, level: level,
+      modules: mods.map(m => ({ title: m.title, percent: m.percent, status: m.status })),
+      recent: subs.slice().sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).slice(0, 6)
+        .map(s => ({ type: s.type, createdAt: s.createdAt, text: String(s.text || '').slice(0, 240),
+          score: s.score == null ? null : s.score, total: s.total == null ? null : s.total,
+          flagged: !!s.flagged, similarity: s.similarity || 0, label: s.label || null,
+          chapter: s.chapterId ? ((dbm.byId('chapters', s.chapterId) || {}).title || null) : null,
+          book: s.bookId ? ((dbm.byId('books', s.bookId) || {}).title || null) : null }))
+    };
+  });
+  students.sort((a, b) => b.progress - a.progress || b.modulesCompleted - a.modulesCompleted ||
+    b.submissions - a.submissions || String(a.fullName).localeCompare(String(b.fullName)));
+
+  const total = students.length;
+  return { ok: true, students: students, count: total,
+    average: total ? Math.round(students.reduce((s, x) => s + x.progress, 0) / total) : 0,
+    finished: students.filter(s => s.moduleCount > 0 && s.modulesCompleted === s.moduleCount).length,
+    started: students.filter(s => s.submissions > 0).length,
+    notStarted: students.filter(s => s.submissions === 0).length };
+});
+
 route('GET', '/api/admin/overview', ({ user }) => {
   need(user, 'Sign in required', 401);
   if (user.role === 'super') {

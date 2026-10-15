@@ -79,23 +79,69 @@ img { max-width: 100%; }
   color: #fff; padding: 14px 20px; border-radius: var(--radius);
   box-shadow: var(--shadow); margin-bottom: 18px;
 }
+/* Each metric can carry its own tone (tone-* classes below); anything without
+   a tone follows the account colour. */
+.stat.tone-blue   { --tone: #2f6fd0; --tone-soft: #dce9fb; --tone-line: #d3e2f7; }
+.stat.tone-teal   { --tone: #0f766e; --tone-soft: #dcf0ec; --tone-line: #cfe8e3; }
+.stat.tone-violet { --tone: #6d3fd1; --tone-soft: #eae2fb; --tone-line: #ded2f6; }
+.stat.tone-amber  { --tone: #b45309; --tone-soft: #fdf1de; --tone-line: #f7e5c9; }
+.stat.tone-red    { --tone: #c62828; --tone-soft: #fbe3e3; --tone-line: #f5d3d3; }
+.stat.tone-green  { --tone: #1f7a44; --tone-soft: #e0f2e7; --tone-line: #d1e9db; }
+.stat.tone-pink   { --tone: #b8217a; --tone-soft: #fbe3f1; --tone-line: #f6d2e6; }
+.stat.tone-slate  { --tone: #475569; --tone-soft: #e9edf4; --tone-line: #dde3ec; }
 #view-dashboard .stat,
 #view-home .stat,
 .dash-strip .stat {
-  background: linear-gradient(160deg, var(--brand-tint), var(--brand-soft));
-  border: 1px solid var(--brand-soft);
-  border-left: 5px solid var(--brand);
+  background: linear-gradient(160deg, #ffffff, var(--tone-soft, var(--brand-soft)));
+  border: 1px solid var(--tone-line, var(--brand-soft));
+  border-left: 5px solid var(--tone, var(--brand));
   box-shadow: 0 6px 18px rgba(23, 32, 58, .06);
 }
+#view-dashboard .stat .n,
+#view-home .stat .n,
+.dash-strip .stat .n { color: var(--tone, var(--brand)); }
 #view-dashboard .stat .l,
 #view-home .stat .l,
-.dash-strip .stat .l { color: var(--brand-2); opacity: .85; }
+.dash-strip .stat .l { color: var(--tone, var(--brand-2)); opacity: .9; }
 #view-dashboard .card,
 #view-home .card { border-top: 4px solid var(--brand); }
 #view-dashboard .progress,
 #view-home .progress { background: var(--brand-soft); }
 #view-dashboard .progress i,
 #view-home .progress i { background: var(--brand); }
+
+/* Motto line that sits at the very top of every dashboard. */
+.motto { display: block; font-size: 12px; font-weight: 800; letter-spacing: .28em; opacity: .92; margin-bottom: 3px; }
+#view-dashboard > h2 .motto,
+#view-home > h2 .motto,
+.home-title .motto { color: inherit; }
+.home-title { margin-top: 0; }
+/* ---------------------------------------------------------- charts ----- */
+.chart-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.chart-box {
+  background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px 16px; border-top: 4px solid var(--brand);
+}
+.chart-box h4 { margin: 0 0 10px; font-size: 14px; }
+.chart-box .chart-sub { color: var(--muted); font-size: 12px; margin: -6px 0 10px; }
+.chart svg { display: block; width: 100%; height: auto; }
+.chart-empty { color: var(--muted); font-size: 13px; padding: 10px 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 10px 16px; margin-top: 10px; font-size: 12px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; }
+.donut-wrap { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.donut-wrap svg.donut { width: 140px; height: 140px; flex: 0 0 auto; }
+.donut-wrap .legend { flex-direction: column; gap: 6px; margin-top: 0; }
+.bars { display: grid; gap: 8px; }
+.bar-row { display: grid; grid-template-columns: minmax(70px, 128px) 1fr 42px; gap: 8px; align-items: center; font-size: 12px; }
+.bar-row .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-row .track { background: #eef2f8; border-radius: 6px; height: 12px; overflow: hidden; }
+.bar-row .track i { display: block; height: 100%; border-radius: 6px; }
+.bar-row b { text-align: right; }
+/* expandable learner summary inside the progress ranking table */
+.sum-row td { background: #f7faff; border-top: 2px solid var(--brand-soft); }
+.sum-box { padding: 6px 2px 14px; }
+.sum-box h4 { margin: 0 0 8px; font-size: 13px; }
+.sum-row.hidden { display: none; }
 
 .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
 .badge.ok { background: #e2f6ec; color: var(--ok); }
@@ -178,14 +224,15 @@ tr:hover td { background: #f8faff; }
 .auth-logos { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 .auth-logos img { height: 52px; border-radius: 10px; background: #fff; border: 1px solid var(--line); padding: 3px; }
 
-/* Faint account/portal logo watermark on the right-hand side of the login page.
-   It uses the account's own logo (falling back to the program logo). */
+/* Faint account/portal logo watermark inside the right-hand login card.
+   It sits behind the form (z-index -1, above the card's white background) and
+   uses the account's own logo — or its monogram when no logo is uploaded. */
+.auth-panel { position: relative; z-index: 0; }
 .login-mark {
-  position: fixed; right: 3vw; top: 50%; transform: translateY(-50%);
-  width: min(38vw, 440px); max-height: 78vh; object-fit: contain;
-  opacity: .09; pointer-events: none; user-select: none; z-index: 0;
+  position: absolute; right: 6px; bottom: 10px;
+  width: 76%; max-height: 68%; object-fit: contain;
+  opacity: .10; pointer-events: none; user-select: none; z-index: -1;
 }
-.auth-wrap { position: relative; z-index: 1; }
 @media (max-width: 900px) { .login-mark { display: none; } }
 .closed-banner { background: #fdeaea; color: var(--bad); border: 1px solid #f5c8c8;
   padding: 12px 14px; border-radius: 10px; font-weight: 600; margin-top: 14px; }

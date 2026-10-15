@@ -295,6 +295,68 @@ function build() {
   const library = buildLibrary();
   const content = buildContent(modules);
   const demo = demoTenants();
+  /* ---- demo graduate: one learner who finished the whole programme ------- */
+  const grad = makeUser({ tenantId: 'ten_greenfield', role: 'student', fullName: 'Grace Graduate',
+    studentNumber: 'STU-100', className: 'Grade 12A', password: 'Student@123' });
+  demo.users.push(grad);
+  const submissions = [], certificates = [];
+  let seq = 0;
+  const stamp = i => new Date(Date.now() - (90 - i) * 86400000).toISOString();
+  modules.forEach(function (mod) {
+    const books = content.books.filter(b => b.moduleId === mod.id &&
+      (b.scope === 'global' || b.scope === 'ten_greenfield'));
+    books.forEach(function (book) {
+      content.chapters.filter(c => c.bookId === book.id &&
+        (c.scope === 'global' || c.scope === 'ten_greenfield')).forEach(function (ch) {
+        const objCount = content.objectives.filter(o => o.chapterId === ch.id).length;
+        seq++;
+        submissions.push({ id: 'sub_grad_' + seq, userId: grad.id, tenantId: grad.tenantId,
+          type: mod.mode === 'summary' ? 'chapter_summary' : 'objectives',
+          chapterId: ch.id, bookId: book.id, moduleId: mod.id, label: ch.title, color: null,
+          text: 'Chapter work completed by the demo graduate for ' + ch.title + '.',
+          score: mod.mode === 'objectives' ? Math.max(1, objCount - 1) : null,
+          total: mod.mode === 'objectives' ? objCount : null, answers: null,
+          similarity: 0, flagged: false, createdAt: stamp(seq) });
+      });
+      if (mod.mode === 'summary') {
+        if (book.letterId) {
+          seq++;
+          submissions.push({ id: 'sub_grad_' + seq, userId: grad.id, tenantId: grad.tenantId,
+            type: 'letter_summary', bookId: book.id, moduleId: mod.id, label: book.title,
+            text: 'Letter summary written by the demo graduate for ' + book.title + '.',
+            similarity: 0, flagged: false, createdAt: stamp(seq) });
+        }
+      } else {
+        (mod.summaryPrompts || []).forEach(function (p, i) {
+          seq++;
+          submissions.push({ id: 'sub_grad_' + seq, userId: grad.id, tenantId: grad.tenantId,
+            type: 'book_summary', bookId: book.id, moduleId: mod.id, index: i + 1,
+            label: p.label, color: p.color || null,
+            text: 'Summary ' + (i + 1) + ' written by the demo graduate for ' + book.title + '.',
+            similarity: 0, flagged: false, createdAt: stamp(seq) });
+        });
+      }
+    });
+    if (books.length) {
+      seq++;
+      submissions.push({ id: 'sub_grad_' + seq, userId: grad.id, tenantId: grad.tenantId,
+        type: 'best_book', moduleId: mod.id, bookId: books[0].id, label: books[0].title,
+        similarity: 0, flagged: false, createdAt: stamp(seq) });
+    }
+    certificates.push({ id: 'cert_grad_' + mod.id, type: 'module', code: 'GRAD-' + mod.order + '-1000',
+      userId: grad.id, tenantId: grad.tenantId, moduleId: mod.id,
+      title: mod.certificateName, books: books.map(b => b.title),
+      bestBook: books.length ? books[0].title : null, bestBookId: books.length ? books[0].id : null,
+      performance: 100, objectiveScore: 95,
+      userName: grad.fullName, tenantName: 'Greenfield Academy', issuedAt: stamp(seq) });
+  });
+  seq++;
+  certificates.push({ id: 'cert_grad_general', type: 'general', code: 'GEN-GRAD1000',
+    userId: grad.id, tenantId: grad.tenantId, moduleId: null,
+    title: 'GENERAL CERTIFICATE — CHARACTER BUILDING PROGRAM',
+    books: content.books.map(b => b.title), bestBook: certificates[0] ? certificates[0].bestBook : null,
+    performance: 100, objectiveScore: null, userName: grad.fullName,
+    tenantName: 'Greenfield Academy', issuedAt: stamp(seq) });
   return {
     settings,
     portals,
@@ -306,8 +368,8 @@ function build() {
     books: content.books,
     chapters: content.chapters,
     objectives: content.objectives,
-    submissions: [],
-    certificates: [],
+    submissions: submissions,
+    certificates: certificates,
     thoughts: []
   };
 }
@@ -321,6 +383,7 @@ function main() {
 console.log('[seed] Portal admins (password Admin@123): admin@greenfield.edu (schools), admin@horizon.org (organization),');
 console.log('[seed]                               admin@family.example (family), admin@married.example (married)');
     console.log('[seed] Demo school: /t/greenfield-academy (student STU-001 / Student@123)');
+    console.log('[seed] Demo graduate: STU-100 / Student@123 (finished every module — demoes the progress report)');
   } else {
     console.log('[seed] Existing database loaded (' + dbm.DB_FILE + ')');
   }

@@ -197,6 +197,66 @@ try {
     $ins_user('ten_covenant','tenant_admin','Married Admin','admin@married.example',null,null,'Admin@123');
     $log[] = 'Demo users created (admins, teacher, students, supervisor + member).';
 
+    /* ---- demo graduate: a learner who finished the whole programme -------- */
+    $gradId = $ins_user('ten_greenfield','student','Grace Graduate',null,'STU-100','Grade 12A','Student@123');
+    $ins_sub = $pdo->prepare('INSERT INTO submissions (id,user_id,tenant_id,type,chapter_id,book_id,module_id,`index`,`text`,answers_json,score,total,color,label,similarity,flagged,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+    $ins_cert = $pdo->prepare('INSERT INTO certificates (id,type,code,user_id,tenant_id,module_id,title,books_json,best_book_id,best_book,performance,objective_score,user_name,tenant_name,issued_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+    $when = now_dt();
+    $gradSubs = 0;
+    foreach ($pdo->query('SELECT * FROM modules ORDER BY `order`') as $mod) {
+        $bs = $pdo->prepare("SELECT * FROM books WHERE module_id=? AND (scope='global' OR scope=?) ORDER BY `order`");
+        $bs->execute([$mod['id'],'ten_greenfield']);
+        $modBooks = $bs->fetchAll();
+        $titles = [];
+        foreach ($modBooks as $b) {
+            $titles[] = $b['title'];
+            $cs = $pdo->prepare("SELECT * FROM chapters WHERE book_id=? AND (scope='global' OR scope=?) ORDER BY `order`");
+            $cs->execute([$b['id'],'ten_greenfield']);
+            foreach ($cs->fetchAll() as $ch) {
+                $oq = $pdo->prepare('SELECT COUNT(*) FROM objectives WHERE chapter_id=?');
+                $oq->execute([$ch['id']]);
+                $objCount = (int)$oq->fetchColumn();
+                $isObj = $mod['mode'] === 'objectives';
+                $ins_sub->execute([uid('sub'),$gradId,'ten_greenfield',$isObj?'objectives':'chapter_summary',
+                    $ch['id'],$b['id'],$mod['id'],null,
+                    'Chapter work completed by the demo graduate for ' . $ch['title'],null,
+                    $isObj ? max(1,$objCount-1) : null, $isObj ? $objCount : null,
+                    null,$ch['title'],0,0,$when]);
+                $gradSubs++;
+            }
+            if ($mod['mode'] === 'summary') {
+                if (!empty($b['letter_id'])) {
+                    $ins_sub->execute([uid('sub'),$gradId,'ten_greenfield','letter_summary',null,$b['id'],$mod['id'],null,
+                        'Letter summary written by the demo graduate for ' . $b['title'],null,null,null,null,$b['title'],0,0,$when]);
+                    $gradSubs++;
+                }
+            } else {
+                $prompts = json_decode((string)$mod['summary_prompts_json'], true) ?: [];
+                foreach ($prompts as $i => $p) {
+                    $ins_sub->execute([uid('sub'),$gradId,'ten_greenfield','book_summary',null,$b['id'],$mod['id'],$i+1,
+                        'Summary ' . ($i+1) . ' written by the demo graduate for ' . $b['title'],null,null,null,
+                        $p['color'] ?? null,$p['label'] ?? null,0,0,$when]);
+                    $gradSubs++;
+                }
+            }
+        }
+        $first = $modBooks[0] ?? null;
+        if ($first) {
+            $ins_sub->execute([uid('sub'),$gradId,'ten_greenfield','best_book',null,$first['id'],$mod['id'],null,
+                'Best book chosen by the demo graduate',null,null,null,null,$first['title'],0,0,$when]);
+            $gradSubs++;
+        }
+        $ins_cert->execute(['cert_grad_' . $mod['id'],'module','GRAD-' . $mod['order'] . '-1000',$gradId,
+            'ten_greenfield',$mod['id'],$mod['certificate_name'],jenc($titles),
+            $first['id'] ?? null,$first['title'] ?? null,100,95,'Grace Graduate','Greenfield Academy',$when]);
+    }
+    $ins_cert->execute(['cert_grad_general','general','GEN-GRAD1000',$gradId,'ten_greenfield',null,
+        'GENERAL CERTIFICATE — CHARACTER BUILDING PROGRAM',
+        jenc(array_map(fn($m) => $m['title'], $pdo->query('SELECT title FROM books ORDER BY module_id,`order`')->fetchAll())),
+        null,null,100,null,'Grace Graduate','Greenfield Academy',$when]);
+    $log[] = 'Demo graduate seeded — "Grace Graduate" (STU-100 / Student@123, ' . $gradSubs .
+        ' submissions + certificates, finished every module).';
+
     echo '<h2>Character Building Program — installed successfully</h2><ul>';
     foreach ($log as $line) echo '<li>' . htmlspecialchars($line) . '</li>';
     echo '</ul><p><b>Ready-to-use logins</b></p><ul>';
@@ -206,6 +266,7 @@ try {
     echo '<li><b>Family admin</b> — admin@family.example / Admin@123 (open /t/beloved-family)</li>';
     echo '<li><b>Married admin</b> — admin@married.example / Admin@123 (open /t/covenant-couples)</li>';
     echo '<li>Demo student — STU-001 / Student@123</li>';
+    echo '<li><b>Demo graduate — STU-100 / Student@123</b> (finished every module — open Student progress to expand the summary)</li>';
     echo '</ul><p>On an existing database run <b>php ensure_logins.php</b> to add any of these that are missing.</p>';
     echo '<p style="color:#a00"><b>Delete install.php from production now.</b></p>';
 } catch (Throwable $e) {

@@ -366,6 +366,71 @@ function r_super_users_create(array $user, array $body, array $params, ?string $
     $names = sup_names_for([$row]);
     return ['user' => admin_user_map($row, $names)];
 }
+/* Progress report: how each learner uses the system, their level, ranked by
+   how much of the programme they have covered (super/tenant admin/supervisor). */
+function r_reports_students(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super','tenant_admin','supervisor']);
+    $rows = scoped_user_rows($user, $query);
+    $pdo = db();
+    $students = [];
+    foreach ($rows as $u) {
+        if (!in_array($u['role'], ['student','teacher','member'], true)) continue;
+        $perf = performance($u);
+        $st = $pdo->prepare('SELECT COUNT(*) FROM submissions WHERE user_id=?'); $st->execute([$u['id']]);
+        $subs = (int)$st->fetchColumn();
+        $st = $pdo->prepare('SELECT MAX(created_at) FROM submissions WHERE user_id=?'); $st->execute([$u['id']]);
+        $last = $st->fetchColumn() ?: null;
+        $st = $pdo->prepare('SELECT * FROM submissions WHERE user_id=? ORDER BY created_at DESC LIMIT 6');
+        $st->execute([$u['id']]);
+        $recent = [];
+        foreach ($st->fetchAll() as $row) {
+            $d = describe_sub(n_sub($row));
+            $recent[] = ['type'=>$d['type'] ?? 'summary', 'createdAt'=>$d['createdAt'] ?? null,
+                'text'=>mb_substr((string)($d['text'] ?? ''), 0, 240), 'score'=>$d['score'] ?? null,
+                'total'=>$d['total'] ?? null, 'flagged'=>(bool)($d['flagged'] ?? false),
+                'similarity'=>$d['similarity'] ?? 0, 'label'=>$d['label'] ?? null,
+                'chapter'=>$d['chapter'] ?? null, 'book'=>$d['book'] ?? null];
+        }
+        $mods = $perf['modules'];
+        $completed = 0; $active = null; $activeIdx = 0;
+        foreach ($mods as $i => $m) {
+            if (($m['status'] ?? '') === 'active') { $active = $m; $activeIdx = $i + 1; }
+            if (($m['status'] ?? '') === 'completed') $completed++;
+        }
+        if ($active) { $level = ['index'=>$activeIdx, 'title'=>$active['title'], 'percent'=>(int)$active['percent'], 'state'=>'In progress']; }
+        elseif (count($mods) && $completed === count($mods)) { $level = ['index'=>count($mods), 'title'=>'All modules completed', 'percent'=>100, 'state'=>'Completed']; }
+        elseif (count($mods)) { $level = ['index'=>1, 'title'=>$mods[0]['title'], 'percent'=>(int)$mods[0]['percent'], 'state'=>'Not started']; }
+        else { $level = ['index'=>0, 'title'=>'—', 'percent'=>0, 'state'=>'Not started']; }
+        $sup = null;
+        if (!empty($u['supervisor_id'])) {
+            $s2 = $pdo->prepare('SELECT full_name FROM users WHERE id=? LIMIT 1'); $s2->execute([$u['supervisor_id']]);
+            $sup = $s2->fetchColumn() ?: null;
+        }
+        $tn = null;
+        if (!empty($u['tenant_id'])) { $t = get_tenant($u['tenant_id']); $tn = $t ? $t['name'] : null; }
+        $students[] = ['id'=>$u['id'], 'fullName'=>$u['full_name'], 'email'=>$u['email'],
+            'studentNumber'=>$u['student_number'], 'className'=>$u['class_name'], 'role'=>$u['role'],
+            'suspended'=>(bool)$u['suspended'], 'tenantId'=>$u['tenant_id'], 'tenantName'=>$tn,
+            'supervisorName'=>$sup, 'submissions'=>$subs, 'lastActiveAt'=>iso($last),
+            'certificates'=>(int)$perf['certificates'], 'flagged'=>(int)$perf['flagged'],
+            'progress'=>(int)$perf['overall'], 'modulesCompleted'=>$completed, 'moduleCount'=>count($mods),
+            'level'=>$level,
+            'modules'=>array_map(fn($m)=>['title'=>$m['title'], 'percent'=>(int)$m['percent'], 'status'=>$m['status']], $mods),
+            'recent'=>$recent];
+    }
+    usort($students, function ($a, $b) {
+        if ($b['progress'] !== $a['progress']) return $b['progress'] - $a['progress'];
+        if ($b['modulesCompleted'] !== $a['modulesCompleted']) return $b['modulesCompleted'] - $a['modulesCompleted'];
+        if ($b['submissions'] !== $a['submissions']) return $b['submissions'] - $a['submissions'];
+        return strcmp((string)$a['fullName'], (string)$b['fullName']);
+    });
+    $n = count($students);
+    return ['students'=>$students, 'count'=>$n,
+        'average'=>$n ? (int)round(array_sum(array_map(fn($s)=>$s['progress'], $students)) / $n) : 0,
+        'finished'=>count(array_filter($students, fn($s)=>$s['moduleCount'] > 0 && $s['modulesCompleted'] === $s['moduleCount'])),
+        'started'=>count(array_filter($students, fn($s)=>$s['submissions'] > 0)),
+        'notStarted'=>count(array_filter($students, fn($s)=>$s['submissions'] === 0))];
+}
 function r_admin_overview(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin','supervisor']);
     if ($user['role'] === 'super') return r_super_overview($user, $body, $params, $token, $query);

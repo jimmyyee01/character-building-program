@@ -76,7 +76,7 @@ function showApp() {
 const RENDERERS = {
   dashboard: renderDashboard, portals: renderPortals, accounts: renderAccounts,
   modules: renderModules, library: renderLibrary, books: renderBooks,
-  users: renderUsers, reports: renderReports, settings: renderSettings
+  users: renderUsers, reports: renderReports, progress: renderProgress, settings: renderSettings
 };
 
 function showView(name) {
@@ -128,14 +128,29 @@ async function renderDashboard() {
   catch (e) { v.innerHTML = errBox(e); return; }
   const c = d.counts || {};
   const cards = [
-    ['Portals', c.portals], ['Tenants', c.tenants], ['Users', c.users],
-    ['Submissions', c.submissions], ['Certificates', c.certificates],
-    ['Flagged', c.flagged], ['Modules', c.modules], ['Library items', c.library]
+    ['Portals', c.portals, 'blue'], ['Tenants', c.tenants, 'teal'], ['Users', c.users, 'violet'],
+    ['Submissions', c.submissions, 'green'], ['Certificates', c.certificates, 'pink'],
+    ['Flagged', c.flagged, 'red'], ['Modules', c.modules, 'amber'], ['Library items', c.library, 'slate']
   ].map(function (x) {
-    return '<div class="stat"><div class="n">' + num(x[1]) + '</div>' +
+    return '<div class="stat tone-' + x[2] + '"><div class="n">' + num(x[1]) + '</div>' +
       '<div class="l">' + esc(x[0]) + '</div></div>';
   }).join('');
   const ts = d.tenants || [];
+  const byType = {};
+  ts.forEach(function (t) { const k = t.type || 'custom'; byType[k] = (byType[k] || 0) + 1; });
+  const charts = '<div class="card"><h3>Statistics</h3><div class="chart-grid">' +
+    '<div class="chart-box"><h4>Users per account</h4>' +
+      chartBarsH(ts.map(function (t) { return { label: t.name, value: Number(t.users) || 0, color: '#2f6fd0' }; })) + '</div>' +
+    '<div class="chart-box"><h4>Submissions per account</h4>' +
+      chartBarsH(ts.map(function (t) { return { label: t.name, value: Number(t.submissions) || 0, color: '#6d3fd1' }; })) + '</div>' +
+    '<div class="chart-box"><h4>Accounts per portal</h4>' +
+      chartBars(Object.keys(byType).map(function (k) { return { label: k, value: byType[k] }; })) + '</div>' +
+    '<div class="chart-box"><h4>Copy check (all accounts)</h4>' +
+      chartDonut([
+        { label: 'Original work', value: Math.max(0, (Number(c.submissions) || 0) - (Number(c.flagged) || 0)), color: '#1f7a44' },
+        { label: 'Flagged', value: Number(c.flagged) || 0, color: '#c62828' }
+      ], { centerLabel: 'submissions' }) + '</div>' +
+  '</div></div>';
   let rows = '<tr><td colspan="7" class="muted">No tenants yet.</td></tr>';
   if (ts.length) {
     rows = ts.map(function (t) {
@@ -152,12 +167,145 @@ async function renderDashboard() {
         '<td>' + activeBadge(t.active !== false) + '</td></tr>';
     }).join('');
   }
-  v.innerHTML = '<h2>Dashboard</h2>' +
+  v.innerHTML = '<h2><span class="motto">Be True</span>Dashboard</h2>' +
     '<div class="grid cols-4">' + cards + '</div>' +
+    charts +
     '<div class="card mt"><h3>Tenants overview</h3><table><thead><tr>' +
     '<th>Tenant</th><th>Type</th><th>Users</th><th>Submissions</th>' +
     '<th>Certificates</th><th>Flagged</th><th>Status</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+}
+/* ======================================================= student progress == */
+/* Same ranking as the account console, but across every account. */
+async function renderProgress() {
+  const v = $('view-progress');
+  v.innerHTML = loadMsg();
+  let d;
+  try { d = await API.get('/reports/students'); }
+  catch (e) { v.innerHTML = errBox(e); return; }
+  const list = d.students || [];
+  const finished = function (s) { return s.moduleCount > 0 && s.modulesCompleted === s.moduleCount; };
+  const byAccount = {};
+  list.forEach(function (s) { const k = s.tenantName || '—'; byAccount[k] = (byAccount[k] || 0) + 1; });
+  const bands = [
+    { label: 'Finished all modules', value: list.filter(finished).length, color: '#1f7a44' },
+    { label: '75% or more', value: list.filter(function (s) { return !finished(s) && s.progress >= 75; }).length, color: '#2f6fd0' },
+    { label: '25 – 74%', value: list.filter(function (s) { return s.progress >= 25 && s.progress < 75; }).length, color: '#b45309' },
+    { label: 'Under 25%', value: list.filter(function (s) { return s.progress < 25; }).length, color: '#c62828' }
+  ];
+  v.innerHTML = '<h2><span class="motto">Be True</span>Student progress</h2>' +
+    '<div class="grid cols-4">' +
+      statCardBox(d.count, 'Learners', 'blue') +
+      statCardBox(d.average + '%', 'Average coverage', 'violet') +
+      statCardBox(d.finished, 'Finished all modules', 'green') +
+      statCardBox(d.notStarted, 'Never submitted', 'red') +
+    '</div>' +
+    '<div class="card"><h3>How learners are progressing</h3><div class="chart-grid">' +
+      '<div class="chart-box"><h4>Learners per account</h4>' +
+        chartBarsH(Object.keys(byAccount).map(function (k) { return { label: k, value: byAccount[k] }; })) + '</div>' +
+      '<div class="chart-box"><h4>Progress bands</h4>' + chartDonut(bands, { centerLabel: 'learners' }) + '</div>' +
+      '<div class="chart-box"><h4>Most submissions</h4>' +
+        chartBarsH(list.slice(0, 10).map(function (s) {
+          return { label: s.fullName + (s.tenantName ? ' (' + s.tenantName + ')' : ''), value: s.submissions, color: '#6d3fd1' }; })) + '</div>' +
+      '<div class="chart-box"><h4>Certificates earned</h4>' +
+        chartBarsH(list.slice().sort(function (a, b) { return b.certificates - a.certificates; }).slice(0, 10)
+          .map(function (s) { return { label: s.fullName, value: s.certificates, color: '#b8217a' }; })) + '</div>' +
+    '</div></div>' +
+    '<div class="card"><div class="row" style="align-items:flex-end">' +
+      '<div style="min-width:220px"><label>Search learners</label>' +
+        '<input type="text" id="spSearch" placeholder="Name, account, level…"></div>' +
+      '<div class="fixed" style="padding-bottom:10px"><h3 style="margin:0">Ranking ' +
+        '<span class="badge info">' + list.length + '</span> ' +
+        '<span class="badge lock" id="spCount">' + list.length + ' shown</span></h3></div>' +
+    '</div>' +
+    '<p class="muted small">Ranked by how much of the programme each learner has covered. ' +
+      'A full summary can be opened for learners who finished every module.</p>' +
+    '<div id="supProgress">' + supProgressTable(list) + '</div></div>';
+
+  $('spSearch').addEventListener('input', function () {
+    applyTableSearch('supProgress', 'spSearch');
+  });
+  applyTableSearch('supProgress', 'spSearch');
+  v.onclick = function (e) {
+    const b = e.target.closest('button[data-sum]');
+    if (!b) return;
+    const row = document.getElementById('sum-' + b.dataset.sum);
+    if (!row) return;
+    const nowHidden = row.classList.toggle('hidden');
+    b.textContent = nowHidden ? 'Summary' : 'Hide summary';
+  };
+}
+function statCardBox(n, label, tone) {
+  return '<div class="stat tone-' + tone + '"><div class="n">' + esc(n == null ? 0 : n) +
+    '</div><div class="l">' + esc(label) + '</div></div>';
+}
+function supProgressTable(list) {
+  if (!list.length) return '<p class="muted">No learners yet.</p>';
+  let h = '<div class="table-wrap"><table id="supProgressTable"><thead><tr>' +
+    '<th>#</th><th>Learner</th><th>Account</th><th>Level (module)</th><th>Covered</th>' +
+    '<th>Submissions</th><th>Certificates</th><th>Flagged</th><th>Last active</th><th>Summary</th>' +
+    '</tr></thead><tbody>';
+  list.forEach(function (s, i) {
+    const done = s.moduleCount > 0 && s.modulesCompleted === s.moduleCount;
+    const level = s.level || {};
+    const ident = [s.email, s.studentNumber].filter(Boolean).map(esc).join(' · ');
+    h += '<tr data-search="' + esc(searchText(s)) + '">' +
+      '<td><b>' + (i + 1) + '</b></td>' +
+      '<td><b>' + esc(s.fullName || '—') + '</b>' +
+        (ident ? '<div class="small muted">' + ident + '</div>' : '') + '</td>' +
+      '<td class="small">' + esc(s.tenantName || '—') +
+        (s.supervisorName ? '<div class="muted">sup. ' + esc(s.supervisorName) + '</div>' : '') + '</td>' +
+      '<td class="small"><b>' + esc(level.title || '—') + '</b>' +
+        '<div class="muted">' + esc(level.state || '') +
+        (s.moduleCount ? ' · ' + s.modulesCompleted + '/' + s.moduleCount + ' modules' : '') + '</div></td>' +
+      '<td style="min-width:130px"><b>' + (s.progress || 0) + '%</b>' + supBar(s.progress || 0) + '</td>' +
+      '<td>' + (s.submissions || 0) + '</td>' +
+      '<td>' + (s.certificates || 0) + '</td>' +
+      '<td>' + (s.flagged ? '<span class="badge off">' + s.flagged + '</span>' : '<span class="badge ok">0</span>') + '</td>' +
+      '<td class="small">' + (s.lastActiveAt ? fmtDate(s.lastActiveAt) : '<span class="muted">never</span>') + '</td>' +
+      '<td>' + (done
+        ? '<button type="button" class="small" data-sum="' + esc(s.id) + '">Summary</button>'
+        : '<span class="muted small">Not finished yet</span>') + '</td></tr>';
+    if (done) h += supSummaryRow(s);
+  });
+  return h + '</tbody></table></div>';
+}
+function supBar(p) {
+  const v2 = Math.max(0, Math.min(100, Math.round(Number(p) || 0)));
+  return '<div class="progress mt" style="height:8px"><i style="width:' + v2 + '%"></i></div>';
+}
+function supSummaryRow(s) {
+  const recent = (s.recent || []).map(function (r) {
+    const where = [r.book, r.chapter].filter(Boolean).map(esc).join(' — ') || esc(r.label || '—');
+    const status = r.flagged
+      ? '<span class="flag">Copied ' + esc(r.similarity) + '%</span>'
+      : (r.total ? '<span class="badge ok">' + esc(r.score) + '/' + esc(r.total) + '</span>'
+                 : '<span class="badge ok">Submitted</span>');
+    return '<tr><td class="small">' + fmtDate(r.createdAt) + '</td><td class="small">' + esc(r.type) + '</td>' +
+      '<td class="small">' + where + '</td><td>' + status + '</td></tr>';
+  }).join('');
+  return '<tr class="sum-row hidden" id="sum-' + esc(s.id) + '"><td colspan="10"><div class="sum-box">' +
+    '<div class="chart-grid">' +
+      '<div><h4>Programme coverage</h4>' +
+        chartProgress((s.modules || []).map(function (m) {
+          return { label: m.title, percent: m.percent,
+            color: m.status === 'completed' ? '#1f7a44' : (m.status === 'active' ? undefined : '#94a3b8') };
+        })) + '</div>' +
+      '<div><h4>Totals</h4><div class="grid cols-2">' +
+        statCardBox(s.submissions || 0, 'Submissions', 'blue') +
+        statCardBox(s.certificates || 0, 'Certificates', 'green') +
+        statCardBox((s.progress || 0) + '%', 'Covered', 'violet') +
+        statCardBox(s.flagged || 0, 'Copy flags', 'red') +
+      '</div><p class="muted small mt">Account: <b>' + esc(s.tenantName || '—') + '</b>' +
+        (s.supervisorName ? ' · Supervisor: <b>' + esc(s.supervisorName) + '</b>' : '') +
+        ' · Last active: <b>' + (s.lastActiveAt ? fmtDate(s.lastActiveAt) : 'never') + '</b></p></div>' +
+    '</div>' +
+    '<h4 class="mt">Recent work</h4>' +
+    (recent
+      ? '<div class="table-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>Chapter / book</th>' +
+        '<th>Result</th></tr></thead><tbody>' + recent + '</tbody></table></div>'
+      : '<p class="muted small">No submissions recorded.</p>') +
+  '</div></td></tr>';
 }
 /* ======================================================== portals ======== */
 function winRowHTML(from, to) {

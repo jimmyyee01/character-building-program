@@ -106,6 +106,9 @@ async function part2(r, tok, check) {
     check('supervisor cannot create supervisors (member or 403)',
       (r.status === 403) || (r.ok && r.data.user && r.data.user.role === 'member'),
       'status ' + r.status + ' role ' + ((r.data.user || {}).role));
+    r = await call('/reports/students', null, st);
+    check('GET /reports/students (supervisor sees own members)',
+      r.ok && Array.isArray(r.data.students), 'status ' + r.status);
   }
 
   r = await call('/admin/overview', null, tok.schools);
@@ -114,6 +117,20 @@ async function part2(r, tok, check) {
   check('GET /admin/submissions', r.ok && Array.isArray(r.data.submissions), 'status ' + r.status);
   r = await call('/admin/certificates', null, tok.schools);
   check('GET /admin/certificates', r.ok && Array.isArray(r.data.certificates), 'status ' + r.status);
+  r = await call('/reports/students', null, tok.schools);
+  check('GET /reports/students (tenant admin)',
+    r.ok && Array.isArray(r.data.students) && typeof r.data.average === 'number', 'status ' + r.status);
+  check('progress report is ranked by coverage',
+    !!r.data.students && r.data.students.every(function (s, i, arr) { return i === 0 || arr[i - 1].progress >= s.progress; }));
+  check('progress report has level, recent work and counts',
+    !r.data.students.length || (r.data.students[0].level && typeof r.data.students[0].level.title === 'string' &&
+      Array.isArray(r.data.students[0].recent) && typeof r.data.students[0].modulesCompleted === 'number' &&
+      typeof r.data.students[0].submissions === 'number'),
+    JSON.stringify(r.data.students[0] || {}).slice(0, 120));
+  const supLogin = await call('/auth/super-login', { method: 'POST', body: { username: 'superadmin', password: 'SuperAdmin@123' } });
+  r = await call('/reports/students', null, supLogin.data.token);
+  check('GET /reports/students (super admin, all accounts)',
+    supLogin.ok && r.ok && Array.isArray(r.data.students), 'status ' + r.status);
   r = await call('/modules', null, tok.schools);
   check('GET /modules', r.ok && (r.data.modules || []).length >= 3, 'count ' + (r.data.modules || []).length);
   r = await call('/library', null, tok.schools);
@@ -131,6 +148,8 @@ async function part2(r, tok, check) {
   check('GET /certificates (student)', r.ok && Array.isArray(r.data.certificates), 'status ' + r.status);
   r = await call('/admin/overview', null, stu.data.token);
   check('student blocked from admin report (403)', r.status === 403, 'status ' + r.status);
+  r = await call('/reports/students', null, stu.data.token);
+  check('student blocked from student-progress report (403)', r.status === 403, 'status ' + r.status);
   r = await call('/not-a-real-endpoint', null, stu.data.token);
   check('unknown endpoint -> 404', r.status === 404, 'status ' + r.status);
 
