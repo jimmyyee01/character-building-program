@@ -311,12 +311,16 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
    While a chapter is open only **that chapter's pages** may be read: clicking
    the chapter opens its page range straight away (with a **Close** button that
    leaves a cover to reopen it), the reader can only turn pages — never scroll —
-   and **no full-book PDF is offered on that page** at all. A chapter that is not
-   active yet is **inactive**: it is drawn as a disabled button (dimmed, lock
-   glyph, reason on hover) with **no click handler at all**, so clicking it
-   changes nothing — it cannot be opened, and it reveals no text, no pages and no
-   form. Submitting for one is refused by both backends anyway
-   (`Submit previous chapters first`, 403).
+   and **no full-book PDF is offered on that page** at all. The sheet is fitted to
+   the page's **own shape** and to the space it has, so the whole page is visible:
+   the page is scaled down (its print gets smaller) instead of being cropped, and
+   it changes shape for a square or landscape page rather than assuming A4. Only
+   the chapter that is open **now** responds to clicks: a chapter that has been
+   **submitted** and one that is **not unlocked yet** are both **inactive** — drawn
+   as disabled buttons (dimmed, lock glyph on the locked ones, the reason on
+   hover) with **no click handler at all**, so clicking them changes nothing, and
+   neither reveals its text, its pages or a form. Submitting into one is refused
+   by both backends anyway (`Submit previous chapters first`, 403).
 5. **Module 2 — BETA (Personal Relationship & Applied Psychology)** — 3 books,
    chapters end with **objectives shuffled on every login**, then 3 mandatory
    colour-tagged summaries (injustices in the book → injustices in your

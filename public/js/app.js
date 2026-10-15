@@ -389,7 +389,7 @@ function renderBook() {
   const d = S.bookData;
   if (!d) return;
   const cur = S.selectedChapterId
-    ? d.chapters.find(function (c) { return c.id === S.selectedChapterId && c.status !== 'locked'; })
+    ? d.chapters.find(function (c) { return c.id === S.selectedChapterId && c.status === 'active'; })
     : null;
   const chapter = cur || activeChapterOf(d) || d.chapters[0];
 
@@ -403,13 +403,16 @@ function renderBook() {
     '<div class="chapter-list">' +
       '<button class="ghost" id="backToBooks">← All books</button>' +
       d.chapters.map(function (c, i) {
-        /* A chapter that is not active yet must not respond to any click: it is
-           rendered as a real disabled button and no handler is attached below. */
+        /* ONLY the chapter that is open now responds to clicks. A chapter that is
+           waiting to be unlocked and one that has already been submitted are both
+           inactive: a real disabled button, and no handler is attached below. */
         const locked = c.status === 'locked';
-        const cls = (chapter && c.id === chapter.id ? 'active ' : '') + (locked ? 'locked' : '');
+        const inactive = c.status !== 'active';
+        const cls = (chapter && c.id === chapter.id ? 'active ' : '') + (inactive ? 'locked' : '');
+        const why = locked ? 'Submit the previous chapter to unlock this one'
+          : 'You have submitted this chapter — it is closed now';
         return '<button class="' + cls + '" data-ch="' + esc(c.id) + '"' +
-          (locked ? ' disabled aria-disabled="true" ' +
-            'title="Submit the previous chapter to unlock this one"' : '') +
+          (inactive ? ' disabled aria-disabled="true" title="' + why + '"' : '') +
           '>' + (locked ? '🔒 ' : '') + (c.submission ? '✓ ' : '') + esc(c.title) +
           (c.status === 'active' && !c.submission ? ' ●' : '') + '</button>';
       }).join('') +
@@ -444,7 +447,7 @@ function renderBook() {
 
   $('view-book').querySelectorAll('[data-ch]').forEach(function (b) {
     const c = d.chapters.find(function (x) { return x.id === b.dataset.ch; });
-    if (!c || c.status === 'locked') {      /* inactive chapter: responds to nothing */
+    if (!c || c.status !== 'active') {      /* inactive chapter: responds to nothing */
       b.disabled = true;
       b.onclick = null;
       return;

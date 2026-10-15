@@ -62,15 +62,29 @@ function probeHtml() {
     var atEnd = root.querySelectorAll('[data-book-turn="1"]')[0].disabled;
     bookGo(root, -1);                      /* -> back to page 2 */
     var back = frame();
-    out(JSON.stringify({
+    var payload = {
       frames: wrap.querySelectorAll('iframe').length,
       start: src(first), next: src(second), third: src(third), back: src(back),
       replaced: replaced, keptWhenSame: keptWhenSame, atEnd: atEnd,
       page: root.dataset.page, counter: (root.querySelector('[data-book-page]') || {}).textContent,
       prevDisabled: root.querySelectorAll('[data-book-turn="-1"]')[0].disabled,
       shield: !!root.querySelector('[data-book-shield]'),
-      close: !!root.querySelector('[data-book-close]')
-    }));
+      close: !!root.querySelector('[data-book-close]'),
+      fitted: false, ratio: '', sheet: null, stage: null
+    };
+    /* the sheet is fitted once the page shape has been read (a fetch plus a load
+       event), so report after that instead of immediately */
+    setTimeout(function () {
+      try {
+        var sheetRect = root.querySelector('.book-page').getBoundingClientRect();
+        var stageRect = root.querySelector('.book-stage').getBoundingClientRect();
+        payload.fitted = root.dataset.bookFitted === '1';
+        payload.ratio = String(root.dataset.bookRatio || '');
+        payload.sheet = { w: Math.round(sheetRect.width), h: Math.round(sheetRect.height) };
+        payload.stage = { w: Math.round(stageRect.width), h: Math.round(stageRect.height) };
+      } catch (e2) { payload.fitError = String(e2.message); }
+      out(JSON.stringify(payload));
+    }, 1500);
   } catch (e) { out('error: ' + e.message); }
 })();
 </script></body></html>`;
@@ -131,6 +145,10 @@ function probeHtml() {
   let r = null;
   try { r = JSON.parse(rawVal.replace(/&quot;/g, '"')); } catch (e) {}
   check('probe ran in the browser', !!r, rawVal.slice(0, 200));
+  if (r && r.sheet && r.stage) {
+    console.log('    fitted sheet ' + r.sheet.w + 'x' + r.sheet.h + ' in a ' + r.stage.w + 'x' +
+      r.stage.h + ' space (page ratio ' + r.ratio + ')');
+  }
   if (r) {
     check('the sheet holds exactly one frame', r.frames === 1, JSON.stringify(r).slice(0, 200));
     check('starting frame shows page 1', /#page=1/.test(r.start), r.start);
@@ -141,6 +159,17 @@ function probeHtml() {
     check('counter follows the page', String(r.counter) === '2', String(r.counter));
     check('sheet stays shielded (no scrolling) and closable', r.shield === true && r.close === true,
       JSON.stringify({ shield: r.shield, close: r.close }));
+    /* the whole page must be visible: the sheet takes the page's own shape and
+       fits the space (the probe book's pages are square, so no A4 sheet) */
+    check('the sheet is fitted to the page\'s own shape (the probe page is square)',
+      r.ratio !== '' && Math.abs(Number(r.ratio) - 1) < 0.02 && r.fitted === true,
+      'ratio=' + r.ratio + ' fitted=' + r.fitted + ' ' + (r.fitError || ''));
+    check('the fitted sheet takes that shape instead of a fixed A4 sheet',
+      !!r.sheet && Math.abs((r.sheet.w / r.sheet.h) - 1) < 0.06, JSON.stringify(r.sheet));
+    check('the sheet fits inside its space (whole page visible, nothing cropped)',
+      !!r.sheet && !!r.stage && r.sheet.w > 100 && r.sheet.h > 100 &&
+      r.sheet.w <= r.stage.w + 1 && r.sheet.h <= r.stage.h + 1,
+      JSON.stringify({ sheet: r.sheet, stage: r.stage }));
   }
   console.log(bad ? '\n' + bad + ' FAILED' : '\nREAL BROWSER READER OK');
   process.exit(bad ? 1 : 0);

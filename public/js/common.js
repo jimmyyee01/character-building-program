@@ -371,6 +371,61 @@ if (typeof document !== 'undefined' && document.addEventListener) {
   });
 }
 
+/* ================================================ book-style sheet fitting === */
+/* The sheet is fitted to the page's own shape AND to the space available, so the
+   whole page is visible — the page is scaled down (its print gets smaller) rather
+   than cropped. bookFitBox() is the maths on its own so it can be tested. */
+function bookFitBox(availW, availH, ratio) {
+  const r = Number(ratio) > 0 ? Number(ratio) : 1 / 1.414;
+  const maxW = Math.max(80, Number(availW) || 0);
+  const maxH = Math.max(80, Number(availH) || 0);
+  let w = maxW;
+  let h = w / r;
+  if (h > maxH) { h = maxH; w = h * r; }
+  return { w: Math.round(w), h: Math.round(h) };
+}
+function bookFit(root) {
+  if (!root || !root.querySelector || !root.dataset || !root.querySelectorAll) return false;
+  const sheet = root.querySelector('.book-page');
+  const stage = root.querySelector('.book-stage');
+  if (!sheet || !stage || !sheet.style) return false;
+  const ratio = Number(root.dataset.bookRatio || 0) || (1 / 1.414);
+  /* the turn arrows sit either side of the sheet and keep their own width */
+  const arrows = root.querySelectorAll('.page-turn') || [];
+  let reserved = 0;
+  for (let i = 0; i < arrows.length; i++) reserved += Number(arrows[i].offsetWidth || 0) + 10;
+  const winH = (typeof window !== 'undefined' && window.innerHeight) ? Number(window.innerHeight) : 800;
+  const docW = (typeof document !== 'undefined' && document.documentElement &&
+    document.documentElement.clientWidth) ? Number(document.documentElement.clientWidth) : 960;
+  const full = !!(root.classList && root.classList.contains && root.classList.contains('book-full'));
+  const stageW = Number(stage.clientWidth || 0) || docW;
+  const availH = full
+    ? (Number(stage.clientHeight || 0) || Math.round(winH * 0.86))
+    : Math.round(winH * 0.78);
+  const box = bookFitBox(stageW - reserved - 4, availH, ratio);
+  sheet.style.width = box.w + 'px';
+  sheet.style.height = box.h + 'px';
+  sheet.style.maxHeight = 'none';
+  root.dataset.bookFitted = '1';
+  return true;
+}
+/* Fit now, and again as soon as the page's real shape is known. */
+function bookEnsureFit(root) {
+  if (!root) return;
+  bookFit(root);
+  if (!root.dataset.bookRatio && root.dataset.book && typeof pdfPageRatio === 'function') {
+    pdfPageRatio(root.dataset.book).then(function (ratio) {
+      if (!ratio) return;
+      root.dataset.bookRatio = String(ratio);
+      bookFit(root);
+    });
+  }
+}
+function bookFitAll() {
+  if (typeof document === 'undefined' || !document.querySelectorAll) return;
+  document.querySelectorAll('.book-reader').forEach(function (r) { bookFit(r); });
+}
+
 /* ================================================ book-style PDF reader === */
 /* PDFs open one page at a time, like turning the pages of a book: no long
    scroll and no viewer chrome. Prev/Next buttons (or the arrow keys, or the
@@ -405,9 +460,9 @@ function bookReaderHtml(url, opts) {
         ' title="Previous page">‹</button>' +
       '<div class="book-page">' +
         /* the sheet is clipped and covered by a shield, so the viewer inside can
-           only be moved a page at a time (wheel / swipe / arrows), never scrolled */
-        '<div class="book-frame-wrap">' + bookFrameHtml(url, from, label) +
-          '<span class="book-scroll-cover" aria-hidden="true"></span></div>' +
+           only be moved a page at a time (wheel / swipe / arrows), never scrolled.
+           Its shape is fitted to the page itself (bookFit), so nothing is cut. */
+        '<div class="book-frame-wrap">' + bookFrameHtml(url, from, label) + '</div>' +
         '<div class="book-shield" data-book-shield aria-hidden="true"' +
           ' title="Scroll or swipe to turn the page"></div>' +
       '</div>' +
@@ -462,28 +517,83 @@ function pdfHtml(url, opts) {
   return opts.open ? bookReaderHtml(url, opts) : bookCoverHtml(url, opts);
 }
 
-/* Page count found by scanning the PDF (no libraries, no server round-trip). */
+/* Page count and page shape, found by scanning the PDF (no libraries, no server
+   round-trip). The shape matters: a sheet that matches the page shows the WHOLE
+   page in every viewer, even one that ignores the #zoom fragment and simply fits
+   the width. */
+const pdfInfoCache = {};
 const pdfPageCache = {};
-function pdfPageCount(url) {
-  if (pdfPageCache[url] != null) return Promise.resolve(pdfPageCache[url]);
-  const done = function (n) { pdfPageCache[url] = n; return n; };
-  if (typeof fetch !== 'function') return Promise.resolve(0);
+function pdfBytesText(buf) {
+  const bytes = new Uint8Array(buf);
+  let text = '';
+  const step = 1 << 16;
+  for (let i = 0; i < bytes.length; i += step) {
+    text += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + step, bytes.length)));
+  }
+  return text;
+}
+/* The displayed page box, read from the FIRST page object: CropBox is what a
+   viewer shows, so it wins there; /Rotate 90 or 270 swaps the sides (scans are
+   often stored sideways). */
+function parsePdfPageSize(text) {
+  const s = String(text || '');
+  /* keep to the first page's own dictionary so another page's box cannot win */
+  const start = s.search(/\/Type\s*\/Page(?![s])/);
+  let scope = s;
+  if (start >= 0) {
+    const end = s.indexOf('endobj', start);
+    scope = s.slice(start, end > start ? end : Math.min(s.length, start + 3000));
+  }
+  const box = function (name) {
+    const m = new RegExp('/' + name +
+      '\\s*\\[\\s*(-?[\\d.]+)\\s+(-?[\\d.]+)\\s+(-?[\\d.]+)\\s+(-?[\\d.]+)').exec(scope);
+    if (!m) return null;
+    const w = Math.abs(Number(m[3]) - Number(m[1]));
+    const h = Math.abs(Number(m[4]) - Number(m[2]));
+    return (w > 0 && h > 0) ? { w: w, h: h } : null;
+  };
+  const b = box('CropBox') || box('MediaBox');
+  if (!b) return null;
+  const rot = Number((/\/Rotate\s+(-?\d+)/.exec(scope) || [])[1] || 0);
+  const swap = Math.abs(rot) % 180 === 90;
+  return swap ? { w: b.h, h: b.w } : { w: b.w, h: b.h };
+}
+function pdfInfo(url) {
+  const key = String(url || '');
+  if (pdfInfoCache[key]) return Promise.resolve(pdfInfoCache[key]);
+  const done = function (info) { pdfInfoCache[key] = info; return info; };
+  if (typeof fetch !== 'function') return Promise.resolve(done({ pages: 0, w: 0, h: 0 }));
   return fetch(url, { credentials: 'same-origin' }).then(function (r) {
     return r && r.ok ? r.arrayBuffer() : null;
   }).then(function (buf) {
-    if (!buf || !buf.byteLength || buf.byteLength > 40 * 1024 * 1024) return done(0);
-    const bytes = new Uint8Array(buf);
-    let text = '';
-    const step = 1 << 16;
-    for (let i = 0; i < bytes.length; i += step) {
-      text += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + step, bytes.length)));
-    }
+    if (!buf || !buf.byteLength || buf.byteLength > 40 * 1024 * 1024) return done({ pages: 0, w: 0, h: 0 });
+    const text = pdfBytesText(buf);
     const direct = text.match(/\/Type\s*\/Page(?![s])/g);
-    if (direct && direct.length) return done(direct.length);
-    const counts = text.match(/\/Count\s+(\d+)/g) || [];
-    const nums = counts.map(function (s2) { return Number(String(s2).replace(/[^0-9]/g, '')) || 0; });
-    return done(nums.length ? Math.max.apply(null, nums) : 0);
-  }).catch(function () { return done(0); });
+    let pages = 0;
+    if (direct && direct.length) pages = direct.length;
+    else {
+      const counts = text.match(/\/Count\s+(\d+)/g) || [];
+      const nums = counts.map(function (s2) { return Number(String(s2).replace(/[^0-9]/g, '')) || 0; });
+      pages = nums.length ? Math.max.apply(null, nums) : 0;
+    }
+    const size = parsePdfPageSize(text) || { w: 0, h: 0 };
+    return done({ pages: pages, w: size.w, h: size.h });
+  }).catch(function () { return done({ pages: 0, w: 0, h: 0 }); });
+}
+function pdfPageCount(url) {
+  if (pdfPageCache[url] != null) return Promise.resolve(pdfPageCache[url]);
+  return pdfInfo(url).then(function (i) {
+    pdfPageCache[url] = i.pages;
+    return i.pages;
+  });
+}
+/* width / height of the page, so the sheet can be the page's own shape.
+   0 when it could not be read (the sheet then keeps the A4-ish fallback). */
+function pdfFirstPageSize(url) {
+  return pdfInfo(url).then(function (i) { return (i && i.w && i.h) ? { w: i.w, h: i.h } : null; });
+}
+function pdfPageRatio(url) {
+  return pdfFirstPageSize(url).then(function (s) { return s ? s.w / s.h : 0; });
 }
 
 function bookRootOf(el) { return el && el.closest ? el.closest('.book-reader') : null; }
@@ -516,6 +626,8 @@ function bookGo(root, delta) {
       }
     }
   }
+  /* a rebuilt frame is a new sheet: keep it fitted to the space */
+  bookFit(root);
   /* a small page-turn flick so it reads like a book */
   const sheet = root.querySelector('.book-page');
   if (sheet && sheet.classList && delta) {
@@ -567,6 +679,7 @@ if (typeof document !== 'undefined' && document.addEventListener) {
       if (url && holder && cover.insertAdjacentHTML) {
         cover.insertAdjacentHTML('beforebegin', bookReaderHtml(url, { title: title, from: from, to: to }));
         if (cover.remove) cover.remove(); else if (holder.removeChild) holder.removeChild(cover);
+        bookFitAll();
       }
       return;
     }
@@ -586,6 +699,7 @@ if (typeof document !== 'undefined' && document.addEventListener) {
       if (root) {
         const on = root.classList.toggle('book-full');
         full.textContent = on ? 'Close full page' : 'Full page';
+        bookEnsureFit(root);          /* full page: the whole sheet may grow */
       }
       return;
     }
@@ -615,9 +729,14 @@ if (typeof document !== 'undefined' && document.addEventListener) {
   document.addEventListener('load', function (e) {
     const f = e.target;
     if (f && f.tagName === 'IFRAME' && String(f.className || '').indexOf('pdf-frame') !== -1) {
-      bookCount(bookRootOf(f));
+      const root = bookRootOf(f);
+      bookCount(root);
+      bookEnsureFit(root);            /* the page's own shape as soon as it loads */
     }
   }, true);
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('resize', bookFitAll);
+  }
   document.addEventListener('wheel', function (e) {
     const shield = e.target && e.target.closest ? e.target.closest('[data-book-shield]') : null;
     if (!shield) return;

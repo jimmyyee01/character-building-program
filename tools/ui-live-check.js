@@ -237,10 +237,17 @@ function cleanSlice(s) {
       probe.chapters[0].submission = null;
       probe.chapters[1].status = 'locked';
       probe.chapters[1].submission = null;
+      /* a chapter that has been submitted is inactive too */
+      if (probe.chapters[2]) {
+        probe.chapters[2].status = 'done';
+        probe.chapters[2].submission = { id: 'sub_probe', createdAt: '2026-01-02T03:04:05.000Z',
+          score: 4, total: 8, text: 'ALREADY SUBMITTED WORK' };
+      }
       probe.stage = 'chapters';
     }
     const openCh = probe.chapters[0];
     const lockedCh = probe.chapters[1];
+    const doneCh = probe.chapters[2] || null;
     check('book payload has chapters to compare', !!openCh && !!lockedCh, 'chapters=' + probe.chapters.length);
 
     if (openCh && lockedCh) {
@@ -263,6 +270,15 @@ function cleanSlice(s) {
       /\sdisabled/.test(tagOf(lockedCh.id)) && /\blocked\b/.test(tagOf(lockedCh.id)) &&
       tagOf(lockedCh.id).indexOf('unlock this one') !== -1, tagOf(lockedCh.id));
     check('an open chapter is still clickable', !/\sdisabled/.test(tagOf(openCh.id)), tagOf(openCh.id));
+    check('only the open chapter is clickable at all',
+      view._buttons.filter(function (b) { return !b.disabled; }).length === 1 &&
+      view._buttons.filter(function (b) { return !b.disabled; })[0].dataset.ch === openCh.id,
+      view._buttons.map(function (b) { return b.dataset.ch + (b.disabled ? ':off' : ':on'); }).join(' '));
+    if (doneCh) {
+      check('a submitted chapter is inactive too (disabled, with its own reason)',
+        /\sdisabled/.test(tagOf(doneCh.id)) && tagOf(doneCh.id).indexOf('closed now') !== -1,
+        tagOf(doneCh.id));
+    }
 
     const btnOf = function (id) {
       return view._buttons.filter(function (b) { return b.dataset.ch === id; })[0] || null;
@@ -273,6 +289,12 @@ function cleanSlice(s) {
     check('clicking an inactive chapter changes nothing (no handler, button disabled)',
       vm.runInContext('S.selectedChapterId', appCtx) === null &&
       (!lockedBtn || (lockedBtn.disabled === true && lockedBtn.onclick === null)));
+
+    const doneBtn = doneCh ? btnOf(doneCh.id) : null;
+    if (doneBtn) doneBtn.click();
+    check('clicking a submitted chapter changes nothing either',
+      vm.runInContext('S.selectedChapterId', appCtx) === null &&
+      (!doneBtn || (doneBtn.disabled === true && doneBtn.onclick === null)));
 
     const openBtn = btnOf(openCh.id);
     if (openBtn) openBtn.click();
@@ -303,6 +325,17 @@ function cleanSlice(s) {
       (openSnip === '' || forced.indexOf(openSnip) !== -1) &&
       (lockSnip === '' || forced.indexOf(lockSnip) === -1),
       'open="' + openSnip.slice(0, 18) + '" locked="' + lockSnip.slice(0, 18) + '"');
+
+    if (doneCh) {
+      vm.runInContext('S.selectedChapterId = ' + JSON.stringify(doneCh.id) + ';', appCtx);
+      run(appCtx, 'renderBook');
+      const forcedDone = view.innerHTML;
+      const doneSnip = cleanSlice(doneCh.content);
+      check('a forced selection of a submitted chapter falls back as well',
+        forcedDone.indexOf('ALREADY SUBMITTED WORK') === -1 &&
+        (doneSnip === '' || forcedDone.indexOf(doneSnip) === -1) &&
+        (openSnip === '' || forcedDone.indexOf(openSnip) !== -1));
+    }
 
     /* and the same rule, judged on the untouched payload when it has a lock */
     if (real) {

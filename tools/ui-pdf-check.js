@@ -162,13 +162,14 @@ check('Close shuts the book and leaves the cover behind',
       inserted.indexOf('data-book-to="9"') !== -1 && inserted.indexOf('Open chapter pages') !== -1;
   })());
 
-/* the book turns pages instead of scrolling */
-check('reader markup shields the sheet and hides the scrollbar without cropping',
+/* the book turns pages instead of scrolling, and the sheet is fitted so the whole
+   page is visible (its shape matches the page, nothing is covered or cropped) */
+check('reader markup shields the sheet and asks for the whole page',
   (function () {
     const r = bookReaderHtml('/uploads/book.pdf', {});
     return r.indexOf('class="book-frame-wrap"') !== -1 && r.indexOf('data-book-shield') !== -1 &&
       r.indexOf('scrolling="no"') !== -1 && r.indexOf('never scrolls') !== -1 &&
-      r.indexOf('book-scroll-cover') !== -1 && r.indexOf('zoom=page-fit') !== -1;
+      r.indexOf('book-scroll-cover') === -1 && r.indexOf('zoom=page-fit') !== -1;
   })());
 check('wheel over the sheet turns the page and is prevented from scrolling',
   (function () {
@@ -217,15 +218,60 @@ check('a swipe left/right turns to the next/previous page',
     doc.querySelector = () => null;
     return next === 2 && prev === 1;
   })());
-check('the whole page fits the sheet: no crop, scrollbar covered, turn animated',
+check('the whole page fits the sheet: no crop, fitted shape, turn animated',
   (function () {
     const css = fs.readFileSync(dir + 'css/style.css', 'utf8');
     return /\.book-frame-wrap \.pdf-frame \{ width: 100%; height: 100%; \}/.test(css) &&
       !/calc\(100% \+ 20px\)/.test(css) &&
-      /\.book-scroll-cover \{[\s\S]{0,160}?width: 18px;/.test(css) &&
+      !/\.book-scroll-cover/.test(css) &&
       /\.book-page \{ position: relative; aspect-ratio: 1 \/ 1\.414; \}/.test(css) &&
       /\.book-shield \{ position: absolute; inset: 0; z-index: 3/.test(css) &&
       /@keyframes bookTurn/.test(css);
+  })());
+
+/* ------------------------------------------------- page shape + fitting --- */
+check('the page box is read from the PDF (MediaBox / CropBox / Rotate)',
+  (function () {
+    const a4 = parsePdfPageSize('1 0 obj << /Type /Page /MediaBox [0 0 595 842] >> endobj');
+    const square = parsePdfPageSize('/Type /Page /MediaBox [0 0 200 200]');
+    const crop = parsePdfPageSize('/MediaBox [0 0 595 842] /CropBox [0 0 400 800]');
+    const rotated = parsePdfPageSize('/MediaBox [0 0 595 842] /Rotate 90');
+    const offset = parsePdfPageSize('/MediaBox [-10 -20 190 180]');
+    return !!a4 && a4.w === 595 && a4.h === 842 &&
+      !!square && square.w === 200 && square.h === 200 &&
+      !!crop && crop.w === 400 && crop.h === 800 &&
+      !!rotated && rotated.w === 842 && rotated.h === 595 &&
+      !!offset && offset.w === 200 && offset.h === 200 &&
+      parsePdfPageSize('no page box here') === null;
+  })());
+check('bookFitBox scales the page down until it fits the space (never past it)',
+  (function () {
+    const tall = bookFitBox(1000, 800, 595 / 842);      /* portrait: height decides */
+    const wide = bookFitBox(1000, 800, 842 / 595);      /* landscape: width decides */
+    const square = bookFitBox(1000, 800, 1);
+    const tiny = bookFitBox(1000, 800, 1 / 3);          /* very tall: scaled right down */
+    return tall.h === 800 && tall.w < 1000 && Math.abs(tall.w / tall.h - 595 / 842) < 0.01 &&
+      wide.w === 1000 && wide.h < 800 && Math.abs(wide.w / wide.h - 842 / 595) < 0.01 &&
+      square.w === 800 && square.h === 800 &&
+      tiny.h === 800 && tiny.w > 0 && Math.abs(tiny.w / tiny.h - 1 / 3) < 0.01;
+  })());
+check('bookFit() sizes the sheet to the page ratio inside the space it is given',
+  (function () {
+    const root = makeEl('div');
+    root.classList.add('book-reader');
+    root.dataset = { book: '/uploads/book.pdf', bookRatio: '1' };
+    const stage = makeEl('div');
+    stage.clientWidth = 900;
+    const sheet = makeEl('div');
+    const fitRoot = { dataset: root.dataset, classList: root.classList };
+    fitRoot.querySelector = sel => (sel === '.book-stage' ? stage : (sel === '.book-page' ? sheet : null));
+    fitRoot.querySelectorAll = () => [];
+    const ok = bookFit(fitRoot) === true;
+    const w = Number(String(sheet.style.width).replace('px', ''));
+    const h = Number(String(sheet.style.height).replace('px', ''));
+    /* a square page in a 900-wide space: capped by the height, still square */
+    return ok && w > 0 && h > 0 && Math.abs(w / h - 1) < 0.01 && w <= 900 &&
+      fitRoot.dataset.bookFitted === '1';
   })());
 
 /* -------------------------------------------------------- paging logic ---- */
