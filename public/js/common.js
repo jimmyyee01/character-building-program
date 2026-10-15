@@ -376,12 +376,15 @@ if (typeof document !== 'undefined' && document.addEventListener) {
    whole page is visible — the page is scaled down (its print gets smaller) rather
    than cropped. bookFitBox() is the maths on its own so it can be tested. */
 function bookFitBox(availW, availH, ratio) {
+  /* Fit primarily by WIDTH so the PDF text stays readable.
+     Height is capped but the page can scroll vertically inside the frame
+     instead of being scaled down until text is unreadable. */
   const r = Number(ratio) > 0 ? Number(ratio) : 1 / 1.414;
   const maxW = Math.max(80, Number(availW) || 0);
   const maxH = Math.max(80, Number(availH) || 0);
   let w = maxW;
   let h = w / r;
-  if (h > maxH) { h = maxH; w = h * r; }
+  if (h > maxH) { h = maxH; }   /* cap height, let the frame scroll vertically */
   return { w: Math.round(w), h: Math.round(h) };
 }
 function bookFit(root) {
@@ -443,7 +446,7 @@ function pdfSrc(url, page) {
    already loaded is ignored, so every turn re-creates the frame. */
 function bookFrameHtml(url, page, title) {
   return '<iframe class="pdf-frame" src="' + esc(pdfSrc(url, page)) + '" title="' +
-    esc(title || 'Book') + '" loading="eager" scrolling="no"></iframe>';
+    esc(title || 'Book') + '" loading="eager" scrolling="auto"></iframe>';
 }
 /* The reader itself — only injected when a book is actually opened. */
 function bookReaderHtml(url, opts) {
@@ -481,7 +484,6 @@ function bookReaderHtml(url, opts) {
       '<span class="muted small book-hint">' + esc(rangeNote) + '</span>' +
       '<button type="button" class="ghost small" data-book-full>Full page</button>' +
       '<button type="button" class="ghost small danger" data-book-close>Close</button>' +
-      '<a class="btn ghost small" href="' + esc(url) + '" target="_blank" rel="noopener">Open ↗</a>' +
     '</div></div>';
 }
 /* A book stays shut until someone clicks it, and can be limited to a page range
