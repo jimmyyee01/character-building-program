@@ -73,10 +73,13 @@ Checks that talk to a running backend (pass the base URL, default is Node on 300
 node tools/ui-live-check.js http://127.0.0.1:3000   # drives every renderer with real API data
                                                     # (also uploads a test PDF and reads its page count)
 node tools/pages-api-check.js http://127.0.0.1:3000 # chapter page ranges above 99 round-trip
+node tools/reader-browser-check.js http://127.0.0.1:3000 # the reader in a REAL browser
+                                                    # (headless Chrome/Edge: page turns must
+                                                    #  rebuild the frame, not just the fragment)
 ```
 
 Handy npm shortcuts: `npm run check:ui`, `npm run check:api`, `npm run check:api:php`,
-`npm run check:live`, `npm run check:pages`, `npm run check:keywords`.
+`npm run check:live`, `npm run check:pages`, `npm run check:keywords`, `npm run check:browser`.
 
 If you are updating an **existing PHP database**, run the migration once after
 pulling (it only adds what is missing — it never touches data):
@@ -120,7 +123,9 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
   previews show a small cover card ("Open book"), and only then does the reader
   start — one page at a time with page-turn arrows either side of the sheet,
   `←`/`→` keys, a page counter (`Page 3 of 12`) and a full-page mode, never a
-  long scrolling document.
+  long scrolling document. Every page is shown WHOLE inside the sheet (the
+  viewer fits the page, so the text may be smaller but nothing is cut off) and
+  the viewer's scrollbar strip is covered rather than cropped.
 - **Books & Chapters** — set chapters (title, content, page ranges) and enter
   the objective questions (question, options, correct answer). The page picker
   offers **every page of the book** (it reads the page count from the PDF linked

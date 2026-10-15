@@ -43,6 +43,23 @@ if (preg_match('#^t/[A-Za-z0-9-]+$#', $path)) {
 }
 if ($uri === '/favicon.ico') { http_response_code(204); return true; }
 
+/* anything else that lives in public/ — Apache serves that folder as the document
+   root in production, so the dev server must do the same (uploads, extra pages) */
+$mimes = ['html' => 'text/html', 'css' => 'text/css', 'js' => 'text/javascript',
+    'json' => 'application/json', 'png' => 'image/png', 'jpg' => 'image/jpeg',
+    'jpeg' => 'image/jpeg', 'gif' => 'image/gif', 'svg' => 'image/svg+xml',
+    'ico' => 'image/x-icon', 'webp' => 'image/webp', 'pdf' => 'application/pdf',
+    'txt' => 'text/plain', 'mp4' => 'video/mp4', 'webm' => 'video/webm',
+    'woff' => 'font/woff', 'woff2' => 'font/woff2', 'csv' => 'text/csv'];
+$candidate = $root . '/public' . $uri;
+if (is_file($candidate)) {
+    $ext = strtolower(pathinfo($candidate, PATHINFO_EXTENSION));
+    header('Content-Type: ' . ($mimes[$ext] ?? 'application/octet-stream'));
+    header('Content-Length: ' . filesize($candidate));
+    readfile($candidate);
+    return true;
+}
+
 /* uploads and anything else that really exists */
 if (is_file($root . $uri)) { return false; }
 

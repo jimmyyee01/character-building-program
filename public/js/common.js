@@ -327,7 +327,9 @@ if (typeof document !== 'undefined' && document.addEventListener) {
    scroll and no viewer chrome. Prev/Next buttons (or the arrow keys, or the
    arrows either side of the page) flip from page to page. */
 function pdfSrc(url, page) {
-  return url + '#page=' + page + '&view=Fit&toolbar=0&navpanes=0&pagemode=none';
+  /* zoom=page-fit AND view=Fit: every viewer shows the WHOLE page inside the
+     frame (the text may be smaller, but nothing is cut off) */
+  return url + '#page=' + page + '&view=Fit&zoom=page-fit&toolbar=0&navpanes=0&pagemode=none';
 }
 /* One sheet of the book. A fresh element per page is what actually moves the
    browser's PDF viewer: changing only the #page= fragment of a frame that is
@@ -355,7 +357,8 @@ function bookReaderHtml(url, opts) {
       '<div class="book-page">' +
         /* the sheet is clipped and covered by a shield, so the viewer inside can
            only be moved a page at a time (wheel / swipe / arrows), never scrolled */
-        '<div class="book-frame-wrap">' + bookFrameHtml(url, from, label) + '</div>' +
+        '<div class="book-frame-wrap">' + bookFrameHtml(url, from, label) +
+          '<span class="book-scroll-cover" aria-hidden="true"></span></div>' +
         '<div class="book-shield" data-book-shield aria-hidden="true"' +
           ' title="Scroll or swipe to turn the page"></div>' +
       '</div>' +

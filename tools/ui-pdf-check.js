@@ -163,11 +163,12 @@ check('Close shuts the book and leaves the cover behind',
   })());
 
 /* the book turns pages instead of scrolling */
-check('reader markup clips the sheet and shields it (no scrolling)',
+check('reader markup shields the sheet and hides the scrollbar without cropping',
   (function () {
     const r = bookReaderHtml('/uploads/book.pdf', {});
     return r.indexOf('class="book-frame-wrap"') !== -1 && r.indexOf('data-book-shield') !== -1 &&
-      r.indexOf('scrolling="no"') !== -1 && r.indexOf('never scrolls') !== -1;
+      r.indexOf('scrolling="no"') !== -1 && r.indexOf('never scrolls') !== -1 &&
+      r.indexOf('book-scroll-cover') !== -1 && r.indexOf('zoom=page-fit') !== -1;
   })());
 check('wheel over the sheet turns the page and is prevented from scrolling',
   (function () {
@@ -216,18 +217,20 @@ check('a swipe left/right turns to the next/previous page',
     doc.querySelector = () => null;
     return next === 2 && prev === 1;
   })());
-check('the sheet crops the viewer scrollbar and animates the turn',
+check('the whole page fits the sheet: no crop, scrollbar covered, turn animated',
   (function () {
     const css = fs.readFileSync(dir + 'css/style.css', 'utf8');
-    return /\.book-frame-wrap \{[^}]*overflow: hidden/.test(css) &&
-      /\.book-frame-wrap \.pdf-frame \{ width: calc\(100% \+ 20px\); height: calc\(100% \+ 20px\); \}/.test(css) &&
+    return /\.book-frame-wrap \.pdf-frame \{ width: 100%; height: 100%; \}/.test(css) &&
+      !/calc\(100% \+ 20px\)/.test(css) &&
+      /\.book-scroll-cover \{[\s\S]{0,160}?width: 18px;/.test(css) &&
+      /\.book-page \{ position: relative; aspect-ratio: 1 \/ 1\.414; \}/.test(css) &&
       /\.book-shield \{ position: absolute; inset: 0; z-index: 3/.test(css) &&
       /@keyframes bookTurn/.test(css);
   })());
 
 /* -------------------------------------------------------- paging logic ---- */
-check('pdfSrc builds the single-page fragment',
-  pdfSrc('/x.pdf', 7) === '/x.pdf#page=7&view=Fit&toolbar=0&navpanes=0&pagemode=none');
+check('pdfSrc asks every viewer for the WHOLE page (never cropped)',
+  pdfSrc('/x.pdf', 7) === '/x.pdf#page=7&view=Fit&zoom=page-fit&toolbar=0&navpanes=0&pagemode=none');
 function fakeRoot(total) {
   const iframe = makeEl('iframe');
   const wrap = makeEl('div');

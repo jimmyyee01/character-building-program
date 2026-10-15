@@ -389,11 +389,17 @@ tr:hover td { background: #f8faff; }
   display: block;
   border: 0; border-radius: 0; margin: 0;
 }
-/* the sheet clips the viewer and covers it with a shield, so the only way to
-   move through the book is a page turn — never a scroll */
-.book-page { position: relative; }
+/* the sheet holds the WHOLE page (never cropped): the frame is exactly the
+   sheet, and the viewer's scrollbar strip is covered by a small panel instead
+   of being cropped away with part of the page */
+.book-page { position: relative; aspect-ratio: 1 / 1.414; }
 .book-frame-wrap { position: absolute; inset: 0; overflow: hidden; background: #fff; }
-.book-frame-wrap .pdf-frame { width: calc(100% + 20px); height: calc(100% + 20px); }
+.book-frame-wrap .pdf-frame { width: 100%; height: 100%; }
+.book-scroll-cover {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 18px;
+  background: #fff; border-left: 1px solid var(--line);
+  z-index: 2; pointer-events: none;
+}
 .book-shield { position: absolute; inset: 0; z-index: 3; cursor: ew-resize; }
 .book-page.turning { animation: bookTurn .2s ease; }
 /* the chapter's own pages, opened automatically when the chapter is clicked */
