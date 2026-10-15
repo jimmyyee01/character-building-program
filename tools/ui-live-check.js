@@ -201,6 +201,42 @@ function dirty(label, html) {
     check('uploaded test book cleaned up', rm.ok || rm.error !== undefined);
   }
 
+  /* -------------------------------------------- super analytics render --- */
+  const an = await api('/super/analytics', sup);
+  check('analytics payload for the renderers', an.ok && Array.isArray(an.portals) && Array.isArray(an.modules));
+  if (an.ok) {
+    dirty('analytics filters', run(superCtx, 'analyticsFiltersHtml', [an]));
+    dirty('analytics KPI cards', run(superCtx, 'analyticsKpisHtml', [an]));
+    const charts = run(superCtx, 'analyticsChartsHtml', [an]);
+    dirty('analytics charts', charts);
+    check('analytics draws many charts', (charts.match(/<svg|class="bars"/g) || []).length >= 8,
+      'charts=' + (charts.match(/<svg|class="bars"/g) || []).length);
+    dirty('accounts table', run(superCtx, 'accountsTableHtml', [an.accounts || []]));
+    dirty('learners table', run(superCtx, 'learnersTableHtml', [an.learners || []]));
+    dirty('module/book/chapter analysis', run(superCtx, 'analyticsModulesCard', [an]));
+    check('module analysis reaches chapter level',
+      run(superCtx, 'analyticsModulesCard', [an]).indexOf('Key words') !== -1 &&
+      run(superCtx, 'analyticsModulesCard', [an]).indexOf('Accuracy') !== -1);
+  }
+
+  /* -------------------------------------------- account analytics render -- */
+  const aa = await api('/admin/analytics', admin);
+  check('account analytics payload for the renderers', aa.ok && Array.isArray(aa.accounts) && Array.isArray(aa.flagged));
+  if (aa.ok) {
+    dirty('account analytics filters', run(adminCtx, 'astatFiltersHtml', [aa]));
+    dirty('account analytics KPI cards', run(adminCtx, 'astatKpisHtml', [aa]));
+    const ach = run(adminCtx, 'astatChartsHtml', [aa]);
+    dirty('account analytics charts', ach);
+    check('account analytics draws many charts', (ach.match(/<svg|class="bars"/g) || []).length >= 7,
+      'charts=' + (ach.match(/<svg|class="bars"/g) || []).length);
+    dirty('account individuals table', run(adminCtx, 'astatLearnersHtml', [aa]));
+    dirty('account module/book/chapter analysis', run(adminCtx, 'astatModulesHtml', [aa]));
+    dirty('account copy flags', run(adminCtx, 'astatFlagsHtml', [aa]));
+    check('account scope never leaves this account',
+      (aa.filters.tenants || []).length === 1 && (aa.accounts || []).length === 1,
+      JSON.stringify((aa.accounts || []).map(a => a.name)));
+  }
+
   console.log(bad ? '\n' + bad + ' FAILED' : '\nLIVE RENDER OK');
   process.exit(bad ? 1 : 0);
 })().catch(function (e) { console.log('FATAL ' + e.message); process.exit(1); });

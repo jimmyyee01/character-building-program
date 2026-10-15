@@ -165,6 +165,32 @@ async function part2(r, tok, check) {
   check('graduate book payload unlocks the full book', gradBook.data.pdfUnlocked === true,
     JSON.stringify(gradBook.data.pdfUnlocked));
   await call('/library/' + lockId, { method: 'DELETE' }, supLogin.data.token);
+
+  /* ---- super analytics: every level of the picture ---- */
+  r = await call('/super/analytics', null, supLogin.data.token);
+  check('GET /super/analytics (super admin)', r.ok && !!r.data.impact && Array.isArray(r.data.portals), 'status ' + r.status);
+  check('analytics carries portals, accounts, modules, books, chapters, learners and activity',
+    (r.data.portals || []).length > 0 && (r.data.accounts || []).length > 0 &&
+    (r.data.modules || []).length > 0 && (((r.data.modules || [])[0].books || [])[0] || {}).chapters &&
+    ((r.data.modules || [])[0].books[0].chapters || []).length > 0 &&
+    (r.data.learners || []).length > 0 && (r.data.activity || []).length >= 4,
+    JSON.stringify(r.data.totals || {}));
+  check('analytics totals count every level of the exercise',
+    r.data.totals.chapters >= 20 && r.data.totals.books >= 10 && r.data.totals.objectives >= 20 &&
+    r.data.totals.participants >= 1, JSON.stringify(r.data.totals));
+  check('analytics impact indices are present',
+    typeof r.data.impact.involvementRate === 'number' && typeof r.data.impact.completionRate === 'number' &&
+    typeof r.data.impact.integrity === 'number' && 'keywordCoverage' in r.data.impact &&
+    'objectiveAccuracy' in r.data.impact, JSON.stringify(r.data.impact));
+  r = await call('/super/analytics?portalId=prt_schools&weeks=4', null, supLogin.data.token);
+  check('analytics filters by portal and period',
+    r.ok && (r.data.portals || []).length === 1 && (r.data.activity || []).length === 4 &&
+    r.data.scope.weeks === 4, JSON.stringify(r.data.scope));
+  r = await call('/super/analytics?tenantId=ten_greenfield', null, supLogin.data.token);
+  check('analytics filters by account', r.ok && (r.data.accounts || []).length === 1,
+    JSON.stringify((r.data.accounts || []).map(function (a) { return a.name; })));
+  r = await call('/super/analytics', null, tok.schools);
+  check('analytics is super-admin only (403 for an account admin)', r.status === 403, 'status ' + r.status);
   r = await call('/modules', null, tok.schools);
   check('GET /modules', r.ok && (r.data.modules || []).length >= 3, 'count ' + (r.data.modules || []).length);
   r = await call('/library', null, tok.schools);

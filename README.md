@@ -76,10 +76,14 @@ node tools/pages-api-check.js http://127.0.0.1:3000 # chapter page ranges above 
 node tools/reader-browser-check.js http://127.0.0.1:3000 # the reader in a REAL browser
                                                     # (headless Chrome/Edge: page turns must
                                                     #  rebuild the frame, not just the fragment)
+node tools/analytics-api-check.js http://127.0.0.1:3000 # analytics scope: each account sees
+                                                    # only itself, supervisors only their
+                                                    # members, copy flags name both people
 ```
 
 Handy npm shortcuts: `npm run check:ui`, `npm run check:api`, `npm run check:api:php`,
-`npm run check:live`, `npm run check:pages`, `npm run check:keywords`, `npm run check:browser`.
+`npm run check:live`, `npm run check:pages`, `npm run check:keywords`, `npm run check:browser`,
+`npm run check:analytics`.
 
 If you are updating an **existing PHP database**, run the migration once after
 pulling (it only adds what is missing — it never touches data):
@@ -138,7 +142,18 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
   how many it uses, and the score, the words used and the words still missing
   are shown to the learner and to the office in the progress report.
 - **Users / Reports / Settings** — all users across all tenants, all
-  submissions with copy-similarity flags, program name/logo, letter & letter
+  submissions with copy-similarity flags (each flag names the learner **and the
+  person whose work it matched**), program name/logo, letter & letter
+- **Analytics** — the whole picture in one place: impact indices (involvement,
+  completion, certificates, average progress, key-word coverage, objective
+  accuracy, original work, activity in the last 14 days), graphs of weekly
+  activity, new learners, per-portal and per-account performance, progress
+  distribution, module funnel and per-chapter completion, plus tables for
+  accounts, modules → books → chapters and every individual. Filters for portal,
+  account, module and period; every table exports to print/PDF/Excel/Word.
+  Each **account admin has the same Analytics view limited to their own account**
+  (a supervisor sees only the members they look after) — never another account's
+  data, and every copy flag is shown together with the person it is connected to.
   video, credentials.
 
 ### School / Organization admin (`/admin`, also used by supervisors)

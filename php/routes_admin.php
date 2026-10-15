@@ -67,7 +67,8 @@ function admin_submissions(array $user, array $query): array {
             'score'=>$r['score']!==null?(int)$r['score']:null,
             'total'=>$r['total']!==null?(int)$r['total']:null,
             'flagged'=>(bool)($r['flagged'] ?? false),'similarity'=>(int)($r['similarity'] ?? 0),
-            'userName'=>$r['un'],'userRole'=>$r['urole'],'chapter'=>$r['ct'],'book'=>$r['bt'],
+            'matchedWith'=>copy_match($r), 'matchedName'=>copy_match($r)['name'] ?? null,
+        'userName'=>$r['un'],'userRole'=>$r['urole'],'chapter'=>$r['ct'],'book'=>$r['bt'],
             'tenantId'=>$r['tenant_id'],'userId'=>$r['user_id'],
             'chapterId'=>$r['chapter_id'],'bookId'=>$r['book_id'],'moduleId'=>$r['module_id']];
     }
@@ -370,6 +371,432 @@ function r_super_users_create(array $user, array $body, array $params, ?string $
     $names = sup_names_for([$row]);
     return ['user' => admin_user_map($row, $names)];
 }
+/* ------------------------------------------- super analytics -------------- */
+/* The same picture as the Node build: impact per portal, account, module, book,
+   chapter and individual, with the weekly activity behind it. */
+function a_weeks(int $weeks): array {
+    $out = []; $now = time();
+    for ($i = $weeks - 1; $i >= 0; $i--) {
+        $end = $now - $i * 7 * 86400;
+        $out[] = ['start' => $end - 7 * 86400, 'end' => $end, 'label' => $i === 0 ? 'now' : '-' . $i . 'w',
+            'submissions' => 0, 'certificates' => 0, 'newUsers' => 0, 'active' => []];
+    }
+    return $out;
+}
+function a_bucket(array $buckets, ?string $ts): int {
+    $t = $ts ? strtotime($ts) : 0;
+    if (!$t) return -1;
+    foreach ($buckets as $i => $b) {
+        if ($t > $b['start'] && $t <= $b['end']) return $i;
+    }
+    return -1;
+}
+function a_pct(int $part, int $whole): int { return $whole ? (int)round(100 * $part / $whole) : 0; }
+function a_mean(array $nums): ?int {
+    $nums = array_values(array_filter($nums, fn($n) => $n !== null && $n !== ''));
+    return $nums ? (int)round(array_sum($nums) / count($nums)) : null;
+}
+function a_round2(float $n): float { return round($n, 2); }
+/* The other person's work a flagged submission matched (>= 75% overlap). */
+function copy_match(?array $sub): ?array {
+    if (!$sub || empty($sub['flagged']) || empty($sub['text'])) return null;
+    $words = array_unique(normalize_words((string)$sub['text']));
+    $pdo = db();
+    $sql = 'SELECT s.*, u.full_name, u.class_name, u.student_number FROM submissions s
+            JOIN users u ON u.id = s.user_id
+            WHERE s.user_id <> ? AND s.`text` IS NOT NULL AND s.type = ?';
+    $args = [$sub['user_id'], $sub['type']];
+    foreach (['chapter_id', 'book_id', 'module_id', 'index'] as $col) {
+        if (($sub[$col] ?? null) === null) $sql .= " AND s.`$col` IS NULL";
+        else { $sql .= " AND s.`$col` = ?"; $args[] = $sub[$col]; }
+    }
+    $st = $pdo->prepare($sql);
+    $st->execute($args);
+    $best = null;
+    foreach ($st->fetchAll() as $row) {
+        $sim = (int)round(100 * jaccard($words, array_unique(normalize_words((string)$row['text']))));
+        if ($sim >= 75 && (!$best || $sim > $best['similarity'])) {
+            $best = ['submissionId' => $row['id'], 'userId' => $row['user_id'],
+                'name' => $row['full_name'], 'className' => $row['class_name'],
+                'studentNumber' => $row['student_number'], 'similarity' => $sim,
+                'createdAt' => iso($row['created_at'])];
+        }
+    }
+    return $best;
+}
+
+function analytics_payload(array $scope): array {
+    $pdo = db();
+    $weeks = max(4, min(52, (int)($scope['weeks'] ?? 12)));
+    $fPortal = $scope['portalId'] ?? null;
+    $fTenant = $scope['tenantId'] ?? null;
+    $fModule = $scope['moduleId'] ?? null;
+    $onlyUserIds = $scope['userIds'] ?? null;
+    $inOnly = fn($uid) => $onlyUserIds === null || in_array($uid, $onlyUserIds, true);
+
+    $portals = $scope['portals'] ?? $pdo->query('SELECT * FROM portals ORDER BY name')->fetchAll();
+    $portalById = [];
+    foreach ($pdo->query('SELECT * FROM portals')->fetchAll() as $p) $portalById[$p['id']] = $p;
+    $tenants = $scope['tenants'] ?? $pdo->query('SELECT * FROM tenants ORDER BY name')->fetchAll();
+    if (!isset($scope['tenants'])) {
+        $tenants = array_values(array_filter($tenants, fn($t) =>
+            (!$fPortal || $t['portal_id'] === $fPortal) && (!$fTenant || $t['id'] === $fTenant)));
+    }
+    if ($fPortal && !isset($scope['portals'])) {
+        $portals = array_values(array_filter($portals, fn($p) => $p['id'] === $fPortal));
+    }
+    $tIds = array_map(fn($t) => $t['id'], $tenants);
+    $inT = fn($id) => in_array($id, $tIds, true);
+    $modules = all_modules();
+    if ($fModule) $modules = array_values(array_filter($modules, fn($m) => $m['id'] === $fModule));
+    $mIds = array_map(fn($m) => $m['id'], $modules);
+    $inM = fn($id) => in_array($id, $mIds, true);
+
+    global $PARTICIPANTS;
+    $allUsers = $pdo->query('SELECT * FROM users')->fetchAll();
+    $participants = array_values(array_filter($allUsers, fn($u) => in_array($u['role'], $PARTICIPANTS, true) && $inT($u['tenant_id']) && $inOnly($u['id'])));
+    $staff = array_values(array_filter($allUsers, fn($u) => in_array($u['role'], ['super','tenant_admin','supervisor'], true) && $inT($u['tenant_id'])));
+
+    $allSubs = $pdo->query('SELECT * FROM submissions ORDER BY created_at ASC')->fetchAll();
+    $subs = array_values(array_filter($allSubs, fn($s) => $inT($s['tenant_id']) && (!$fModule || $inM($s['module_id'])) && $inOnly($s['user_id'])));
+    $allCerts = $pdo->query('SELECT * FROM certificates')->fetchAll();
+    $certs = array_values(array_filter($allCerts, fn($c) => $inT($c['tenant_id']) && (!$fModule || $inM($c['module_id'])) && $inOnly($c['user_id'])));
+
+    /* per learner: progress, completion, activity */
+    $subsByUser = []; $certsByUser = [];
+    foreach ($subs as $s) $subsByUser[$s['user_id']][] = $s;
+    foreach ($certs as $c) $certsByUser[$c['user_id']][] = $c;
+    $perf = [];
+    foreach ($participants as $u) {
+        $st = array_values(array_filter(module_statuses(['id' => $u['id'], 'tenant_id' => $u['tenant_id'], 'role' => $u['role'],
+            'full_name' => $u['full_name'], 'class_name' => $u['class_name'], 'student_number' => $u['student_number']]),
+            fn($m) => !$fModule || $inM($m['id'])));
+        $done = count(array_filter($st, fn($m) => $m['status'] === 'completed'));
+        $perf[$u['id']] = ['statuses' => $st, 'completed' => $done, 'modules' => count($st),
+            'progress' => a_mean(array_map(fn($m) => (int)$m['progress']['percent'], $st))];
+    }
+
+    $flaggedCount = count(array_filter($subs, fn($s) => !empty($s['flagged'])));
+    $typedScores = [];
+    foreach ($subs as $s) { $a = submission_assessment($s); if ($a && $a['keywordScore'] !== null) $typedScores[] = $a['keywordScore']; }
+    $objRates = [];
+    foreach ($subs as $s) {
+        if (($s['type'] ?? '') === 'objectives' && (int)($s['total'] ?? 0) > 0) {
+            $objRates[] = (int)round(100 * (int)$s['score'] / (int)$s['total']);
+        }
+    }
+    $recentCut = time() - 14 * 86400;
+    $involved = array_values(array_filter($participants, fn($u) => !empty($subsByUser[$u['id']])));
+    $finished = [];
+    foreach ($participants as $u) {
+        $p = $perf[$u['id']];
+        if ($p['modules'] > 0 && $p['completed'] === $p['modules']) $finished[] = $u['id'];
+    }
+    $activeRecently = array_values(array_filter($participants, function ($u) use ($subsByUser, $recentCut) {
+        foreach ($subsByUser[$u['id']] ?? [] as $s) if (strtotime((string)$s['created_at']) > $recentCut) return true;
+        return false;
+    }));
+
+    /* weekly activity */
+    $buckets = a_weeks($weeks);
+    foreach ($subs as $s) {
+        $i = a_bucket($buckets, $s['created_at'] ?? null);
+        if ($i === -1) continue;
+        $buckets[$i]['submissions']++;
+        if (!in_array($s['user_id'], $buckets[$i]['active'], true)) $buckets[$i]['active'][] = $s['user_id'];
+    }
+    foreach ($certs as $c) {
+        $i = a_bucket($buckets, $c['issued_at'] ?? null);
+        if ($i !== -1) $buckets[$i]['certificates']++;
+    }
+    foreach ($participants as $u) {
+        $i = a_bucket($buckets, $u['created_at'] ?? null);
+        if ($i !== -1) $buckets[$i]['newUsers']++;
+    }
+    $nPart = count($participants);
+    $impact = [
+        'participants' => $nPart, 'staff' => count($staff),
+        'involved' => count($involved), 'involvementRate' => a_pct(count($involved), $nPart),
+        'finished' => count($finished), 'completionRate' => a_pct(count($finished), $nPart),
+        'certificates' => count($certs),
+        'certificatesPerLearner' => $nPart ? a_round2(count($certs) / $nPart) : 0,
+        'avgProgress' => a_mean(array_map(fn($p) => $p['progress'], $perf)),
+        'keywordCoverage' => a_mean($typedScores),
+        'objectiveAccuracy' => a_mean($objRates),
+        'integrity' => a_pct(count($subs) - $flaggedCount, count($subs)),
+        'flaggedRate' => a_pct($flaggedCount, count($subs)),
+        'activeShare' => a_pct(count($activeRecently), $nPart),
+        'submissionsPerLearner' => $nPart ? a_round2(count($subs) / $nPart) : 0,
+        'chaptersDone' => count(array_filter($subs, fn($s) => ($s['type'] ?? '') === 'chapter_summary')),
+        'objectivesAnswered' => count($objRates)
+    ];
+
+    /* ---- per portal ---------------------------------------------------- */
+    $portalStats = [];
+    foreach ($portals as $p) {
+        $pIds = array_map(fn($t) => $t['id'], array_filter($tenants, fn($t) => $t['portal_id'] === $p['id']));
+        $ps = array_values(array_filter($participants, fn($u) => in_array($u['tenant_id'], $pIds, true)));
+        $psubs = array_values(array_filter($subs, fn($s) => in_array($s['tenant_id'], $pIds, true)));
+        $pcerts = array_values(array_filter($certs, fn($c) => in_array($c['tenant_id'], $pIds, true)));
+        $pfin = 0;
+        foreach ($ps as $u) { $q = $perf[$u['id']]; if ($q['modules'] > 0 && $q['completed'] === $q['modules']) $pfin++; }
+        $pflag = count(array_filter($psubs, fn($s) => !empty($s['flagged'])));
+        $pkw = []; $pobj = [];
+        foreach ($psubs as $s) {
+            $a = submission_assessment($s);
+            if ($a && $a['keywordScore'] !== null) $pkw[] = $a['keywordScore'];
+            if (($s['type'] ?? '') === 'objectives' && (int)($s['total'] ?? 0) > 0) $pobj[] = (int)round(100 * (int)$s['score'] / (int)$s['total']);
+        }
+        $pInvolved = count(array_filter($ps, fn($u) => !empty($subsByUser[$u['id']])));
+        $portalStats[] = ['id' => $p['id'], 'key' => $p['key'], 'name' => $p['name'], 'type' => $p['type'],
+            'enabled' => (bool)($p['enabled'] ?? true), 'accounts' => count($pIds), 'participants' => count($ps),
+            'involved' => $pInvolved, 'submissions' => count($psubs), 'certificates' => count($pcerts),
+            'flagged' => $pflag, 'flaggedRate' => a_pct($pflag, count($psubs)),
+            'avgProgress' => a_mean(array_map(fn($u) => $perf[$u['id']]['progress'], $ps)),
+            'completionRate' => a_pct($pfin, count($ps)), 'finished' => $pfin,
+            'keywordCoverage' => a_mean($pkw), 'objectiveAccuracy' => a_mean($pobj),
+            'perLearner' => count($ps) ? a_round2(count($psubs) / count($ps)) : 0];
+    }
+
+    /* ---- per account --------------------------------------------------- */
+    $accountsOut = [];
+    foreach ($tenants as $t) {
+        $us = array_values(array_filter($participants, fn($u) => $u['tenant_id'] === $t['id']));
+        $asubs = array_values(array_filter($subs, fn($s) => $s['tenant_id'] === $t['id']));
+        $acerts = array_values(array_filter($certs, fn($c) => $c['tenant_id'] === $t['id']));
+        $afin = 0;
+        foreach ($us as $u) { $q = $perf[$u['id']]; if ($q['modules'] > 0 && $q['completed'] === $q['modules']) $afin++; }
+        $aflag = count(array_filter($asubs, fn($s) => !empty($s['flagged'])));
+        $byType = [];
+        foreach ($asubs as $s) $byType[$s['type']] = ($byType[$s['type']] ?? 0) + 1;
+        $akw = []; $aobj = []; $last = null;
+        foreach ($asubs as $s) {
+            $a = submission_assessment($s);
+            if ($a && $a['keywordScore'] !== null) $akw[] = $a['keywordScore'];
+            if (($s['type'] ?? '') === 'objectives' && (int)($s['total'] ?? 0) > 0) $aobj[] = (int)round(100 * (int)$s['score'] / (int)$s['total']);
+            if ($last === null || strtotime((string)$s['created_at']) > strtotime($last)) $last = $s['created_at'];
+        }
+        $modRows = [];
+        foreach ($modules as $m) {
+            $ms = array_values(array_filter($asubs, fn($s) => $s['module_id'] === $m['id']));
+            $mdone = 0;
+            foreach ($us as $u) {
+                foreach ($perf[$u['id']]['statuses'] as $st) {
+                    if ($st['id'] === $m['id'] && $st['status'] === 'completed') $mdone++;
+                }
+            }
+            $mstart = count(array_filter($us, fn($u) => count(array_filter($ms, fn($s) => $s['user_id'] === $u['id'])) > 0));
+            $modRows[] = ['id' => $m['id'], 'title' => $m['title'], 'mode' => $m['mode'],
+                'submissions' => count($ms), 'started' => $mstart, 'completed' => $mdone,
+                'completionRate' => a_pct($mdone, count($us))];
+        }
+        $accountsOut[] = ['id' => $t['id'], 'name' => $t['name'], 'slug' => $t['slug'], 'type' => $t['type'],
+            'portalId' => $t['portal_id'], 'portalName' => $portalById[$t['portal_id']]['name'] ?? null,
+            'active' => (bool)($t['active'] ?? true),
+            'staff' => count(array_filter($staff, fn($u) => $u['tenant_id'] === $t['id'])),
+            'participants' => count($us),
+            'involved' => count(array_filter($us, fn($u) => !empty($subsByUser[$u['id']]))),
+            'submissions' => count($asubs), 'byType' => $byType, 'certificates' => count($acerts),
+            'flagged' => $aflag, 'flaggedRate' => a_pct($aflag, count($asubs)),
+            'avgProgress' => a_mean(array_map(fn($u) => $perf[$u['id']]['progress'], $us)),
+            'completionRate' => a_pct($afin, count($us)), 'finished' => $afin,
+            'keywordCoverage' => a_mean($akw), 'objectiveAccuracy' => a_mean($aobj),
+            'lastActivity' => iso($last),
+            'chaptersDone' => count(array_filter($asubs, fn($s) => ($s['type'] ?? '') === 'chapter_summary')),
+            'objectivesAnswered' => count(array_filter($asubs, fn($s) => ($s['type'] ?? '') === 'objectives')),
+            'modules' => $modRows];
+    }
+
+    /* ---- per module / book / chapter (finest grain) -------------------- */
+    $moduleStats = [];
+    foreach ($modules as $m) {
+        $msubs = array_values(array_filter($subs, fn($s) => $s['module_id'] === $m['id']));
+        $bStmt = $pdo->prepare('SELECT * FROM books WHERE module_id=? ORDER BY `order` ASC, id ASC');
+        $bStmt->execute([$m['id']]);
+        $booksOut = [];
+        foreach ($bStmt->fetchAll() as $brow) {
+            $b = n_book($brow);
+            $chOut = [];
+            foreach (chapters_of($b['id'], null) as $c) {
+                $csubs = array_values(array_filter($msubs, fn($s) => $s['chapter_id'] === $c['id']));
+                $ckw = []; $cobj = [];
+                foreach ($csubs as $s) {
+                    $a = submission_assessment($s);
+                    if ($a && $a['keywordScore'] !== null) $ckw[] = $a['keywordScore'];
+                    if (($s['type'] ?? '') === 'objectives' && (int)($s['total'] ?? 0) > 0) $cobj[] = (int)round(100 * (int)$s['score'] / (int)$s['total']);
+                }
+                $chOut[] = ['id' => $c['id'], 'title' => $c['title'],
+                    'pageStart' => $c['pageStart'], 'pageEnd' => $c['pageEnd'],
+                    'submissions' => count($csubs),
+                    'learners' => count(array_unique(array_map(fn($s) => $s['user_id'], $csubs))),
+                    'completed' => count(array_unique(array_map(fn($s) => $s['user_id'],
+                        array_filter($csubs, fn($s) => ($s['type'] ?? '') === 'chapter_summary')))),
+                    'keywordCoverage' => a_mean($ckw),
+                    'objectivesAnswered' => count($cobj), 'accuracy' => a_mean($cobj),
+                    'flagged' => count(array_filter($csubs, fn($s) => !empty($s['flagged'])))];
+            }
+            $booksOut[] = ['id' => $b['id'], 'title' => $b['title'], 'order' => $b['order'] ?? null,
+                'scope' => $b['scope'] ?? 'global',
+                'submissions' => count(array_filter($msubs, fn($s) => $s['book_id'] === $b['id'])),
+                'chapters' => $chOut];
+        }
+        $mdone = 0; $mstart = 0; $mprog = [];
+        foreach ($participants as $u) {
+            $st = null;
+            foreach ($perf[$u['id']]['statuses'] as $s2) if ($s2['id'] === $m['id']) { $st = $s2; break; }
+            $mprog[] = $st ? (int)$st['progress']['percent'] : 0;
+            if ($st && $st['status'] === 'completed') $mdone++;
+            if (count(array_filter($msubs, fn($x) => $x['user_id'] === $u['id'])) > 0) $mstart++;
+        }
+        $mkw = []; $mobj = [];
+        foreach ($msubs as $s) {
+            $a = submission_assessment($s);
+            if ($a && $a['keywordScore'] !== null) $mkw[] = $a['keywordScore'];
+            if (($s['type'] ?? '') === 'objectives' && (int)($s['total'] ?? 0) > 0) $mobj[] = (int)round(100 * (int)$s['score'] / (int)$s['total']);
+        }
+        $moduleStats[] = ['id' => $m['id'], 'order' => $m['order'], 'title' => $m['title'], 'mode' => $m['mode'],
+            'certificateName' => $m['certificateName'], 'participants' => count($participants),
+            'started' => $mstart, 'completed' => $mdone,
+            'startedRate' => a_pct($mstart, count($participants)),
+            'completionRate' => a_pct($mdone, count($participants)),
+            'avgProgress' => a_mean($mprog) ?? 0,
+            'submissions' => count($msubs),
+            'flagged' => count(array_filter($msubs, fn($s) => !empty($s['flagged']))),
+            'keywordCoverage' => a_mean($mkw), 'objectiveAccuracy' => a_mean($mobj),
+            'books' => $booksOut];
+    }
+
+    /* ---- individuals --------------------------------------------------- */
+    $learnerRows = [];
+    foreach ($participants as $u) {
+        $mine = $subsByUser[$u['id']] ?? [];
+        $p = $perf[$u['id']];
+        $kw = []; $obj = []; $last = null;
+        foreach ($mine as $s) {
+            $a = submission_assessment($s);
+            if ($a && $a['keywordScore'] !== null) $kw[] = $a['keywordScore'];
+            if (($s['type'] ?? '') === 'objectives' && (int)($s['total'] ?? 0) > 0) $obj[] = (int)round(100 * (int)$s['score'] / (int)$s['total']);
+            if ($last === null || strtotime((string)$s['created_at']) > strtotime($last)) $last = $s['created_at'];
+        }
+        $t = null;
+        foreach ($tenants as $tt) if ($tt['id'] === $u['tenant_id']) { $t = $tt; break; }
+        $activeMod = null;
+        foreach ($p['statuses'] as $st) if ($st['status'] === 'active') { $activeMod = $st; break; }
+        $learnerRows[] = ['id' => $u['id'], 'name' => $u['full_name'], 'role' => $u['role'],
+            'className' => $u['class_name'], 'studentNumber' => $u['student_number'],
+            'account' => $t['name'] ?? null, 'accountId' => $u['tenant_id'],
+            'portal' => $t ? ($portalById[$t['portal_id']]['name'] ?? null) : null,
+            'progress' => $p['progress'] ?? 0, 'modulesCompleted' => $p['completed'], 'moduleCount' => $p['modules'],
+            'finished' => $p['modules'] > 0 && $p['completed'] === $p['modules'],
+            'level' => $activeMod ? $activeMod['title']
+                : (($p['modules'] > 0 && $p['completed'] === $p['modules']) ? 'All modules completed' : '—'),
+            'submissions' => count($mine), 'certificates' => count($certsByUser[$u['id']] ?? []),
+            'flagged' => count(array_filter($mine, fn($s) => !empty($s['flagged']))),
+            'keywordCoverage' => a_mean($kw), 'objectiveAccuracy' => a_mean($obj),
+            'lastActiveAt' => iso($last)];
+    }
+    usort($learnerRows, function ($a, $b) {
+        if ($b['progress'] !== $a['progress']) return $b['progress'] - $a['progress'];
+        if ($b['submissions'] !== $a['submissions']) return $b['submissions'] - $a['submissions'];
+        return strcmp((string)$a['name'], (string)$b['name']);
+    });
+
+    $activity = [];
+    foreach ($buckets as $b) {
+        $activity[] = ['label' => $b['label'], 'submissions' => $b['submissions'],
+            'certificates' => $b['certificates'], 'newUsers' => $b['newUsers'],
+            'activeLearners' => count($b['active'])];
+    }
+
+    /* every copy flag, and the person the work matched */
+    $flaggedOut = [];
+    foreach (array_slice(array_values(array_filter($subs, fn($s) => !empty($s['flagged']))), 0, 200) as $s) {
+        $m = copy_match($s);
+        $who = null;
+        foreach ($allUsers as $u2) if ($u2['id'] === $s['user_id']) { $who = $u2; break; }
+        $row = describe_sub(n_sub($s));
+        $row['userId'] = $s['user_id'];
+        $row['userName'] = $who['full_name'] ?? null;
+        $row['className'] = $who['class_name'] ?? null;
+        $row['matchedWith'] = $m;
+        $row['matchedName'] = $m['name'] ?? null;
+        $flaggedOut[] = $row;
+    }
+
+    $bookCount = 0; $chapterCount = 0; $objCount = 0;
+    foreach ($modules as $m) {
+        $bs = $pdo->prepare('SELECT id FROM books WHERE module_id=?'); $bs->execute([$m['id']]);
+        $bids = array_map(fn($r) => $r['id'], $bs->fetchAll());
+        $bookCount += count($bids);
+        foreach ($bids as $bid) {
+            $cs = $pdo->prepare('SELECT id FROM chapters WHERE book_id=?'); $cs->execute([$bid]);
+            foreach ($cs->fetchAll() as $c) {
+                $chapterCount++;
+                $os = $pdo->prepare('SELECT COUNT(*) FROM objectives WHERE chapter_id=?'); $os->execute([$c['id']]);
+                $objCount += (int)$os->fetchColumn();
+            }
+        }
+    }
+
+    return [
+        'ok' => true,
+        'generatedAt' => iso(now_dt()),
+        'scope' => ['portalId' => $fPortal, 'tenantId' => $fTenant, 'moduleId' => $fModule, 'weeks' => $weeks],
+        'filters' => [
+            'portals' => array_map(fn($p) => ['id' => $p['id'], 'name' => $p['name'], 'key' => $p['key']], $portals),
+            'tenants' => array_map(fn($t) => ['id' => $t['id'], 'name' => $t['name'], 'portalId' => $t['portal_id']], $tenants),
+            'modules' => array_map(fn($m) => ['id' => $m['id'], 'title' => $m['title'], 'mode' => $m['mode']], all_modules()),
+        ],
+        'totals' => ['portals' => count($portals), 'accounts' => count($tenants),
+            'participants' => count($participants), 'staff' => count($staff),
+            'submissions' => count($subs), 'certificates' => count($certs), 'flagged' => $flaggedCount,
+            'modules' => count($modules), 'books' => $bookCount, 'chapters' => $chapterCount, 'objectives' => $objCount],
+        'impact' => $impact,
+        'portals' => $portalStats,
+        'accounts' => $accountsOut,
+        'modules' => $moduleStats,
+        'learners' => array_slice($learnerRows, 0, 300),
+        'learnersTotal' => count($learnerRows),
+        'activity' => $activity,
+        'flagged' => $flaggedOut,
+    ];
+}
+
+/* ---- the two routes that use the payload ------------------------------- */
+function r_super_analytics(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super']);
+    return analytics_payload(['weeks' => (int)($query['weeks'] ?? 12),
+        'portalId' => $query['portalId'] ?? null,
+        'tenantId' => $query['tenantId'] ?? null,
+        'moduleId' => $query['moduleId'] ?? null]);
+}
+/* The same analysis for one account — never anything outside it. A supervisor
+   only ever sees the members they look after. */
+function r_admin_analytics(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super', 'tenant_admin', 'supervisor']);
+    $pdo = db();
+    $st = $pdo->prepare('SELECT * FROM tenants WHERE id=?'); $st->execute([$user['tenant_id']]);
+    $myTenants = $st->fetchAll();
+    $ps = $pdo->prepare('SELECT * FROM portals WHERE id IN (SELECT portal_id FROM tenants WHERE id=?)');
+    $ps->execute([$user['tenant_id']]);
+    $myPortals = $ps->fetchAll();
+    $scope = ['weeks' => (int)($query['weeks'] ?? 12),
+        'moduleId' => $query['moduleId'] ?? null,
+        'tenants' => $myTenants, 'portals' => $myPortals];
+    if ($user['role'] === 'supervisor') {
+        /* only the members this supervisor looks after (staff are not learners) */
+        $ms = $pdo->prepare('SELECT id FROM users WHERE supervisor_id=?'); $ms->execute([$user['id']]);
+        $scope['userIds'] = array_map(fn($r) => $r['id'], $ms->fetchAll());
+    } else {
+        $scope['tenantId'] = $user['tenant_id'];
+    }
+    $d = analytics_payload($scope);
+    $d['viewer'] = ['role' => $user['role'], 'tenantId' => $user['tenant_id'],
+        'tenantName' => $myTenants[0]['name'] ?? null,
+        'portalName' => $myPortals[0]['name'] ?? null];
+    return $d;
+}
+
 /* Progress report: how each learner uses the system, their level, ranked by
    how much of the programme they have covered (super/tenant admin/supervisor). */
 function r_reports_students(array $user, array $body, array $params, ?string $token, array $query): array {

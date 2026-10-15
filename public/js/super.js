@@ -76,7 +76,8 @@ function showApp() {
 const RENDERERS = {
   dashboard: renderDashboard, portals: renderPortals, accounts: renderAccounts,
   modules: renderModules, library: renderLibrary, books: renderBooks,
-  users: renderUsers, reports: renderReports, progress: renderProgress, settings: renderSettings
+  users: renderUsers, reports: renderReports, progress: renderProgress,
+  analytics: renderAnalytics, settings: renderSettings
 };
 
 function showView(name) {
@@ -175,8 +176,322 @@ async function renderDashboard() {
     '<th>Certificates</th><th>Flagged</th><th>Status</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
-/* ======================================================= student progress == */
+/* ==================================================== analytics & impact === */
+/* Reports the super admin asked for: performance of every portal, account and
+   individual, plus the statistical picture of the impact — down to module, book,
+   chapter and question level, with the weekly activity behind it. */
+const ANALYTICS = { data: null, portalId: '', tenantId: '', moduleId: '', weeks: 12 };
+
+function analyticsQuery() {
+  const q = [];
+  if (ANALYTICS.portalId) q.push('portalId=' + encodeURIComponent(ANALYTICS.portalId));
+  if (ANALYTICS.tenantId) q.push('tenantId=' + encodeURIComponent(ANALYTICS.tenantId));
+  if (ANALYTICS.moduleId) q.push('moduleId=' + encodeURIComponent(ANALYTICS.moduleId));
+  q.push('weeks=' + encodeURIComponent(ANALYTICS.weeks || 12));
+  return '?' + q.join('&');
+}
+function analyticsOption(value, label, selected) {
+  return '<option value="' + esc(value) + '"' + (String(value) === String(selected) ? ' selected' : '') +
+    '>' + esc(label) + '</option>';
+}
+function analyticsFiltersHtml(d) {
+  const f = d.filters || {};
+  const portals = f.portals || [];
+  const tenants = (f.tenants || []).filter(t => !ANALYTICS.portalId || String(t.portalId) === String(ANALYTICS.portalId));
+  const mods = f.modules || [];
+  const weekOpts = [4, 8, 12, 26, 52];
+  return '<div class="card"><div class="row" style="align-items:flex-end">' +
+    '<div><label>Portal</label><select id="anPortal">' + analyticsOption('', 'All portals', ANALYTICS.portalId) +
+      portals.map(p => analyticsOption(p.id, p.name, ANALYTICS.portalId)).join('') + '</select></div>' +
+    '<div><label>Account</label><select id="anTenant">' + analyticsOption('', 'All accounts', ANALYTICS.tenantId) +
+      tenants.map(t => analyticsOption(t.id, t.name, ANALYTICS.tenantId)).join('') + '</select></div>' +
+    '<div><label>Module</label><select id="anModule">' + analyticsOption('', 'All modules', ANALYTICS.moduleId) +
+      mods.map(m => analyticsOption(m.id, m.title, ANALYTICS.moduleId)).join('') + '</select></div>' +
+    '<div><label>Period</label><select id="anWeeks">' +
+      weekOpts.map(w => analyticsOption(w, 'last ' + w + ' weeks', ANALYTICS.weeks)).join('') + '</select></div>' +
+    '<div class="fixed" style="padding-bottom:10px">' +
+      '<button type="button" id="anApply">Apply</button> ' +
+      '<button type="button" class="ghost" id="anReset">Reset</button></div>' +
+  '</div>' +
+  '<p class="muted small" style="margin-bottom:0">Impact of the exercise across every portal, account, module, ' +
+    'book, chapter and learner. Generated ' + esc(fmtDate(d.generatedAt)) + '.</p></div>';
+}
+function kpi(label, value, tone, note) {
+  return '<div class="stat tone-' + tone + '"><div class="n">' + esc(String(value)) + '</div>' +
+    '<div class="l">' + esc(label) + '</div>' +
+    (note ? '<div class="small" style="opacity:.75;margin-top:2px">' + esc(note) + '</div>' : '') + '</div>';
+}
+function analyticsKpisHtml(d) {
+  const i = d.impact || {};
+  const t = d.totals || {};
+  return '<div class="grid cols-4">' +
+    kpi('Participants', i.participants == null ? 0 : i.participants, 'blue',
+      t.staff + ' staff in ' + t.accounts + ' accounts') +
+    kpi('Involvement', (i.involvementRate == null ? 0 : i.involvementRate) + '%', 'violet',
+      (i.involved || 0) + ' of ' + (i.participants || 0) + ' have submitted work') +
+    kpi('Completion', (i.completionRate == null ? 0 : i.completionRate) + '%', 'green',
+      (i.finished || 0) + ' finished every module') +
+    kpi('Certificates', i.certificates == null ? 0 : i.certificates, 'pink',
+      (i.certificatesPerLearner == null ? 0 : i.certificatesPerLearner) + ' per learner') +
+    kpi('Average progress', (i.avgProgress == null ? 0 : i.avgProgress) + '%', 'teal',
+      (i.submissionsPerLearner == null ? 0 : i.submissionsPerLearner) + ' submissions per learner') +
+    kpi('Key-word coverage', i.keywordCoverage == null ? '—' : i.keywordCoverage + '%', 'amber',
+      (i.chaptersDone || 0) + ' typed chapter answers') +
+    kpi('Objective accuracy', i.objectiveAccuracy == null ? '—' : i.objectiveAccuracy + '%', 'slate',
+      (i.objectivesAnswered || 0) + ' objectives answered') +
+    kpi('Original work', (i.integrity == null ? 100 : i.integrity) + '%', 'red',
+      (i.flaggedRate == null ? 0 : i.flaggedRate) + '% of submissions flagged') +
+  '</div>';
+}
+
 /* Same ranking as the account console, but across every account. */
+/* ==================================================== analytics charts ==== */
+function analyticsChartsHtml(d) {
+  const act = d.activity || [];
+  const portals = d.portals || [];
+  const accounts = (d.accounts || []).slice().sort((a, b) => b.submissions - a.submissions);
+  const learners = d.learners || [];
+  const i = d.impact || {};
+  const weeks = act.map(a => ({ label: a.label, value: a.submissions, value2: a.certificates }));
+  const newActive = act.map(a => ({ label: a.label, value: a.newUsers }));
+  const bands = [
+    { label: 'Finished all modules', value: learners.filter(l => l.finished).length, color: '#1f7a44' },
+    { label: '75% or more', value: learners.filter(l => !l.finished && l.progress >= 75).length, color: '#2f6fd0' },
+    { label: '25 – 74%', value: learners.filter(l => l.progress >= 25 && l.progress < 75).length, color: '#b45309' },
+    { label: 'Under 25%', value: learners.filter(l => l.progress < 25).length, color: '#c62828' }
+  ];
+  const modBars = [];
+  (d.modules || []).forEach(m => {
+    const short = String(m.title).replace(/^MODULE\s+\w+\s*[—-]\s*/i, '').slice(0, 14);
+    modBars.push({ label: short + ' started', value: m.started, color: '#2f6fd0' });
+    modBars.push({ label: short + ' completed', value: m.completed, color: '#1f7a44' });
+  });
+  const chapterItems = [];
+  const sel = ANALYTICS.moduleId ? (d.modules || []) : (d.modules || []).slice(0, 1);
+  sel.forEach(m => {
+    (m.books || []).forEach(b => {
+      (b.chapters || []).forEach(c => {
+        chapterItems.push({
+          label: String(c.title).replace(/^Chapter\s*\d+\s*[—-]\s*/i, '').slice(0, 18),
+          value: c.completed || 0
+        });
+      });
+    });
+  });
+  return '<div class="card"><h3>Graphical analysis</h3><div class="chart-grid">' +
+    '<div class="chart-box"><h4>Weekly activity</h4>' +
+      chartLine(weeks, { second: true, caption: 'Submissions (solid) and certificates (dashed)' }) + '</div>' +
+    '<div class="chart-box"><h4>New learners per week</h4>' + chartBars(newActive) + '</div>' +
+    '<div class="chart-box"><h4>Participants per portal</h4>' +
+      chartBarsH(portals.map(p => ({ label: p.name, value: p.participants, color: '#2f6fd0' }))) + '</div>' +
+    '<div class="chart-box"><h4>Completion per portal</h4>' +
+      chartBars(portals.map(p => ({ label: String(p.name).slice(0, 10), value: p.completionRate }))) +
+      chartBarsH(portals.map(p => ({ label: p.name, value: p.involved, color: '#6d3fd1' })),
+        { caption: 'Learners who have submitted work' }) + '</div>' +
+    '<div class="chart-box"><h4>Progress distribution</h4>' +
+      chartDonut(bands, { centerLabel: 'learners' }) + '</div>' +
+    '<div class="chart-box"><h4>Submissions per account</h4>' +
+      chartBarsH(accounts.slice(0, 10).map(a => ({ label: a.name, value: a.submissions, color: '#0f766e' }))) + '</div>' +
+    '<div class="chart-box"><h4>Key-word coverage per account</h4>' +
+      chartBarsH(accounts.map(a => ({ label: a.name, value: a.keywordCoverage == null ? 0 : a.keywordCoverage, color: '#b45309' }))) + '</div>' +
+    '<div class="chart-box"><h4>Copy check per account</h4>' +
+      chartBarsH(accounts.map(a => ({ label: a.name, value: a.flagged, color: '#c62828' }))) + '</div>' +
+    '<div class="chart-box"><h4>Module funnel</h4>' + chartBarsH(modBars) + '</div>' +
+    '<div class="chart-box"><h4>Chapter completions' + (ANALYTICS.moduleId ? '' : ' (first module)') + '</h4>' +
+      chartBarsH(chapterItems, { max: 14, caption: 'Learners who completed each chapter' }) + '</div>' +
+    '<div class="chart-box"><h4>Impact indices</h4>' +
+      chartProgress([
+        { label: 'Involvement', percent: i.involvementRate || 0, color: '#6d3fd1' },
+        { label: 'Completion', percent: i.completionRate || 0, color: '#1f7a44' },
+        { label: 'Active (14 days)', percent: i.activeShare || 0, color: '#2f6fd0' },
+        { label: 'Key words', percent: i.keywordCoverage || 0, color: '#b45309' },
+        { label: 'Objectives', percent: i.objectiveAccuracy || 0, color: '#475569' },
+        { label: 'Original work', percent: i.integrity == null ? 100 : i.integrity, color: '#b8217a' }
+      ]) + '</div>' +
+  '</div></div>';
+}
+
+/* ==================================================== analytics tables ==== */
+function exportBtns(target) {
+  return '<button type="button" class="ghost" data-export="print">Print</button>' +
+    '<button type="button" class="ghost" data-export="pdf">PDF</button>' +
+    '<button type="button" class="ghost" data-export="excel">Excel</button>' +
+    '<button type="button" class="ghost" data-export="word">Word</button>';
+}
+function accountsTableHtml(rows) {
+  let h = '<div class="table-wrap"><table><thead><tr><th>Account</th><th>Portal</th><th>Learners</th>' +
+    '<th>Active</th><th>Submissions</th><th>Certificates</th><th>Completion</th><th>Covered</th>' +
+    '<th>Key words</th><th>Accuracy</th><th>Flagged</th><th>Last activity</th></tr></thead><tbody>';
+  rows.forEach(a => {
+    h += '<tr data-search="' + esc(searchText(a)) + '">' +
+      '<td><b>' + esc(a.name) + '</b><div class="small muted">' + esc(a.slug || '') + ' · ' + esc(a.type || '') + '</div></td>' +
+      '<td class="small">' + esc(a.portalName || '—') + '</td>' +
+      '<td>' + num(a.participants) + '</td>' +
+      '<td>' + num(a.involved) + '</td>' +
+      '<td>' + num(a.submissions) + '</td>' +
+      '<td>' + num(a.certificates) + '</td>' +
+      '<td style="min-width:120px"><b>' + num(a.completionRate) + '%</b>' + supBar(a.completionRate || 0) + '</td>' +
+      '<td>' + (a.avgProgress == null ? '—' : num(a.avgProgress) + '%') + '</td>' +
+      '<td>' + (a.keywordCoverage == null ? '—' : num(a.keywordCoverage) + '%') + '</td>' +
+      '<td>' + (a.objectiveAccuracy == null ? '—' : num(a.objectiveAccuracy) + '%') + '</td>' +
+      '<td>' + (a.flagged ? '<span class="badge off">' + num(a.flagged) + '</span>' : '<span class="badge ok">0</span>') + '</td>' +
+      '<td class="small">' + (a.lastActivity ? fmtDate(a.lastActivity) : '<span class="muted">never</span>') + '</td></tr>';
+  });
+  return h + '</tbody></table></div>';
+}
+function analyticsAccountsCard(d) {
+  const rows = (d.accounts || []).slice().sort((a, b) => (b.avgProgress || 0) - (a.avgProgress || 0) ||
+    b.submissions - a.submissions);
+  return '<div class="card"><div class="row" style="align-items:flex-end">' +
+    '<div style="min-width:200px"><label>Search accounts</label>' +
+      '<input type="text" id="anAccSearch" placeholder="Account, portal, type…"></div>' +
+    '<div class="fixed" style="padding-bottom:10px"><h3 style="margin:0">Accounts <span class="badge info">' +
+      rows.length + '</span></h3></div></div>' +
+    '<div class="row export-buttons" data-target="#anAccounts">' + exportBtns() + '</div>' +
+    '<div id="anAccounts">' + (rows.length ? accountsTableHtml(rows) : '<p class="muted">No accounts in this scope.</p>') +
+    '</div></div>';
+}
+function analyticsModulesCard(d) {
+  const mods = d.modules || [];
+  if (!mods.length) return '';
+  let h = '<div class="card"><h3>Module / book / chapter analysis</h3>' +
+    '<p class="muted small">Every level of the exercise: how many learners started and finished each part, ' +
+    'submissions, key-word coverage, objective accuracy and copy flags.</p>';
+  mods.forEach((m, mi) => {
+    h += '<details class="exp"' + (mi === 0 ? ' open' : '') + '><summary><b>' + esc(m.title) + '</b> — ' +
+      esc(String(m.mode || '').toUpperCase()) + ' · started ' + num(m.started) + '/' + num(m.participants) +
+      ' · completed ' + num(m.completed) + ' (' + num(m.completionRate) + '%)</summary>' +
+      '<div class="small muted" style="margin:8px 0">Average progress <b>' + num(m.avgProgress) + '%</b> · ' +
+      num(m.submissions) + ' submissions · key words ' +
+      (m.keywordCoverage == null ? '—' : num(m.keywordCoverage) + '%') + ' · objectives ' +
+      (m.objectiveAccuracy == null ? '—' : num(m.objectiveAccuracy) + '%') + ' · flagged ' + num(m.flagged) +
+      (m.certificateName ? ' · certificate: ' + esc(m.certificateName) : '') + '</div>';
+    (m.books || []).forEach(b => {
+      h += '<div class="chap"><div class="q">Book ' + num(b.order) + ': ' + esc(b.title) +
+        ' <span class="muted small">· ' + num(b.submissions) + ' submissions</span></div>';
+      if (!(b.chapters || []).length) {
+        h += '<p class="muted small">No chapters yet.</p></div>';
+        return;
+      }
+      h += '<div class="table-wrap"><table><thead><tr><th>Chapter</th><th>Pages</th><th>Learners</th>' +
+        '<th>Completed</th><th>Submissions</th><th>Key words</th><th>Accuracy</th><th>Flagged</th>' +
+        '</tr></thead><tbody>';
+      (b.chapters || []).forEach(c => {
+        const pages = (c.pageStart || c.pageEnd) ? (c.pageStart || '—') + '–' + (c.pageEnd || '—') : '—';
+        h += '<tr><td>' + esc(c.title) + '</td><td class="small">' + esc(String(pages)) + '</td>' +
+          '<td>' + num(c.learners) + '</td><td>' + num(c.completed) + '</td><td>' + num(c.submissions) + '</td>' +
+          '<td>' + (c.keywordCoverage == null ? '—' : num(c.keywordCoverage) + '%') + '</td>' +
+          '<td>' + (c.accuracy == null ? '—' : num(c.accuracy) + '%') + '</td>' +
+          '<td>' + (c.flagged ? '<span class="badge off">' + num(c.flagged) + '</span>' : '<span class="badge ok">0</span>') +
+          '</td></tr>';
+      });
+      h += '</tbody></table></div></div>';
+    });
+    h += '</details>';
+  });
+  return h + '</div>';
+}
+
+function learnersTableHtml(rows) {
+  let h = '<div class="table-wrap"><table><thead><tr><th>#</th><th>Learner</th><th>Account</th>' +
+    '<th>Covered</th><th>Level</th><th>Modules</th><th>Submissions</th><th>Certificates</th>' +
+    '<th>Key words</th><th>Accuracy</th><th>Flagged</th><th>Last active</th></tr></thead><tbody>';
+  rows.forEach((l, i) => {
+    h += '<tr data-search="' + esc(searchText(l)) + '">' +
+      '<td><b>' + (i + 1) + '</b></td>' +
+      '<td><b>' + esc(l.name) + '</b><div class="small muted">' +
+        esc([l.className, l.studentNumber].filter(Boolean).join(' · ')) + '</div></td>' +
+      '<td class="small">' + esc(l.account || '—') + '<div class="muted">' + esc(l.portal || '') + '</div></td>' +
+      '<td style="min-width:120px"><b>' + num(l.progress) + '%</b>' + supBar(l.progress || 0) + '</td>' +
+      '<td class="small">' + esc(l.level || '—') + '<div class="muted">' +
+        num(l.modulesCompleted) + '/' + num(l.moduleCount) + ' modules</div></td>' +
+      '<td>' + num(l.modulesCompleted) + '</td>' +
+      '<td>' + num(l.submissions) + '</td>' +
+      '<td>' + num(l.certificates) + '</td>' +
+      '<td>' + (l.keywordCoverage == null ? '—' : num(l.keywordCoverage) + '%') + '</td>' +
+      '<td>' + (l.objectiveAccuracy == null ? '—' : num(l.objectiveAccuracy) + '%') + '</td>' +
+      '<td>' + (l.flagged ? '<span class="badge off">' + num(l.flagged) + '</span>' : '<span class="badge ok">0</span>') + '</td>' +
+      '<td class="small">' + (l.lastActiveAt ? fmtDate(l.lastActiveAt) : '<span class="muted">never</span>') + '</td></tr>';
+  });
+  return h + '</tbody></table></div>';
+}
+function analyticsLearnersCard(d) {
+  const rows = d.learners || [];
+  return '<div class="card"><div class="row" style="align-items:flex-end">' +
+    '<div style="min-width:220px"><label>Search learners</label>' +
+      '<input type="text" id="anLearnerSearch" placeholder="Name, account, class, level…"></div>' +
+    '<div class="fixed" style="padding-bottom:10px"><h3 style="margin:0">Individuals ' +
+      '<span class="badge info">' + num(d.learnersTotal) + '</span> ' +
+      '<span class="badge lock" id="anLearnerCount">' + rows.length + ' shown</span></h3></div></div>' +
+    '<div class="row export-buttons" data-target="#anLearners">' + exportBtns() + '</div>' +
+    '<p class="muted small">Ranked by how much of the programme each learner has covered — the smallest ' +
+      'point of the impact analysis.</p>' +
+    '<div id="anLearners">' + (rows.length ? learnersTableHtml(rows) : '<p class="muted">No learners in this scope.</p>') +
+    '</div></div>';
+}
+
+async function renderAnalytics() {
+  const v = $('view-analytics');
+  v.innerHTML = loadMsg();
+  let d;
+  try { d = await API.get('/super/analytics' + analyticsQuery()); }
+  catch (e) { v.innerHTML = errBox(e); return; }
+  ANALYTICS.data = d;
+  v.innerHTML = '<h2><span class="motto">Be True</span>Analytics &amp; impact</h2>' +
+    analyticsFiltersHtml(d) +
+    analyticsKpisHtml(d) +
+    analyticsChartsHtml(d) +
+    analyticsAccountsCard(d) +
+    analyticsModulesCard(d) +
+    analyticsLearnersCard(d);
+  wireAnalytics();
+}
+function wireAnalytics() {
+  const portal = $('anPortal');
+  if (portal) {
+    portal.onchange = function () {
+      ANALYTICS.portalId = val('anPortal');
+      ANALYTICS.tenantId = '';
+      renderAnalytics();
+    };
+  }
+  if ($('anApply')) {
+    $('anApply').onclick = function () {
+      ANALYTICS.portalId = val('anPortal');
+      ANALYTICS.tenantId = val('anTenant');
+      ANALYTICS.moduleId = val('anModule');
+      ANALYTICS.weeks = Number(val('anWeeks')) || 12;
+      renderAnalytics();
+    };
+  }
+  if ($('anReset')) {
+    $('anReset').onclick = function () {
+      ANALYTICS.portalId = ''; ANALYTICS.tenantId = ''; ANALYTICS.moduleId = ''; ANALYTICS.weeks = 12;
+      renderAnalytics();
+    };
+  }
+  const acc = $('anAccSearch');
+  if (acc) {
+    acc.addEventListener('input', function () { applyTableSearch('anAccounts', 'anAccSearch'); });
+    applyTableSearch('anAccounts', 'anAccSearch');
+  }
+  const lrn = $('anLearnerSearch');
+  if (lrn) {
+    lrn.addEventListener('input', function () {
+      applyTableSearch('anLearners', 'anLearnerSearch');
+      const badge = $('anLearnerCount');
+      if (badge) {
+        let shown = 0;
+        document.querySelectorAll('#anLearners tbody tr[data-search]').forEach(function (tr) {
+          if (tr.style.display !== 'none') shown++;
+        });
+        badge.textContent = shown + ' shown';
+      }
+    });
+    applyTableSearch('anLearners', 'anLearnerSearch');
+  }
+}
+
 async function renderProgress() {
   const v = $('view-progress');
   v.innerHTML = loadMsg();

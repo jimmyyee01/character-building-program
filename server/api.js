@@ -256,15 +256,38 @@ function findSub(userId, type, match) {
   return dbm.where('submissions', s => s.userId === userId && s.type === type &&
     keys.every(k => s[k] === match[k]))[0] || null;
 }
+/* Key-word assessment of a submission: the stored score, or computed from the
+   text for submissions made before the key-word feature existed. */
+function assessOf(s) {
+  if (!s) return null;
+  if (s.keywordScore != null) {
+    return { keywordScore: s.keywordScore, keywordsUsed: s.keywordsUsed == null ? null : s.keywordsUsed,
+      keywordsTotal: s.keywordsTotal == null ? null : s.keywordsTotal, keywordsMissing: s.keywordsMissing || [] };
+  }
+  if (!s.text) return null;
+  let list = null;
+  if (s.chapterId) {
+    const ch = dbm.byId('chapters', s.chapterId);
+    if (ch) list = chapterKeywords(ch).list;
+  } else if (s.bookId) {
+    list = suggestKeywords(dbm.where('chapters', c => c.bookId === s.bookId).map(c => c.content).join(' '), 10);
+  }
+  if (!list || !list.length) return null;
+  const a = keywordAssessment(s.text, list);
+  return { keywordScore: a.keywordScore, keywordsUsed: a.keywordsUsed,
+    keywordsTotal: a.keywordsTotal, keywordsMissing: a.keywordsMissing };
+}
+
 function subMeta(s) {
+  const kw = assessOf(s);
   return s ? { id: s.id, createdAt: s.createdAt, score: s.score, flagged: !!s.flagged,
     similarity: s.similarity || 0, color: s.color || null, text: s.text || null,
     bookId: s.bookId || null, chapterId: s.chapterId || null,
     moduleId: s.moduleId || null, index: s.index || null,
-    keywordScore: s.keywordScore == null ? null : s.keywordScore,
-    keywordsUsed: s.keywordsUsed == null ? null : s.keywordsUsed,
-    keywordsTotal: s.keywordsTotal == null ? null : s.keywordsTotal,
-    keywordsMissing: s.keywordsMissing || [] } : null;
+    keywordScore: kw ? kw.keywordScore : null,
+    keywordsUsed: kw ? kw.keywordsUsed : null,
+    keywordsTotal: kw ? kw.keywordsTotal : null,
+    keywordsMissing: kw ? kw.keywordsMissing : [] } : null;
 }
 
 /* One book inside a module: chapter gating, letter stage, colour summaries. */
@@ -888,13 +911,14 @@ function describeSub(s) {
   const ch = s.chapterId ? dbm.byId('chapters', s.chapterId) : null;
   const bk = s.bookId ? dbm.byId('books', s.bookId) : null;
   const md = s.moduleId ? dbm.byId('modules', s.moduleId) : null;
+  const kw = assessOf(s);
   return { id: s.id, type: s.type, text: s.text, createdAt: s.createdAt,
     color: s.color || null, label: s.label || null, score: s.score, total: s.total,
     flagged: !!s.flagged, similarity: s.similarity || 0,
-    keywordScore: s.keywordScore == null ? null : s.keywordScore,
-    keywordsUsed: s.keywordsUsed == null ? null : s.keywordsUsed,
-    keywordsTotal: s.keywordsTotal == null ? null : s.keywordsTotal,
-    keywordsMissing: s.keywordsMissing || [],
+    keywordScore: kw ? kw.keywordScore : null,
+    keywordsUsed: kw ? kw.keywordsUsed : null,
+    keywordsTotal: kw ? kw.keywordsTotal : null,
+    keywordsMissing: kw ? kw.keywordsMissing : [],
     chapter: ch ? ch.title : null, book: bk ? bk.title : null,
     module: md ? md.title : null, index: s.index || null };
 }
@@ -991,15 +1015,381 @@ function normalizeWindows(windows) {
   return out;
 }
 
+/* ================================================= super analytics ======= */
+/* Everything the super admin needs to see the impact of the programme: per
+   portal, per account, per module / book / chapter and per individual, with the
+   weekly activity behind it. Filters: ?portalId= &tenantId= &moduleId= &weeks= */
+function weekBuckets(weeks) {
+  const out = [];
+  const now = Date.now();
+  for (let i = weeks - 1; i >= 0; i--) {
+    const end = now - i * 7 * 86400000;
+    out.push({ start: end - 7 * 86400000, end: end, label: i === 0 ? 'now' : '-' + i + 'w',
+      submissions: 0, certificates: 0, newUsers: 0, active: [] });
+  }
+  return out;
+}
+function bucketIndex(buckets, iso) {
+  const t = Date.parse(iso || '');
+  if (!t) return -1;
+  for (let i = 0; i < buckets.length; i++) {
+    if (t > buckets[i].start && t <= buckets[i].end) return i;
+  }
+  return -1;
+}
+function pctOf(part, whole) { return whole ? Math.round(100 * part / whole) : 0; }
+function meanOf(list) {
+  const nums = list.filter(n => typeof n === 'number' && !isNaN(n));
+  return nums.length ? Math.round(nums.reduce((a, b) => a + b, 0) / nums.length) : null;
+}
+function round2(n) { return Math.round(n * 100) / 100; }
+/* average key-word coverage of a list of submissions (stored score, else live) */
+function coverageOf(list) {
+  return meanOf((list || []).map(s => {
+    const a = assessOf(s);
+    return a ? a.keywordScore : null;
+  }));
+}
+
+/* Who did a flagged submission match? (the other person's work) */
+const copyMatchCache = {};
+function copyMatch(sub) {
+  if (!sub || !sub.flagged || !sub.text) return null;
+  const key = sub.id;
+  if (copyMatchCache[key] !== undefined) return copyMatchCache[key];
+  const mine = new Set(normalizeWords(sub.text));
+  let best = null;
+  dbm.db.submissions.forEach(other => {
+    if (other.userId === sub.userId || !other.text || other.type !== sub.type) return;
+    if ((other.chapterId || null) !== (sub.chapterId || null)) return;
+    if ((other.bookId || null) !== (sub.bookId || null)) return;
+    if ((other.moduleId || null) !== (sub.moduleId || null)) return;
+    if ((other.index || null) !== (sub.index || null)) return;
+    const sim = Math.round(100 * jaccard(mine, new Set(normalizeWords(other.text))));
+    if (sim >= 75 && (!best || sim > best.similarity)) {
+      const u = dbm.byId('users', other.userId) || {};
+      best = { submissionId: other.id, userId: other.userId, name: u.fullName || 'Unknown',
+        className: u.className || null, studentNumber: u.studentNumber || null,
+        similarity: sim, createdAt: other.createdAt };
+    }
+  });
+  copyMatchCache[key] = best;
+  return best;
+}
+
+function analyticsPayload(scope) {
+  const weeks = scope.weeks || 12;
+  const fPortal = scope.portalId || null;
+  const fTenant = scope.tenantId || null;
+  const fModule = scope.moduleId || null;
+  const onlyUserIds = scope.userIds || null;
+  const inOnly = id => !onlyUserIds || onlyUserIds.indexOf(id) !== -1;
+
+  const portals = scope.portals || dbm.db.portals.filter(p => !fPortal || p.id === fPortal);
+  const portalById = {};
+  dbm.db.portals.forEach(p => { portalById[p.id] = p; });
+  const tenants = (scope.tenants || dbm.db.tenants.filter(t =>
+    (!fPortal || t.portalId === fPortal) && (!fTenant || t.id === fTenant)));
+  const tenantIds = {};
+  tenants.forEach(t => { tenantIds[t.id] = true; });
+  const modules = ordered(dbm.db.modules).filter(m => !fModule || m.id === fModule);
+  const moduleIds = {};
+  modules.forEach(m => { moduleIds[m.id] = true; });
+
+  const participants = dbm.db.users.filter(u =>
+    PARTICIPANTS.indexOf(u.role) !== -1 && tenantIds[u.tenantId] && inOnly(u.id));
+  const staff = dbm.db.users.filter(u =>
+    ADMINS.concat(['supervisor']).indexOf(u.role) !== -1 && tenantIds[u.tenantId]);
+  const subs = dbm.db.submissions.filter(s =>
+    tenantIds[s.tenantId] && (!fModule || moduleIds[s.moduleId]) && inOnly(s.userId));
+  const certs = dbm.db.certificates.filter(c =>
+    tenantIds[c.tenantId] && (!fModule || moduleIds[c.moduleId]) && inOnly(c.userId));
+
+  /* per learner: progress, completion, activity, integrity */
+  const subsByUser = {};
+  subs.forEach(s => { (subsByUser[s.userId] = subsByUser[s.userId] || []).push(s); });
+  const certsByUser = {};
+  certs.forEach(c => { (certsByUser[c.userId] = certsByUser[c.userId] || []).push(c); });
+  const perfByUser = {};
+  participants.forEach(u => {
+    const st = moduleStatuses(u).filter(m => !fModule || m.id === fModule);
+    perfByUser[u.id] = {
+      user: u,
+      statuses: st,
+      completed: st.filter(m => m.status === 'completed').length,
+      modules: st.length,
+      progress: meanOf(st.map(m => m.progress.percent))
+    };
+  });
+
+  const flaggedSubs = subs.filter(s => s.flagged);
+  const typedSubs = subs.map(s => assessOf(s)).filter(Boolean);
+  const objSubs = subs.filter(s => s.type === 'objectives' && s.total);
+  const recentCut = Date.now() - 14 * 86400000;
+  const involved = participants.filter(u => (subsByUser[u.id] || []).length > 0);
+  const finished = participants.filter(u => {
+    const p = perfByUser[u.id];
+    return p.modules > 0 && p.completed === p.modules;
+  });
+  const recentlyActive = participants.filter(u => (subsByUser[u.id] || [])
+    .some(s => Date.parse(s.createdAt || '') > recentCut));
+
+  /* weekly activity (submissions, certificates, new learners, active learners) */
+  const buckets = weekBuckets(weeks);
+  subs.forEach(s => {
+    const i = bucketIndex(buckets, s.createdAt);
+    if (i === -1) return;
+    buckets[i].submissions++;
+    if (buckets[i].active.indexOf(s.userId) === -1) buckets[i].active.push(s.userId);
+  });
+  certs.forEach(c => {
+    const i = bucketIndex(buckets, c.issuedAt || c.createdAt);
+    if (i !== -1) buckets[i].certificates++;
+  });
+  participants.forEach(u => {
+    const i = bucketIndex(buckets, u.createdAt);
+    if (i !== -1) buckets[i].newUsers++;
+  });
+
+  const impact = {
+    participants: participants.length,
+    staff: staff.length,
+    involved: involved.length,
+    involvementRate: pctOf(involved.length, participants.length),
+    finished: finished.length,
+    completionRate: pctOf(finished.length, participants.length),
+    certificates: certs.length,
+    certificatesPerLearner: participants.length ? round2(certs.length / participants.length) : 0,
+    avgProgress: meanOf(participants.map(u => perfByUser[u.id].progress)),
+    keywordCoverage: meanOf(typedSubs.map(a => a.keywordScore)),
+    objectiveAccuracy: meanOf(objSubs.map(s => Math.round(100 * (s.score || 0) / s.total))),
+    integrity: pctOf(subs.length - flaggedSubs.length, subs.length),
+    flaggedRate: pctOf(flaggedSubs.length, subs.length),
+    activeShare: pctOf(recentlyActive.length, participants.length),
+    submissionsPerLearner: participants.length ? round2(subs.length / participants.length) : 0,
+    chaptersDone: subs.filter(s => s.type === 'chapter_summary').length,
+    objectivesAnswered: objSubs.length
+  };
+
+  /* ---- per portal ---------------------------------------------------- */
+  const portalStats = portals.map(p => {
+    const tIds = tenants.filter(t => t.portalId === p.id).map(t => t.id);
+    const inP = id => tIds.indexOf(id) !== -1;
+    const ps = participants.filter(u => inP(u.tenantId));
+    const psubs = subs.filter(s => inP(s.tenantId));
+    const pcerts = certs.filter(c => inP(c.tenantId));
+    const pfin = ps.filter(u => {
+      const q = perfByUser[u.id];
+      return q.modules > 0 && q.completed === q.modules;
+    });
+    const pflagged = psubs.filter(s => s.flagged).length;
+    return {
+      id: p.id, key: p.key, name: p.name, type: p.type, enabled: p.enabled !== false,
+      accounts: tIds.length, participants: ps.length,
+      involved: ps.filter(u => (subsByUser[u.id] || []).length > 0).length,
+      submissions: psubs.length, certificates: pcerts.length,
+      flagged: pflagged, flaggedRate: pctOf(pflagged, psubs.length),
+      avgProgress: meanOf(ps.map(u => perfByUser[u.id].progress)),
+      completionRate: pctOf(pfin.length, ps.length), finished: pfin.length,
+      keywordCoverage: coverageOf(psubs),
+      objectiveAccuracy: meanOf(psubs.filter(s => s.type === 'objectives' && s.total)
+        .map(s => Math.round(100 * (s.score || 0) / s.total))),
+      perLearner: ps.length ? round2(psubs.length / ps.length) : 0
+    };
+  });
+
+  /* ---- per account --------------------------------------------------- */
+  const accounts = tenants.map(t => {
+    const us = participants.filter(u => u.tenantId === t.id);
+    const asubs = subs.filter(s => s.tenantId === t.id);
+    const acerts = certs.filter(c => c.tenantId === t.id);
+    const af = us.filter(u => {
+      const q = perfByUser[u.id];
+      return q.modules > 0 && q.completed === q.modules;
+    });
+    const byType = {};
+    asubs.forEach(s => { byType[s.type] = (byType[s.type] || 0) + 1; });
+    const aflagged = asubs.filter(s => s.flagged).length;
+    return {
+      id: t.id, name: t.name, slug: t.slug, type: t.type,
+      portalId: t.portalId, portalName: (portalById[t.portalId] || {}).name || null,
+      active: t.active !== false,
+      staff: staff.filter(u => u.tenantId === t.id).length,
+      participants: us.length,
+      involved: us.filter(u => (subsByUser[u.id] || []).length > 0).length,
+      submissions: asubs.length, byType,
+      certificates: acerts.length,
+      flagged: aflagged, flaggedRate: pctOf(aflagged, asubs.length),
+      avgProgress: meanOf(us.map(u => perfByUser[u.id].progress)),
+      completionRate: pctOf(af.length, us.length), finished: af.length,
+      keywordCoverage: coverageOf(asubs),
+      objectiveAccuracy: meanOf(asubs.filter(s => s.type === 'objectives' && s.total)
+        .map(s => Math.round(100 * (s.score || 0) / s.total))),
+      lastActivity: asubs.reduce((a, s) => (!a || String(s.createdAt) > a) ? s.createdAt : a, null),
+      chaptersDone: asubs.filter(s => s.type === 'chapter_summary').length,
+      objectivesAnswered: asubs.filter(s => s.type === 'objectives').length,
+      modules: modules.map(m => {
+        const ms = asubs.filter(s => s.moduleId === m.id);
+        const done = us.filter(u => {
+          const st = perfByUser[u.id].statuses.filter(x => x.id === m.id)[0];
+          return st && st.status === 'completed';
+        }).length;
+        const started = us.filter(u => ms.some(s => s.userId === u.id)).length;
+        return { id: m.id, title: m.title, mode: m.mode, submissions: ms.length,
+          started, completed: done, completionRate: pctOf(done, us.length) };
+      })
+    };
+  });
+
+  /* ---- per module / book / chapter (the finest grain of the exercise) -- */
+  const moduleStats = modules.map(m => {
+    const msubs = subs.filter(s => s.moduleId === m.id);
+    const books = ordered(dbm.db.books.filter(b => b.moduleId === m.id)).map(b => {
+      const chapters = ordered(dbm.db.chapters.filter(c => c.bookId === b.id)).map(c => {
+        const csubs = msubs.filter(s => s.chapterId === c.id);
+        const obj = csubs.filter(s => s.type === 'objectives' && s.total);
+        return {
+          id: c.id, title: c.title, pageStart: c.pageStart, pageEnd: c.pageEnd,
+          submissions: csubs.length,
+          learners: new Set(csubs.map(s => s.userId)).size,
+          completed: new Set(csubs.filter(s => s.type === 'chapter_summary').map(s => s.userId)).size,
+          keywordCoverage: coverageOf(csubs),
+          objectivesAnswered: obj.length,
+          accuracy: meanOf(obj.map(s => Math.round(100 * (s.score || 0) / s.total))),
+          flagged: csubs.filter(s => s.flagged).length
+        };
+      });
+      return { id: b.id, title: b.title, order: b.order, scope: b.scope,
+        submissions: msubs.filter(s => s.bookId === b.id).length, chapters };
+    });
+    const completed = participants.filter(u => {
+      const st = perfByUser[u.id].statuses.filter(x => x.id === m.id)[0];
+      return st && st.status === 'completed';
+    }).length;
+    const started = participants.filter(u => msubs.some(s => s.userId === u.id)).length;
+    return {
+      id: m.id, order: m.order, title: m.title, mode: m.mode, certificateName: m.certificateName,
+      participants: participants.length, started, completed,
+      startedRate: pctOf(started, participants.length),
+      completionRate: pctOf(completed, participants.length),
+      avgProgress: participants.length ? meanOf(participants.map(u => {
+        const st = perfByUser[u.id].statuses.filter(x => x.id === m.id)[0];
+        return st ? st.progress.percent : 0;
+      })) : 0,
+      submissions: msubs.length, flagged: msubs.filter(s => s.flagged).length,
+      keywordCoverage: coverageOf(msubs),
+      objectiveAccuracy: meanOf(msubs.filter(s => s.type === 'objectives' && s.total)
+        .map(s => Math.round(100 * (s.score || 0) / s.total))),
+      books
+    };
+  });
+
+  /* ---- individuals (the smallest point of all) ------------------------ */
+  const learnerRows = participants.map(u => {
+    const p = perfByUser[u.id];
+    const mine = subsByUser[u.id] || [];
+    const typed = mine.filter(s => s.keywordScore != null);
+    const obj = mine.filter(s => s.type === 'objectives' && s.total);
+    const t = tenants.filter(x => x.id === u.tenantId)[0] || {};
+    const active = p.statuses.filter(m => m.status === 'active')[0] || null;
+    return {
+      id: u.id, name: u.fullName, role: u.role, className: u.className,
+      studentNumber: u.studentNumber, account: t.name || null, accountId: u.tenantId,
+      portal: (portalById[t.portalId] || {}).name || null,
+      progress: p.progress || 0, modulesCompleted: p.completed, moduleCount: p.modules,
+      finished: p.modules > 0 && p.completed === p.modules,
+      level: active ? active.title : (p.modules > 0 && p.completed === p.modules ? 'All modules completed' : '—'),
+      submissions: mine.length,
+      certificates: (certsByUser[u.id] || []).length,
+      flagged: mine.filter(s => s.flagged).length,
+      keywordCoverage: coverageOf(mine),
+      objectiveAccuracy: meanOf(obj.map(s => Math.round(100 * (s.score || 0) / s.total))),
+      lastActiveAt: mine.reduce((a, s) => (!a || String(s.createdAt) > a) ? s.createdAt : a, null)
+    };
+  }).sort((a, b) => b.progress - a.progress || b.submissions - a.submissions ||
+    String(a.name).localeCompare(String(b.name)));
+
+  const activity = buckets.map(b => ({ label: b.label, submissions: b.submissions,
+    certificates: b.certificates, newUsers: b.newUsers, activeLearners: b.active.length }));
+
+  const bookCount = dbm.db.books.filter(b => moduleIds[b.moduleId]).length;
+  const chapterCount = dbm.db.chapters.filter(c => {
+    const b = dbm.byId('books', c.bookId);
+    return b && moduleIds[b.moduleId];
+  }).length;
+
+  return {
+    ok: true,
+    generatedAt: dbm.nowISO(),
+    scope: { portalId: fPortal || null, tenantId: fTenant || null, moduleId: fModule || null, weeks },
+    filters: {
+      /* only what this viewer is allowed to pick from */
+      portals: portals.map(p => ({ id: p.id, name: p.name, key: p.key })),
+      tenants: tenants.map(t => ({ id: t.id, name: t.name, portalId: t.portalId })),
+      modules: ordered(dbm.db.modules).map(m => ({ id: m.id, title: m.title, mode: m.mode }))
+    },
+    totals: {
+      portals: portals.length, accounts: tenants.length, participants: participants.length,
+      staff: staff.length, submissions: subs.length, certificates: certs.length,
+      flagged: flaggedSubs.length, modules: modules.length, books: bookCount, chapters: chapterCount,
+      objectives: dbm.db.objectives.length
+    },
+    impact: impact,
+    portals: portalStats,
+    accounts: accounts,
+    modules: moduleStats,
+    learners: learnerRows.slice(0, 300),
+    learnersTotal: learnerRows.length,
+    activity: activity,
+    /* every copy flag, and the person the work matched */
+    flagged: flaggedSubs.slice(0, 200).map(s => {
+      const m = copyMatch(s);
+      return Object.assign(describeSub(s), {
+        userId: s.userId,
+        userName: (dbm.byId('users', s.userId) || {}).fullName || null,
+        className: (dbm.byId('users', s.userId) || {}).className || null,
+        matchedWith: m, matchedName: m ? m.name : null
+      });
+    })
+  };
+}
+
+route('GET', '/api/super/analytics', ({ req, user }) => {
+  requireRole(user, ['super']);
+  return analyticsPayload({
+    weeks: Math.max(4, Math.min(52, Number(qp(req, 'weeks')) || 12)),
+    portalId: qp(req, 'portalId'),
+    tenantId: qp(req, 'tenantId'),
+    moduleId: qp(req, 'moduleId')
+  });
+});
+
+/* The same analysis for one account (never anything outside it). A supervisor
+   only ever sees the members they look after. */
+route('GET', '/api/admin/analytics', ({ req, user }) => {
+  requireRole(user, ADMINS.concat(['supervisor']));
+  const myTenants = dbm.db.tenants.filter(t => t.id === user.tenantId);
+  const scope = {
+    weeks: Math.max(4, Math.min(52, Number(qp(req, 'weeks')) || 12)),
+    moduleId: qp(req, 'moduleId'),
+    tenants: myTenants,
+    portals: dbm.db.portals.filter(p => myTenants.some(t => t.portalId === p.id))
+  };
+  if (user.role === 'supervisor') {
+    /* only the members this supervisor looks after (staff are not learners) */
+    scope.userIds = dbm.db.users.filter(u => u.supervisorId === user.id).map(u => u.id);
+  } else {
+    scope.tenantId = user.tenantId;
+  }
+  const d = analyticsPayload(scope);
+  d.viewer = { role: user.role, tenantId: user.tenantId,
+    tenantName: (myTenants[0] || {}).name || null,
+    portalName: ((dbm.db.portals.filter(p => myTenants.some(t => t.portalId === p.id))[0]) || {}).name || null };
+  return d;
+});
+
 route('GET', '/api/super/overview', ({ user }) => {
   requireRole(user, SUPER);
-  const tenants = dbm.db.tenants.map(t => ({
-    id: t.id, name: t.name, slug: t.slug, type: t.type, logo: t.logo,
-    users: dbm.db.users.filter(u => u.tenantId === t.id).length,
-    submissions: dbm.db.submissions.filter(s => s.tenantId === t.id).length,
-    certificates: dbm.db.certificates.filter(c => c.tenantId === t.id).length,
-    flagged: dbm.db.submissions.filter(s => s.tenantId === t.id && s.flagged).length
-  }));
   return { ok: true,
     counts: { portals: dbm.db.portals.length, tenants: dbm.db.tenants.length,
       users: dbm.db.users.length, submissions: dbm.db.submissions.length,
@@ -1652,9 +2042,8 @@ route('GET', '/api/reports/students', ({ req, user }) => {
       submissions: subs.length, lastActiveAt: last,
       certificates: perf.certificates, flagged: perf.flagged,
       progress: perf.overall, modulesCompleted: completed, moduleCount: mods.length, level: level,
-      keywordScore: typed.length
-        ? Math.round(typed.reduce((a, s) => a + s.keywordScore, 0) / typed.length) : null,
-      typedAnswers: typed.length,
+      keywordScore: meanOf(subs.map(s => { const a = assessOf(s); return a ? a.keywordScore : null; })),
+      typedAnswers: subs.filter(s => assessOf(s)).length,
       modules: mods.map(m => ({ title: m.title, percent: m.percent, status: m.status })),
       recent: subs.slice().sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).slice(0, 6)
         .map(s => ({ type: s.type, createdAt: s.createdAt, text: String(s.text || '').slice(0, 240),
@@ -1728,7 +2117,8 @@ function adminSubmissions(user, req) {
       return { id: s.id, type: s.type, createdAt: s.createdAt, text: s.text,
         color: s.color || null, label: s.label || null, score: s.score, total: s.total,
         flagged: !!s.flagged, similarity: s.similarity || 0,
-        userName: who ? who.fullName : '(removed user)',
+        matchedWith: copyMatch(s), matchedName: (copyMatch(s) || {}).name || null,
+      userName: who ? who.fullName : '(removed user)',
         userRole: who ? who.role : null,
         chapter: ch ? ch.title : null, book: bk ? bk.title : null,
         tenantId: s.tenantId };

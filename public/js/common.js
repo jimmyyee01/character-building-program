@@ -170,6 +170,55 @@ function chartDonut(segments, opts) {
     '</svg><div class="legend">' + legend + '</div></div>';
 }
 
+/* line chart for trends: items = [{label, value}] (optionally a second series) */
+function chartLine(items, opts) {
+  opts = opts || {};
+  const list = items || [];
+  if (!list.length) return '<div class="chart-empty">No data yet.</div>';
+  const w = 320, h = 150, padL = 26, padR = 8, padT = 14, padB = 24;
+  const max = Math.max(1, list.reduce(function (m, i) {
+    return Math.max(m, Number(i.value) || 0, Number(i.value2) || 0);
+  }, 0));
+  const stepX = list.length > 1 ? (w - padL - padR) / (list.length - 1) : 0;
+  const yOf = v => (h - padB) - ((h - padB - padT) * ((Number(v) || 0) / max));
+  const pts = list.map(function (it, i) {
+    return (padL + i * stepX).toFixed(1) + ',' + yOf(it.value).toFixed(1);
+  });
+  const pts2 = list.map(function (it, i) {
+    return (padL + i * stepX).toFixed(1) + ',' + yOf(it.value2).toFixed(1);
+  });
+  const area = 'M' + (padL) + ',' + (h - padB) + ' L' + pts.join(' L') + ' L' +
+    (padL + stepX * (list.length - 1)) + ',' + (h - padB) + ' Z';
+  let grid = '';
+  for (let g = 0; g <= 3; g++) {
+    const y = padT + ((h - padB - padT) * g / 3);
+    grid += '<line x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (w - padR) + '" y2="' + y.toFixed(1) +
+      '" stroke="#e6ecf5" stroke-width="1"></line>' +
+      '<text x="' + (padL - 4) + '" y="' + (y + 3).toFixed(1) + '" text-anchor="end" font-size="8" fill="#94a3b8">' +
+      Math.round(max * (1 - g / 3)) + '</text>';
+  }
+  let labels = '';
+  list.forEach(function (it, i) {
+    if (list.length > 8 && i % 2 === 1) return;
+    labels += '<text x="' + (padL + i * stepX).toFixed(1) + '" y="' + (h - 8) +
+      '" text-anchor="middle" font-size="8" fill="#64748b">' + esc(String(it.label).slice(0, 6)) + '</text>';
+  });
+  const dot = (p, colour) => '<circle cx="' + p.split(',')[0] + '" cy="' + p.split(',')[1] +
+    '" r="2.6" fill="' + colour + '"><title></title></circle>';
+  return '<div class="chart"><svg viewBox="0 0 ' + w + ' ' + h + '" role="img">' + grid +
+    '<path d="' + area + '" fill="' + (opts.fill || 'rgba(47,111,208,.14)') + '"></path>' +
+    '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + (opts.color || 'var(--brand)') +
+      '" stroke-width="2" stroke-linejoin="round"></polyline>' +
+    (opts.second ? '<polyline points="' + pts2.join(' ') + '" fill="none" stroke="#b45309" stroke-width="2"' +
+      ' stroke-dasharray="4 3"></polyline>' : '') +
+    list.map(function (it, i) {
+      return dot(pts[i], opts.color || 'var(--brand)') +
+        (opts.second ? dot(pts2[i], '#b45309') : '');
+    }).join('') +
+    labels +
+    '</svg></div>' + (opts.caption ? '<p class="chart-sub">' + esc(opts.caption) + '</p>' : '');
+}
+
 /* simple progress rows: items = [{label, percent, note?}] */
 function chartProgress(items) {
   const list = items || [];

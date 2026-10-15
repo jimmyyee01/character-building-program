@@ -1703,6 +1703,254 @@ function summaryRowHtml(s) {
   '</div></td></tr>';
 }
 
+/* ================================================= analytics & impact ====== */
+/* Account-scoped reporting: performance of the individuals in this account and
+   the statistical impact of the exercise for them and for the account itself,
+   with graphs down to module / book / chapter level, and every copy flag shown
+   together with the person it is connected to. Nothing outside this account is
+   ever loaded (the API scopes it). */
+const ASTAT = { data: null, moduleId: '', weeks: 12 };
+
+function astatQuery() {
+  const q = ['weeks=' + encodeURIComponent(ASTAT.weeks || 12)];
+  if (ASTAT.moduleId) q.push('moduleId=' + encodeURIComponent(ASTAT.moduleId));
+  return '?' + q.join('&');
+}
+function astatFiltersHtml(d) {
+  const mods = (d.filters || {}).modules || [];
+  const weekOpts = [4, 8, 12, 26, 52];
+  const v = d.viewer || {};
+  return '<div class="card"><div class="row" style="align-items:flex-end">' +
+    '<div><label>Module</label><select id="asModule"><option value="">All modules</option>' +
+      mods.map(function (m) {
+        return '<option value="' + esc(m.id) + '"' + (String(m.id) === String(ASTAT.moduleId) ? ' selected' : '') +
+          '>' + esc(m.title) + '</option>';
+      }).join('') + '</select></div>' +
+    '<div><label>Period</label><select id="asWeeks">' +
+      weekOpts.map(function (w) {
+        return '<option value="' + w + '"' + (Number(ASTAT.weeks) === w ? ' selected' : '') +
+          '>last ' + w + ' weeks</option>';
+      }).join('') + '</select></div>' +
+    '<div class="fixed" style="padding-bottom:10px"><button type="button" id="asApply">Apply</button> ' +
+      '<button type="button" class="ghost" id="asReset">Reset</button></div>' +
+  '</div><p class="muted small" style="margin-bottom:0">' +
+    (v.role === 'supervisor'
+      ? 'Impact for the members you look after.'
+      : 'Impact of the exercise for <b>' + esc(v.tenantName || 'this account') + '</b>' +
+        (v.portalName ? ' (' + esc(v.portalName) + ')' : '') + '.') +
+    ' Generated ' + esc(fmtDate(d.generatedAt)) + '.</p></div>';
+}
+function astatKpisHtml(d) {
+  const i = d.impact || {};
+  return '<div class="grid cols-4">' +
+    statCard(i.participants == null ? 0 : i.participants, 'Participants', 'blue') +
+    statCard((i.involvementRate || 0) + '%', 'Involvement', 'violet') +
+    statCard((i.completionRate || 0) + '%', 'Completion', 'green') +
+    statCard(i.certificates == null ? 0 : i.certificates, 'Certificates', 'pink') +
+    statCard((i.avgProgress || 0) + '%', 'Average progress', 'teal') +
+    statCard(i.keywordCoverage == null ? '—' : i.keywordCoverage + '%', 'Key-word coverage', 'amber') +
+    statCard(i.objectiveAccuracy == null ? '—' : i.objectiveAccuracy + '%', 'Objective accuracy', 'slate') +
+    statCard((i.integrity == null ? 100 : i.integrity) + '%', 'Original work', 'red') +
+  '</div>';
+}
+
+function astatChartsHtml(d) {
+  const act = d.activity || [];
+  const learners = d.learners || [];
+  const mods = d.modules || [];
+  const i = d.impact || {};
+  const weeks = act.map(function (a) { return { label: a.label, value: a.submissions, value2: a.certificates }; });
+  const bands = [
+    { label: 'Finished all modules', value: learners.filter(function (l) { return l.finished; }).length, color: '#1f7a44' },
+    { label: '75% or more', value: learners.filter(function (l) { return !l.finished && l.progress >= 75; }).length, color: '#2f6fd0' },
+    { label: '25 – 74%', value: learners.filter(function (l) { return l.progress >= 25 && l.progress < 75; }).length, color: '#b45309' },
+    { label: 'Under 25%', value: learners.filter(function (l) { return l.progress < 25; }).length, color: '#c62828' }
+  ];
+  const modBars = [];
+  mods.forEach(function (m) {
+    const short = String(m.title).replace(/^MODULE\s+\w+\s*[—-]\s*/i, '').slice(0, 14);
+    modBars.push({ label: short + ' started', value: m.started, color: '#2f6fd0' });
+    modBars.push({ label: short + ' completed', value: m.completed, color: '#1f7a44' });
+  });
+  const chapterItems = [];
+  (ASTAT.moduleId ? mods : mods.slice(0, 1)).forEach(function (m) {
+    (m.books || []).forEach(function (b) {
+      (b.chapters || []).forEach(function (c) {
+        chapterItems.push({ label: String(c.title).replace(/^Chapter\s*\d+\s*[—-]\s*/i, '').slice(0, 18),
+          value: c.completed || 0 });
+      });
+    });
+  });
+  const learnerBars = learners.slice(0, 12).map(function (l) {
+    return { label: l.name, value: l.progress, color: l.finished ? '#1f7a44' : '#2f6fd0' };
+  });
+  return '<div class="card"><h3>Graphical analysis</h3><div class="chart-grid">' +
+    '<div class="chart-box"><h4>Weekly activity</h4>' +
+      chartLine(weeks, { second: true, caption: 'Submissions (solid) and certificates (dashed)' }) + '</div>' +
+    '<div class="chart-box"><h4>New learners per week</h4>' +
+      chartBars(act.map(function (a) { return { label: a.label, value: a.newUsers }; })) + '</div>' +
+    '<div class="chart-box"><h4>Impact indices</h4>' +
+      chartProgress([
+        { label: 'Involvement', percent: i.involvementRate || 0, color: '#6d3fd1' },
+        { label: 'Completion', percent: i.completionRate || 0, color: '#1f7a44' },
+        { label: 'Active (14 days)', percent: i.activeShare || 0, color: '#2f6fd0' },
+        { label: 'Key words', percent: i.keywordCoverage || 0, color: '#b45309' },
+        { label: 'Objectives', percent: i.objectiveAccuracy || 0, color: '#475569' },
+        { label: 'Original work', percent: i.integrity == null ? 100 : i.integrity, color: '#b8217a' }
+      ]) + '</div>' +
+    '<div class="chart-box"><h4>Progress distribution</h4>' +
+      chartDonut(bands, { centerLabel: 'learners' }) + '</div>' +
+    '<div class="chart-box"><h4>Progress per learner</h4>' + chartBarsH(learnerBars) + '</div>' +
+    '<div class="chart-box"><h4>Module funnel</h4>' + chartBarsH(modBars) + '</div>' +
+    '<div class="chart-box"><h4>Chapter completions' + (ASTAT.moduleId ? '' : ' (first module)') + '</h4>' +
+      chartBarsH(chapterItems, { max: 14, caption: 'Learners who completed each chapter' }) + '</div>' +
+    '<div class="chart-box"><h4>Most submissions</h4>' +
+      chartBarsH(learners.slice(0, 10).map(function (l) {
+        return { label: l.name, value: l.submissions, color: '#0f766e' };
+      })) + '</div>' +
+    '<div class="chart-box"><h4>Certificates earned</h4>' +
+      chartBarsH(learners.slice().sort(function (a, b) { return b.certificates - a.certificates; }).slice(0, 10)
+        .map(function (l) { return { label: l.name, value: l.certificates, color: '#b8217a' }; })) + '</div>' +
+  '</div></div>';
+}
+
+function exportBtnsHtml() {
+  return '<button type="button" class="ghost" data-export="print">Print</button>' +
+    '<button type="button" class="ghost" data-export="pdf">PDF</button>' +
+    '<button type="button" class="ghost" data-export="excel">Excel</button>' +
+    '<button type="button" class="ghost" data-export="word">Word</button>';
+}
+function astatLearnersHtml(d) {
+  const rows = d.learners || [];
+  let h = '<div class="card"><div class="row" style="align-items:flex-end">' +
+    '<div style="min-width:220px"><label>Search learners</label>' +
+      '<input type="text" id="asLearnerSearch" placeholder="Name, class, level…"></div>' +
+    '<div class="fixed" style="padding-bottom:10px"><h3 style="margin:0">Individuals ' +
+      '<span class="badge info">' + rows.length + '</span> ' +
+      '<span class="badge lock" id="asLearnerCount">' + rows.length + ' shown</span></h3></div></div>' +
+    '<div class="row export-buttons" data-target="#asLearners">' + exportBtnsHtml() + '</div>' +
+    '<p class="muted small">Ranked by how much of the programme each person has covered.</p>' +
+    '<div id="asLearners">';
+  if (!rows.length) return h + '<p class="muted">No learners in this scope.</p></div></div>';
+  h += '<div class="table-wrap"><table><thead><tr><th>#</th><th>Learner</th><th>Covered</th><th>Level</th>' +
+    '<th>Submissions</th><th>Certificates</th><th>Key words</th><th>Accuracy</th><th>Flagged</th>' +
+    '<th>Last active</th></tr></thead><tbody>';
+  rows.forEach(function (l, i) {
+    h += '<tr data-search="' + esc(searchText(l)) + '">' +
+      '<td><b>' + (i + 1) + '</b></td>' +
+      '<td><b>' + esc(l.name) + '</b><div class="small muted">' +
+        esc([l.className, l.studentNumber].filter(Boolean).join(' · ')) + '</div></td>' +
+      '<td style="min-width:130px"><b>' + (l.progress || 0) + '%</b>' + bar(l.progress || 0) + '</td>' +
+      '<td class="small">' + esc(l.level || '—') + '<div class="muted">' +
+        (l.modulesCompleted || 0) + '/' + (l.moduleCount || 0) + ' modules</div></td>' +
+      '<td>' + (l.submissions || 0) + '</td>' +
+      '<td>' + (l.certificates || 0) + '</td>' +
+      '<td>' + (l.keywordCoverage == null ? '—' : l.keywordCoverage + '%') + '</td>' +
+      '<td>' + (l.objectiveAccuracy == null ? '—' : l.objectiveAccuracy + '%') + '</td>' +
+      '<td>' + (l.flagged ? '<span class="badge off">' + l.flagged + '</span>' : '<span class="badge ok">0</span>') + '</td>' +
+      '<td class="small">' + (l.lastActiveAt ? fmtDate(l.lastActiveAt) : '<span class="muted">never</span>') + '</td></tr>';
+  });
+  return h + '</tbody></table></div></div></div>';
+}
+function astatModulesHtml(d) {
+  const mods = d.modules || [];
+  if (!mods.length) return '';
+  let h = '<div class="card"><h3>Module / book / chapter analysis</h3>' +
+    '<p class="muted small">How far the people in this account got with every part of the programme.</p>';
+  mods.forEach(function (m, mi) {
+    h += '<details class="exp"' + (mi === 0 ? ' open' : '') + '><summary><b>' + esc(m.title) + '</b> — ' +
+      esc(String(m.mode || '').toUpperCase()) + ' · started ' + (m.started || 0) + '/' + (m.participants || 0) +
+      ' · completed ' + (m.completed || 0) + ' (' + (m.completionRate || 0) + '%)</summary>' +
+      '<div class="small muted" style="margin:8px 0">Average progress <b>' + (m.avgProgress || 0) + '%</b> · ' +
+      (m.submissions || 0) + ' submissions · key words ' +
+      (m.keywordCoverage == null ? '—' : m.keywordCoverage + '%') + ' · objectives ' +
+      (m.objectiveAccuracy == null ? '—' : m.objectiveAccuracy + '%') + ' · flagged ' + (m.flagged || 0) + '</div>';
+    (m.books || []).forEach(function (b) {
+      h += '<div class="chap"><div class="q">Book ' + (b.order == null ? '' : b.order) + ': ' + esc(b.title) +
+        ' <span class="muted small">· ' + (b.submissions || 0) + ' submissions</span></div>';
+      if (!(b.chapters || []).length) { h += '<p class="muted small">No chapters yet.</p></div>'; return; }
+      h += '<div class="table-wrap"><table><thead><tr><th>Chapter</th><th>Pages</th><th>Learners</th>' +
+        '<th>Completed</th><th>Submissions</th><th>Key words</th><th>Accuracy</th><th>Flagged</th></tr></thead><tbody>';
+      (b.chapters || []).forEach(function (c) {
+        const pages = (c.pageStart || c.pageEnd) ? (c.pageStart || '—') + '–' + (c.pageEnd || '—') : '—';
+        h += '<tr><td>' + esc(c.title) + '</td><td class="small">' + esc(String(pages)) + '</td>' +
+          '<td>' + (c.learners || 0) + '</td><td>' + (c.completed || 0) + '</td><td>' + (c.submissions || 0) + '</td>' +
+          '<td>' + (c.keywordCoverage == null ? '—' : c.keywordCoverage + '%') + '</td>' +
+          '<td>' + (c.accuracy == null ? '—' : c.accuracy + '%') + '</td>' +
+          '<td>' + (c.flagged ? '<span class="badge off">' + c.flagged + '</span>' : '<span class="badge ok">0</span>') +
+          '</td></tr>';
+      });
+      h += '</tbody></table></div></div>';
+    });
+    h += '</details>';
+  });
+  return h + '</div>';
+}
+
+function astatFlagsHtml(d) {
+  const rows = d.flagged || [];
+  let h = '<div class="card"><h3>Copy flags' +
+    (rows.length ? ' <span class="badge off">' + rows.length + '</span>' : '') + '</h3>' +
+    '<p class="muted small">Every submission flagged for similarity, the learner it belongs to, and ' +
+    'the person whose work it matched.</p>';
+  if (!rows.length) return h + '<p class="muted">No copy flags — every submission so far is original work.</p></div>';
+  h += '<div class="row export-buttons" data-target="#asFlags">' + exportBtnsHtml() + '</div>' +
+    '<div id="asFlags"><div class="table-wrap"><table><thead><tr><th>Learner</th><th>Class</th><th>Work</th>' +
+    '<th>Similarity</th><th>Matched with</th><th>Their class</th><th>Date</th></tr></thead><tbody>';
+  rows.forEach(function (f) {
+    const m = f.matchedWith || {};
+    h += '<tr data-search="' + esc(searchText(f)) + '">' +
+      '<td><b>' + esc(f.userName || '—') + '</b></td>' +
+      '<td class="small">' + esc(f.className || '—') + '</td>' +
+      '<td class="small">' + typeBadge(f.type) + '<div class="muted">' +
+        esc(f.chapter || f.book || f.label || '—') + '</div></td>' +
+      '<td><span class="flag">' + (f.similarity || 0) + '%</span></td>' +
+      '<td><b>' + esc(m.name || f.matchedName || '—') + '</b>' +
+        (m.studentNumber ? '<div class="small muted">' + esc(m.studentNumber) + '</div>' : '') + '</td>' +
+      '<td class="small">' + esc(m.className || '—') + '</td>' +
+      '<td class="small">' + fmtDate(f.createdAt) + '</td></tr>';
+  });
+  return h + '</tbody></table></div></div></div>';
+}
+async function renderAnalytics() {
+  const el = sec('analytics');
+  el.innerHTML = '<div class="card"><p class="muted">Loading analytics…</p></div>';
+  let d;
+  try { d = await API.get('/admin/analytics' + astatQuery()); }
+  catch (e) {
+    el.innerHTML = '<div class="card"><p class="muted">Could not load analytics: ' + esc(msg(e)) + '</p></div>';
+    toast(msg(e), 'err');
+    return;
+  }
+  ASTAT.data = d;
+  el.innerHTML = '<h2><span class="motto">Be True</span>Analytics &amp; impact</h2>' +
+    astatFiltersHtml(d) + astatKpisHtml(d) + astatChartsHtml(d) +
+    astatLearnersHtml(d) + astatModulesHtml(d) + astatFlagsHtml(d);
+  wireAstats(el);
+}
+function wireAstats(el) {
+  const ap = document.getElementById('asApply');
+  if (ap) {
+    ap.onclick = function () {
+      const m = document.getElementById('asModule');
+      const w = document.getElementById('asWeeks');
+      ASTAT.moduleId = m ? m.value : '';
+      ASTAT.weeks = Number(w ? w.value : 12) || 12;
+      renderAnalytics();
+    };
+  }
+  const rs = document.getElementById('asReset');
+  if (rs) rs.onclick = function () { ASTAT.moduleId = ''; ASTAT.weeks = 12; renderAnalytics(); };
+  const s = document.getElementById('asLearnerSearch');
+  const table = el.querySelector('#asLearners table');
+  if (s && table) {
+    s.addEventListener('input', function () {
+      applyTableSearch(table, s, document.getElementById('asLearnerCount'));
+    });
+    applyTableSearch(table, s, document.getElementById('asLearnerCount'));
+  }
+}
+
 /* =============================================================== wiring ==== */
 RENDER.dashboard = renderDashboard;
 RENDER.users = renderUsers;
@@ -1712,6 +1960,7 @@ RENDER.books = renderBooks;
 RENDER.submissions = renderSubmissions;
 RENDER.certificates = renderCertificates;
 RENDER.progress = renderProgress;
+RENDER.analytics = renderAnalytics;
 RENDER.branding = renderBranding;
 
 const ADMIN_ONLY_VIEWS = ['supervisors', 'library', 'books', 'branding'];
