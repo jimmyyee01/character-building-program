@@ -177,6 +177,16 @@ tr:hover td { background: #f8faff; }
 .auth-panel .tabs button.active { color: var(--brand); border-bottom: 3px solid var(--brand); background: none; }
 .auth-logos { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 .auth-logos img { height: 52px; border-radius: 10px; background: #fff; border: 1px solid var(--line); padding: 3px; }
+
+/* Faint account/portal logo watermark on the right-hand side of the login page.
+   It uses the account's own logo (falling back to the program logo). */
+.login-mark {
+  position: fixed; right: 3vw; top: 50%; transform: translateY(-50%);
+  width: min(38vw, 440px); max-height: 78vh; object-fit: contain;
+  opacity: .09; pointer-events: none; user-select: none; z-index: 0;
+}
+.auth-wrap { position: relative; z-index: 1; }
+@media (max-width: 900px) { .login-mark { display: none; } }
 .closed-banner { background: #fdeaea; color: var(--bad); border: 1px solid #f5c8c8;
   padding: 12px 14px; border-radius: 10px; font-weight: 600; margin-top: 14px; }
 

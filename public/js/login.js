@@ -22,6 +22,15 @@ async function init() {
     i.src = tenantInfo.branding.programLogo; i.classList.remove('hidden');
   }
   applyThemeColor(tenantInfo.branding && tenantInfo.branding.themeColor);
+
+  /* faint account logo on the right of the page (falls back to the program logo) */
+  const mark = document.getElementById('loginMark');
+  const markSrc = tenantInfo.tenant.logo || tenantInfo.branding.programLogo;
+  if (mark && markSrc) {
+    mark.src = markSrc;
+    mark.alt = tenantInfo.tenant.name + ' logo';
+    mark.classList.remove('hidden');
+  }
   const closed = !tenantInfo.portal.active;
   document.getElementById('closedBanner').classList.toggle('hidden', !closed);
 }

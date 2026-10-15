@@ -162,6 +162,20 @@ async function part3(r, tok, check) {
   r = await call('/users', null, tok.schools);
   check('GET /users (tenant admin) -> {users}', r.ok && Array.isArray(r.data.users), 'status ' + r.status);
 
+  /* an organization admin can brand its own pages with a theme colour */
+  r = await call('/admin/branding', { method: 'PUT', body: { themeColor: '#0f766e' } }, tok.organization);
+  check('org admin sets its own theme colour', r.ok, 'status ' + r.status);
+  r = await call('/me', null, tok.organization);
+  check('org theme colour stored on the account', r.data.branding && r.data.branding.themeColor === '#0f766e', JSON.stringify(r.data.branding || {}));
+  r = await call('/public/tenant/horizon-alliance');
+  check('org login page receives the colour', r.ok && r.data.branding && r.data.branding.themeColor === '#0f766e', JSON.stringify(r.data.branding || {}));
+  r = await call('/admin/branding', { method: 'PUT', body: { themeColor: '#7c3aed' } }, tok.organization);
+  r = await call('/me', null, tok.organization);
+  check('org colour can be changed again', r.data.branding && r.data.branding.themeColor === '#7c3aed', JSON.stringify(r.data.branding || {}));
+  await call('/admin/branding', { method: 'PUT', body: { themeColor: null } }, tok.organization);
+  r = await call('/me', null, tok.organization);
+  check('org colour can be cleared', r.data.branding && !r.data.branding.themeColor, JSON.stringify(r.data.branding || {}));
+
   const stu = await call('/auth/login', { method: 'POST', body: { slug: 'greenfield-academy', identifier: 'STU-001', password: 'Student@123' } });
   const stuTok = stu.data.token;
   r = await call('/videos', null, stuTok);
