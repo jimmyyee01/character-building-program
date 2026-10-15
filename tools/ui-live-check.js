@@ -32,16 +32,29 @@ const doc = {
 const ORIGIN = BASE.replace(/\/api$/, '');
 function localFetch(url, opts) {
   const u = String(url);
-  const abs = /^https?:/i.test(u) ? u : (/^\/(uploads|f|assets|css|js)\//i.test(u) ? ORIGIN + u : BASE + u);
+  let abs;
+  /* API.call() prefixes '/api' itself, so honour that instead of adding another */
+  if (/^https?:/i.test(u)) abs = u;
+  else if (/^\/api\//i.test(u)) abs = BASE + u.slice(4);
+  else if (/^\/(uploads|f|assets|css|js)\//i.test(u)) abs = ORIGIN + u;
+  else abs = BASE + u;
   return realFetch(abs, opts);
 }
 /* one isolated context per page, exactly like the browser (app.js and super.js
    each declare their own const S, so they cannot share a context) */
+function memStore() {
+  const store = {};
+  return {
+    getItem(k) { return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; },
+    setItem(k, v) { store[k] = String(v); },
+    removeItem(k) { delete store[k]; }
+  };
+}
 function ctxFor(files) {
   const loc = { href: 'http://x/', pathname: '/', search: '', hash: '' };
   const sandbox = {
     document: doc, console: console, navigator: { userAgent: 'node' }, location: loc,
-    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    localStorage: memStore(),
     Blob: function () {}, URL: { createObjectURL: () => 'blob:x', revokeObjectURL() {} },
     FileReader: function () { this.readAsDataURL = function () {}; },
     alert() {}, confirm: () => false, prompt: () => '',
@@ -233,6 +246,8 @@ function cleanSlice(s) {
     if (openCh && lockedCh) {
     const view = bookViewEl();
     const realGet = appCtx.document.getElementById;
+    /* signed in, like the real page — API.call() reads the token from localStorage */
+    run(appCtx, 'API.setToken', [stu]);
     appCtx.document.getElementById = function (id) { return id === 'view-book' ? view : makeEl('div'); };
     appCtx.__probe = probe;
     vm.runInContext('S.bookData = __probe; S.selectedChapterId = null;', appCtx);
@@ -323,6 +338,29 @@ function cleanSlice(s) {
     check('page count of the uploaded PDF is 3', pages === 3, 'got ' + pages);
     const rm = await api('/library/' + up.item.id, sup, { method: 'DELETE' });
     check('uploaded test book cleaned up', rm.ok || rm.error !== undefined);
+  }
+
+  /* --------------------------- super dashboard (live overview data) ------- */
+  {
+    const ov = await api('/super/overview', sup);
+    check('super overview payload: counts + per-tenant rows',
+      ov.ok && !!ov.counts && Array.isArray(ov.tenants) && ov.tenants.length > 0,
+      'status keys=' + Object.keys(ov.counts || {}).length + ' tenants=' + (ov.tenants || []).length);
+    const view = makeEl('div');
+    const realGet = superCtx.document.getElementById;
+    /* sign in inside the context: API.call() sends the token from localStorage */
+    run(superCtx, 'API.setToken', [sup]);
+    run(superCtx, 'API.setUser', [{ role: 'super', username: 'superadmin' }]);
+    superCtx.document.getElementById = function (id) { return id === 'view-dashboard' ? view : makeEl('div'); };
+    await run(superCtx, 'renderDashboard');
+    superCtx.document.getElementById = realGet;
+    const html = view.innerHTML;
+    dirty('super dashboard', html);
+    check('super dashboard renders its cards, charts and tenants table',
+      html.indexOf('Statistics') !== -1 && html.indexOf('Tenants overview') !== -1 &&
+      html.indexOf('No tenants yet') === -1 &&
+      html.indexOf(run(superCtx, 'esc', [ov.tenants[0].name])) !== -1,
+      html.slice(0, 140));
   }
 
   /* -------------------------------------------- super analytics render --- */

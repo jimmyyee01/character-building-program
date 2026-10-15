@@ -245,6 +245,22 @@ async function part3(r, tok, check) {
   check('GET /super/submissions -> {submissions}', r.ok && Array.isArray(r.data.submissions), 'status ' + r.status);
   r = await call('/super/settings', null, st);
   check('GET /super/settings', r.ok, 'status ' + r.status);
+  /* the super dashboard reads this one; it used to 500 with "tenants is not defined" */
+  r = await call('/super/overview', null, st);
+  check('GET /super/overview -> {counts, tenants}',
+    r.ok && !!r.data.counts && Array.isArray(r.data.tenants) && r.data.tenants.length >= 4,
+    'status ' + r.status + ' ' + JSON.stringify(r.data).slice(0, 140));
+  const ovTenant = (r.data.tenants || [])[0] || {};
+  check('super overview tenant rows carry every dashboard column',
+    ['id', 'name', 'slug', 'type', 'users', 'submissions', 'certificates', 'flagged', 'active']
+      .every(function (k) { return ovTenant[k] !== undefined; }), JSON.stringify(ovTenant).slice(0, 160));
+  check('super overview counts agree with its own tenant rows',
+    (r.data.counts || {}).tenants === (r.data.tenants || []).length &&
+    (r.data.tenants || []).reduce(function (n, t) { return n + (Number(t.users) || 0); }, 0) <=
+      (r.data.counts || {}).users,
+    'counts.tenants=' + (r.data.counts || {}).tenants + ' rows=' + (r.data.tenants || []).length +
+      ' sum(users)=' + (r.data.tenants || []).reduce(function (n, t) { return n + (Number(t.users) || 0); }, 0) +
+      ' counts.users=' + (r.data.counts || {}).users);
 
   r = await call('/users', null, tok.schools);
   check('GET /users (tenant admin) -> {users}', r.ok && Array.isArray(r.data.users), 'status ' + r.status);

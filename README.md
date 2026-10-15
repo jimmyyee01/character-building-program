@@ -221,11 +221,12 @@ curl -s https://your-site/api/health     # build + features["admin.analytics","s
 curl -s https://your-site/build.json     # must show the same build
 ```
 
-73 checks covering every seeded login, the per-portal role rules (schools /
+93 checks covering every seeded login, the per-portal role rules (schools /
 organization / family / married), the supervisor 100-user cap, account colour,
-dashboards + graphs, the ranked *Student progress* report (ordering, level,
-recent work, role scoping), reports, certificates and the participant flow. It
-prints a PASS/FAIL summary and exits non-zero if anything fails.
+both console dashboards (including `/super/overview`, whose missing `tenants`
+used to 500 the super dashboard), the ranked *Student progress* report (ordering,
+level, recent work, role scoping), reports, certificates and the participant
+flow. It prints a PASS/FAIL summary and exits non-zero if anything fails.
 
 Run the PHP build without Apache (useful for local testing — `php -S` does not
 read `.htaccess`, so the bundled router does the rewriting):

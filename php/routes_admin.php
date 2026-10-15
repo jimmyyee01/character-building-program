@@ -119,13 +119,17 @@ function r_super_overview(array $user, array $body, array $params, ?string $toke
         'submissions'=>$c('submissions'),'certificates'=>$c('certificates'),
         'flagged'=>$c('submissions','flagged=1'),'modules'=>$c('modules'),'library'=>$c('library')];
     $per = [];
+    $portalRows = [];
+    foreach ($pdo->query('SELECT * FROM portals')->fetchAll() as $p) { $portalRows[$p['id']] = $p; }
     foreach ($pdo->query('SELECT * FROM tenants ORDER BY created_at DESC')->fetchAll() as $t) {
         $st = $pdo->prepare('SELECT COUNT(*) FROM users WHERE tenant_id=?'); $st->execute([$t['id']]); $uc = (int)$st->fetchColumn();
         $st = $pdo->prepare('SELECT COUNT(*) FROM submissions WHERE tenant_id=?'); $st->execute([$t['id']]); $sc = (int)$st->fetchColumn();
         $st = $pdo->prepare('SELECT COUNT(*) FROM certificates WHERE tenant_id=?'); $st->execute([$t['id']]); $cc = (int)$st->fetchColumn();
         $st = $pdo->prepare('SELECT COUNT(*) FROM submissions WHERE tenant_id=? AND flagged=1'); $st->execute([$t['id']]); $fc = (int)$st->fetchColumn();
+        /* `active` is the portal's own state, which the dashboard's status column shows */
         $per[] = ['id'=>$t['id'],'name'=>$t['name'],'slug'=>$t['slug'],'type'=>$t['type'],
-            'users'=>$uc,'submissions'=>$sc,'certificates'=>$cc,'flagged'=>$fc];
+            'portalId'=>$t['portal_id'],'users'=>$uc,'submissions'=>$sc,'certificates'=>$cc,'flagged'=>$fc,
+            'active'=>portal_active($portalRows[$t['portal_id']] ?? null)];
     }
     return ['counts'=>$counts,'tenants'=>$per];
 }

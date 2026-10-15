@@ -1403,6 +1403,18 @@ route('GET', '/api/admin/analytics', ({ req, user }) => {
 
 route('GET', '/api/super/overview', ({ user }) => {
   requireRole(user, SUPER);
+  /* Per-tenant rows for the super dashboard: the Tenants overview table there
+     shows users / submissions / certificates / flagged per account, and the
+     status column reads `active` (the account's portal is open today).
+     Mirrors r_super_overview() in the PHP build. */
+  const tenants = dbm.db.tenants.map(t => ({
+    id: t.id, name: t.name, slug: t.slug, type: t.type, portalId: t.portalId || null,
+    users: dbm.db.users.filter(u => u.tenantId === t.id).length,
+    submissions: dbm.db.submissions.filter(s => s.tenantId === t.id).length,
+    certificates: dbm.db.certificates.filter(c => c.tenantId === t.id).length,
+    flagged: dbm.db.submissions.filter(s => s.tenantId === t.id && s.flagged).length,
+    active: portalActive(dbm.byId('portals', t.portalId))
+  }));
   return { ok: true,
     counts: { portals: dbm.db.portals.length, tenants: dbm.db.tenants.length,
       users: dbm.db.users.length, submissions: dbm.db.submissions.length,
