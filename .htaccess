@@ -5,6 +5,10 @@ RewriteEngine On
 # JSON API -> PHP router (identical paths to the previous backend: /api/...)
 RewriteRule ^api/(.*)$ php/api.php?r=/$1 [QSA,L]
 
+# OPcache flush helper: lets a fresh pull take effect without hunting for the
+# service name (open /cache-clear.php; it only drops compiled bytecode)
+RewriteRule ^cache-clear(\.php)?/?$ public/cache-clear.php [L]
+
 # Pretty pages
 RewriteRule ^t/([A-Za-z0-9-]+)/?$ public/login.html [L]
 RewriteRule ^super/?$ public/super.html [L]

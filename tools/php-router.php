@@ -15,6 +15,12 @@ if (strpos($uri, '/api/') === 0) {
     return true;
 }
 
+/* /cache-clear -> the OPcache flush helper (Apache does this via .htaccess) */
+if (preg_match('#^/cache-clear(\.php)?/?$#', $uri)) {
+    require $root . '/public/cache-clear.php';
+    return true;
+}
+
 /* static assets live in public/ */
 if (preg_match('#^/(css|js)/(.+)$#', $uri, $m)) {
     $f = $root . '/public/' . $m[1] . '/' . $m[2];
@@ -54,6 +60,7 @@ $mimes = ['html' => 'text/html', 'css' => 'text/css', 'js' => 'text/javascript',
 $candidate = $root . '/public' . $uri;
 if (is_file($candidate)) {
     $ext = strtolower(pathinfo($candidate, PATHINFO_EXTENSION));
+    if ($ext === 'php') { require $candidate; return true; }   // Apache executes PHP here too
     header('Content-Type: ' . ($mimes[$ext] ?? 'application/octet-stream'));
     header('Content-Length: ' . filesize($candidate));
     readfile($candidate);

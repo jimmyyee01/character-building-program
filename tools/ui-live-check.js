@@ -258,6 +258,30 @@ function dirty(label, html) {
         filesNewBackendOld.indexOf('php8.2-fpm') === -1;
     })());
 
+  check('the deployment notice separates "never reached the app" from "old app copy"',
+    (function () {
+      const html = run(adminCtx, 'deploymentNoticeHtml',
+        [{ files: { build: 'b9' }, server: null,
+           health: { status: 404, html: true, body: '<!DOCTYPE HTML ...<TITLE>Not Found</TITLE>' } }]);
+      const json = run(adminCtx, 'deploymentNoticeHtml',
+        [{ files: { build: 'b9' }, server: null,
+           health: { status: 404, json: true, body: '{"ok":false,"error":"Unknown endpoint: GET /api/health"}' } }]);
+      return html.indexOf('never reached the app') !== -1 &&
+        html.indexOf('AllowOverride') !== -1 &&
+        html.indexOf('php/api.php?r=/health') !== -1 &&
+        json.indexOf('older copy of the app') !== -1 &&
+        json.indexOf('cache-clear.php') !== -1 &&
+        json.indexOf('route table') !== -1;
+    })());
+  check('the stale notice prints the raw /api/health reply for pasting',
+    (function () {
+      const out = run(adminCtx, 'deploymentNoticeHtml',
+        [{ files: { build: 'b9' }, server: null,
+           health: { status: 404, json: true, body: '{"ok":false,"error":"Unknown endpoint: GET /api/health"}' } }]);
+      return out.indexOf('replied <b>404</b>') !== -1 &&
+        out.indexOf('Unknown endpoint: GET /api/health') !== -1;
+    })());
+
   console.log(bad ? '\n' + bad + ' FAILED' : '\nLIVE RENDER OK');
   process.exit(bad ? 1 : 0);
 })().catch(function (e) { console.log('FATAL ' + e.message); process.exit(1); });

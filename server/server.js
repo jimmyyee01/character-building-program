@@ -36,6 +36,15 @@ function safeJoin(base, target) {
 }
 
 function serveFile(res, file) {
+  // The Node backend cannot execute PHP, so never hand out PHP sources (the PHP
+  // build serves those paths itself when it is the backend in use).
+  if (path.extname(file).toLowerCase() === '.php') {
+    return sendJSON(res, 404, {
+      ok: false,
+      error: 'Nothing to clear here: this is the Node backend, which builds its routes at boot — '
+        + 'restart the process (pm2/systemctl). /cache-clear.php is for PHP hosts.'
+    });
+  }
   fs.stat(file, (err, st) => {
     if (err || !st.isFile()) return sendJSON(res, 404, { ok: false, error: 'Not found' });
     res.writeHead(200, {

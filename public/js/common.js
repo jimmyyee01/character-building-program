@@ -687,28 +687,63 @@ function staleServerHtml(build, missing) {
 async function serverBuild() {
   try { return await API.get('/health'); } catch (e) { return null; }
 }
+/* Raw look at /api/health, so the notice can tell "an older copy of the app is
+   answering" (its own JSON "Unknown endpoint", routes built earlier) apart from
+   "the request never reached the app" (the web server answered an HTML page —
+   that is .htaccess / document root, not a stale process). */
+async function probeHealth() {
+  const out = { status: 0, json: false, html: false, body: '', payload: null };
+  try {
+    const res = await fetch('/api/health?t=' + Date.now(), { cache: 'no-store' });
+    out.status = res.status;
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    const text = await res.text();
+    out.body = text.replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (/text\/html/.test(ct) || /^<(!doctype|html|head|body)/i.test(out.body)) {
+      out.html = true;
+    } else {
+      try { const j = JSON.parse(text); out.json = true; out.payload = j; } catch (e) { /* not JSON */ }
+    }
+  } catch (e) { out.body = String((e && e.message) || e); }
+  return out;
+}
 /* Compare the deployed FILES with the running BACKEND — they are updated by
    different steps (a pull updates the files; a restart loads the backend), so a
    mismatch points at the missing step. */
 async function deploymentInfo() {
-  const info = { files: null, server: null };
+  const info = { files: null, server: null, health: null };
   try {
     const res = await fetch('/build.json?t=' + Date.now(), { cache: 'no-store' });
     if (res.ok) info.files = await res.json();
   } catch (e) { /* no build.json: very old deployment */ }
-  info.server = await serverBuild();
+  info.health = await probeHealth();
+  info.server = info.health.payload && info.health.payload.build ? info.health.payload : null;
   return info;
 }
 function deploymentNoticeHtml(info) {
   const files = (info && info.files) || null;
   const server = (info && info.server) || null;
+  const health = (info && info.health) || {};
   const fileBuild = files && files.build ? files.build : null;
   const serverBuild = server && server.build ? server.build : null;
   let verdict;
-  if (!serverBuild && fileBuild) {
+  if (!serverBuild && health.html) {
+    verdict = 'The request never reached the app — the web server itself answered with an HTML page ' +
+      '(status ' + esc(String(health.status || '?')) + '), so no restart will help. The <b>document root</b> ' +
+      'must be the project folder (not <code>public/</code>) and its <code>.htaccess</code> must be allowed: ' +
+      '<code>AllowOverride All</code> + <code>mod_rewrite</code>. Test ' +
+      '<a href="/php/api.php?r=/health" target="_blank" rel="noopener">/php/api.php?r=/health</a> — if THAT ' +
+      'answers JSON, only the rewrite is missing.';
+  } else if (!serverBuild && health.json) {
+    verdict = 'An older copy of the app answered from its own route table (' + esc(health.body) + '), so ' +
+      'the <b>backend process</b> is still old while the files are current. It must be restarted — a Node ' +
+      'process builds its routes at boot, PHP keeps them in OPcache. PHP hosts can flush that without ' +
+      'finding the service: open <a href="/cache-clear.php" target="_blank" rel="noopener">/cache-clear.php</a>.';
+  } else if (!serverBuild && fileBuild) {
     verdict = 'The <b>files</b> on the server are current (' + esc(fileBuild) + ') but the <b>backend process</b> ' +
       'is still old (even /api/health is missing). <b>Restart the backend</b> — Apache/PHP-FPM, or the Node process — ' +
-      'then reload.';
+      'then reload. PHP hosts: <a href="/cache-clear.php" target="_blank" rel="noopener">/cache-clear.php</a> ' +
+      'flushes OPcache without a restart.';
   } else if (!serverBuild && !fileBuild) {
     verdict = 'Neither /api/health nor /build.json answered, so the folder being served is not the one you ' +
       'pulled. Check the <b>document root</b>, then <code>git pull</code> there and restart the backend.';
@@ -724,14 +759,20 @@ function deploymentNoticeHtml(info) {
     '<p class="small" style="margin:6px 0 0">' +
       'Files on the server: <b>' + esc(fileBuild || 'not found (/build.json)') + '</b> · ' +
       'backend build: <b>' + esc(serverBuild || 'not found (/api/health)') + '</b></p>' +
+    (health.status || health.body
+      ? '<p class="small" style="margin:6px 0 0">/api/health replied <b>' +
+        esc(String(health.status || 'no answer')) + '</b>' +
+        (health.body ? ' — <code>' + esc(health.body) + '</code>' : '') + '</p>'
+      : '') +
     '<p class="small" style="margin:6px 0 0">' + verdict + '</p>' +
     '<p class="small" style="margin:8px 0 0">On the server, in the folder the domain serves:</p>' +
     '<pre class="small" style="background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;' +
       'overflow:auto">bash tools/which-backend.sh   # names the process answering + how to restart it\n' +
       'git pull && git log --oneline -1\n' +
       'grep -n "api/health" php/api.php        # present in the new build\n' +
-      '# then restart that backend: apache2 | httpd | phpX.Y-fpm | nginx | caddy | node\n' +
-      '#   (php -S dev server: kill the pid and start the same command again)</pre>' +
+      'curl -s localhost/api/health            # JSON? then only the process is old\n' +
+      '# restart that backend: node (pm2 restart <app>) | php-X.Y-fpm | apache2 | httpd | nginx\n' +
+      '#   php -S dev server: kill the pid and start the same command again</pre>' +
     '<p class="small" style="margin:6px 0 0">Then check ' +
       '<a href="/api/health" target="_blank" rel="noopener">/api/health</a> and ' +
       '<a href="/build.json" target="_blank" rel="noopener">/build.json</a> — both should show the same build.</p>' +

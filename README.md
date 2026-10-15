@@ -121,6 +121,59 @@ they print a red card with the two builds, the step that is missing, the shell
 commands to run and a *Try again* button (`#staleBuild` in `admin.html` /
 `super.html`).
 
+### Fastest fix on a PHP host: flush OPcache (no service name needed)
+
+If `/build.json` is current but `/api/health` is not, the files are fine and only
+the **process** is old. On PHP that process keeps compiled files in OPcache, and
+`/cache-clear.php` flushes them without touching any service:
+
+```bash
+curl -s https://your-site/cache-clear.php     # { ok:true, did_reset:true, ... }
+curl -s https://your-site/api/health          # now report the new build
+```
+
+It is a brand-new file after a pull, so it compiles even when the old code is
+cached; it only drops compiled bytecode (never data) and is safe to delete after
+use. Apache reaches it through the `.htaccess` rule, `php -S` through
+`tools/php-router.php`. If it answers `did_reset:false`, PHP-FPM is not the
+process answering you — restart the process instead (see above), which is the
+only fix for a Node backend.
+
+### `/api/health` answers an HTML page (not JSON)? The rewrite is the problem
+
+An HTML 404 (or the site's home page) means the request **never reached the app**,
+so no restart will ever fix it. The document root must be the **project folder**
+(not `public/`), and its `.htaccess` must be honoured:
+
+```bash
+curl -s -o /dev/null -w '%{http_code} %{content_type}\n' https://your-site/api/health
+curl -s https://your-site/php/api.php?r=/health      # JSON here => only the rewrite is missing
+```
+
+Apache — allow the file and the module, then reload:
+
+```apache
+<Directory /var/www/character-building-program>
+    AllowOverride All
+    Require all granted
+</Directory>
+```
+
+```bash
+sudo a2enmod rewrite && sudo systemctl reload apache2   # or your web server's name
+```
+
+nginx has no `.htaccess`; give the same paths explicitly:
+
+```nginx
+root /var/www/character-building-program;
+location /api/ { try_files $uri /php/api.php?r=$uri; }
+location /cache-clear { try_files $uri /public/cache-clear.php; }
+location / { try_files $uri $uri/ /public/index.html; }
+location ~ ^/(css|js)/ { root /var/www/character-building-program/public; }
+location ~ \.php$ { include snippets/fastcgi-php.conf; fastcgi_pass unix:/run/php/php8.3-fpm.sock; }
+```
+
 ### Restarting the backend (which command?)
 
 The new code is loaded by a **process**, so a `git pull` alone is not enough.
