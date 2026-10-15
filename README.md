@@ -59,7 +59,7 @@ node tools/api-test.js http://localhost:3000     # Node backend (npm start)
 node tools/api-test.js http://localhost:8080     # PHP backend (see below)
 ```
 
-72 checks covering every seeded login, the per-portal role rules (schools /
+73 checks covering every seeded login, the per-portal role rules (schools /
 organization / family / married), the supervisor 100-user cap, account colour,
 dashboards + graphs, the ranked *Student progress* report (ordering, level,
 recent work, role scoping), reports, certificates and the participant flow. It
@@ -92,7 +92,11 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
   `←`/`→` keys, a page counter (`Page 3 of 12`) and a full-page mode, never a
   long scrolling document.
 - **Books & Chapters** — set chapters (title, content, page ranges) and enter
-  the objective questions (question, options, correct answer).
+  the objective questions (question, options, correct answer). The page picker
+  offers **every page of the book** (it reads the page count from the PDF linked
+  to the book and you can type a total, tick a range, tick all pages or clear),
+  and it wraps below the title field inside a scrollable box so it always fits
+  the page — in the super console and in each account's console.
 - **Users / Reports / Settings** — all users across all tenants, all
   submissions with copy-similarity flags, program name/logo, letter & letter
   video, credentials.

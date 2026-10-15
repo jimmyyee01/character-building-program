@@ -224,6 +224,14 @@ async function renderProgress() {
 
   $('spSearch').addEventListener('input', function () {
     applyTableSearch('supProgress', 'spSearch');
+    const badge = $('spCount');
+    if (badge) {
+      let shown = 0;
+      document.querySelectorAll('#supProgressTable tbody tr[data-search]').forEach(function (tr) {
+        if (tr.style.display !== 'none') shown++;
+      });
+      badge.textContent = shown + ' shown';
+    }
   });
   applyTableSearch('supProgress', 'spSearch');
   v.onclick = function (e) {
@@ -915,6 +923,7 @@ async function renderBooks() {
     books = d.books || [];
   } catch (e) { v.innerHTML = errBox(e); return; }
   S.books = books;
+  S.library = library;
 
   const modOpts = modules.map(function (m) {
     const sel = String(m.id) === String(S.bookModuleId) ? ' selected' : '';
@@ -956,39 +965,49 @@ async function renderBooks() {
         ? books.map(function (b) { return bookCardHTML(b, isSummary); }).join('')
         : '<div class="card muted">No books in this module yet.</div>') +
     '</div>';
+  /* size every page picker (and read the linked PDF so all pages appear) */
+  v.querySelectorAll('[data-pg]').forEach(function (p) { pgInit(p); });
 }
 function chapterFieldsHTML(ch) {
   const sel = pageSelection(ch);
+  const book = S.curBook || null;
   return '<div class="row">' +
     '<div><label>Title *</label><input type="text" class="ch-title" required value="' +
       esc(ch ? ch.title : '') + '"></div>' +
-    '<div class="page-pick"><label>Select pages *</label>' + pagePickerHTML(sel) + '</div>' +
+    pagePickerHTML(sel, bookPageTotal(book), { pdf: bookPdfUrl(book) }) +
     '<div><label>Order</label><input type="number" class="ch-order" value="' +
       esc(ch && ch.order != null ? ch.order : '') + '"></div>' +
   '</div>' +
   '<label>Content</label><textarea class="ch-content" style="min-height:110px">' +
     esc(ch ? (ch.content || '') : '') + '</textarea>';
 }
+/* how many pages can be ticked: the highest page already used, or the real
+   page count of the PDF linked to the book */
+function bookPageTotal(book) {
+  let max = 0;
+  ((book && book.chapters) || []).forEach(function (c) {
+    [c.pageStart, c.pageEnd].forEach(function (p) { max = Math.max(max, Number(p) || 0); });
+    (c.pageSelect || []).forEach(function (p) { max = Math.max(max, Number(p) || 0); });
+  });
+  return max;
+}
+function bookPdfUrl(book) {
+  const lib = (S.library || []).filter(function (l) { return String(l.id) === String(book && book.libraryId); })[0];
+  return lib && lib.url && /\.pdf($|[?#])/i.test(String(lib.url)) ? lib.url : null;
+}
 function pageSelection(ch) {
   const s = [];
   if (ch && Array.isArray(ch.pageSelect) && ch.pageSelect.length) {
     ch.pageSelect.forEach(function (p) { if (Number(p) >= 1) s.push(Number(p)); });
   } else if (ch && (ch.pageStart != null || ch.pageEnd != null)) {
-    const a = [ch.pageStart, ch.pageEnd].filter(function (p) { return Number(p) >= 1; });
-    if (a.length) s.push(a[0], a[1]);
+    const a = [Number(ch.pageStart), Number(ch.pageEnd)].filter(function (p) { return p >= 1; });
+    if (a.length === 2 && a[1] >= a[0]) {
+      for (let i = a[0]; i <= a[1] && s.length < 5000; i++) s.push(i);
+    } else {
+      a.forEach(function (p) { s.push(p); });
+    }
   }
   return s;
-}
-function pagePickerHTML(selected) {
-  const sel = new Set(selected || []);
-  let h = '<div class="pg-grid">';
-  for (let i = 1; i <= 99; i++) {
-    if (i % 20 === 1) h += '<div class="row" style="gap:4px;flex-wrap:nowrap;align-items:center">';
-    h += '<label class="chip pg-chip' + (sel.has(i) ? ' on' : '') + '"><input type="checkbox" class="pg-ck" value="' + i + '"' + (sel.has(i) ? ' checked' : '') + '> ' + i + '</label>';
-    if (i % 20 === 0) h += '</div>';
-  }
-  h += '</div>';
-  return h;
 }
 function qOptionRowHTML(name, text, checked) {
   return '<div class="row q-opt" style="align-items:center;margin-bottom:6px">' +
@@ -1074,6 +1093,7 @@ function chapterHTML(ch) {
   '</div>';
 }
 function bookCardHTML(b, isSummary) {
+  S.curBook = b;
   const chapters = (b.chapters || []).slice().sort(function (a, z) {
     return (a.order || 0) - (z.order || 0);
   });

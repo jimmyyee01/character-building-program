@@ -203,6 +203,125 @@ function chartWeekly(rows, weeks, opts) {
   return chartBars(buckets, { caption: opts.caption || 'Grouped into the last ' + n + ' weeks' });
 }
 
+/* ================================================= chapter page picker ==== */
+/* Every page of the book is offered — no 99-page cut-off. The chips wrap and
+   scroll inside the panel (so they fit under the field), the total can be set
+   by hand, and if the book is linked to a PDF the real page count is read from
+   it so all of its pages appear. */
+function pgChipsHTML(total, selected) {
+  const set = new Set((selected || []).map(Number));
+  const n = Math.max(1, Math.min(5000, Number(total) || 1));
+  let h = '';
+  for (let i = 1; i <= n; i++) {
+    h += '<label class="chip pg-chip' + (set.has(i) ? ' on' : '') + '">' +
+      '<input type="checkbox" class="pg-ck" value="' + i + '"' + (set.has(i) ? ' checked' : '') + '> ' + i +
+      '</label>';
+  }
+  return h;
+}
+function pagePickerHTML(selected, total, opts) {
+  opts = opts || {};
+  const sel = (selected || []).map(Number).filter(function (n) { return n >= 1; });
+  const maxSel = sel.length ? Math.max.apply(null, sel) : 0;
+  const n = Math.max(Number(total) || 0, maxSel, Number(opts.min) || 60);
+  return '<div class="page-pick" data-pg data-pg-total="' + n + '"' +
+      (opts.pdf ? ' data-pg-pdf="' + esc(opts.pdf) + '"' : '') + '>' +
+    '<label>Select pages *</label>' +
+    '<div class="pg-tools">' +
+      '<label class="pg-count">Pages in this book' +
+        '<input type="number" min="1" max="5000" class="pg-total-num" value="' + n + '"></label>' +
+      '<label>From<input type="number" min="1" class="pg-from" placeholder="1"></label>' +
+      '<label>To<input type="number" min="1" class="pg-to" placeholder="' + n + '"></label>' +
+      '<button type="button" class="small" data-act="pg-range">Select range</button>' +
+      '<button type="button" class="small ghost" data-act="pg-all">All pages</button>' +
+      '<button type="button" class="small ghost" data-act="pg-clear">Clear</button>' +
+    '</div>' +
+    '<div class="pg-grid" data-pg-grid>' + pgChipsHTML(n, sel) + '</div>' +
+    '<p class="muted small pg-hint">Scroll the box to reach every page. "All pages" ticks the whole book.</p>' +
+  '</div>';
+}
+function pgRootOf(el) { return el && el.closest ? el.closest('[data-pg]') : null; }
+function pgSelected(root) {
+  if (!root) return [];
+  return Array.prototype.map.call(root.querySelectorAll('.pg-ck:checked'), function (c) {
+    return Number(c.value);
+  }).filter(function (n) { return n >= 1; });
+}
+function pgRebuild(root, total, sel) {
+  if (!root) return;
+  const grid = root.querySelector('[data-pg-grid]');
+  const n = Math.max(1, Math.min(5000, Number(total) || 1));
+  root.dataset.pgTotal = n;
+  if (grid) grid.innerHTML = pgChipsHTML(n, sel || pgSelected(root));
+  const num = root.querySelector('.pg-total-num');
+  if (num) num.value = n;
+}
+/* Sizes the picker from a linked PDF (all pages of the book appear). */
+function pgInit(root, pdfUrl) {
+  if (!root || root.dataset.pgInit === '1') return;
+  root.dataset.pgInit = '1';
+  const url = pdfUrl || root.dataset.pgPdf;
+  if (!url || typeof pdfPageCount !== 'function') return;
+  pdfPageCount(url).then(function (n) {
+    if (!n) return;
+    const sel = pgSelected(root);
+    const maxSel = sel.length ? Math.max.apply(null, sel) : 0;
+    if (n > Number(root.dataset.pgTotal || 0)) pgRebuild(root, Math.max(n, maxSel), sel);
+  });
+}
+function pgAllRanges(root, on) {
+  root.querySelectorAll('.pg-ck').forEach(function (c) {
+    c.checked = on;
+    const chip = c.closest('.pg-chip');
+    if (chip) chip.classList.toggle('on', on);
+  });
+}
+function pgRange(root, from, to) {
+  const a = Math.max(1, Math.min(Number(from) || 1, Number(to) || 1));
+  const b = Math.max(Number(from) || 1, Number(to) || 1);
+  root.querySelectorAll('.pg-ck').forEach(function (c) {
+    const v = Number(c.value);
+    if (v >= a && v <= b) {
+      c.checked = true;
+      const chip = c.closest('.pg-chip');
+      if (chip) chip.classList.add('on');
+    }
+  });
+}
+
+/* Delegated so every page picker works, wherever it is rendered. */
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('click', function (e) {
+    const t = e.target;
+    if (!t || !t.closest) return;
+    const btn = t.closest('[data-act="pg-range"], [data-act="pg-all"], [data-act="pg-clear"]');
+    if (!btn) return;
+    const root = pgRootOf(btn);
+    if (!root) return;
+    e.preventDefault();
+    const act = btn.getAttribute('data-act');
+    if (act === 'pg-all') pgAllRanges(root, true);
+    else if (act === 'pg-clear') pgAllRanges(root, false);
+    else {
+      const f = root.querySelector('.pg-from');
+      const to = root.querySelector('.pg-to');
+      pgRange(root, f ? f.value : 1, to ? to.value : 1);
+    }
+  });
+  document.addEventListener('change', function (e) {
+    const t = e.target;
+    if (!t || !t.closest) return;
+    if (t.classList && t.classList.contains('pg-total-num')) {
+      pgRebuild(pgRootOf(t), t.value, pgSelected(pgRootOf(t)));
+      return;
+    }
+    if (t.classList && t.classList.contains('pg-ck')) {
+      const chip = t.closest('.pg-chip');
+      if (chip) chip.classList.toggle('on', !!t.checked);
+    }
+  });
+}
+
 /* ================================================ book-style PDF reader === */
 /* PDFs open one page at a time, like turning the pages of a book: no long
    scroll and no viewer chrome. Prev/Next buttons (or the arrow keys, or the

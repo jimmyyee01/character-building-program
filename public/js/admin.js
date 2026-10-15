@@ -662,6 +662,10 @@ async function renderSupervisors() {
 /* pdfHtml() lives in common.js — it renders the book-style single-page reader. */
 
 function libIndicator(it) {
+  /* an uploaded/linked PDF offers the closed cover so it can be opened on click */
+  if (it.url && /\.pdf($|[?#])/i.test(String(it.url))) {
+    return pdfHtml(it.url, { title: it.fileName || it.title });
+  }
   if (it.fileName) return '<span class="mono small">' + esc(it.fileName) + '</span>';
   if (it.text) return '<span class="badge warn">Text · ' + String(it.text).length + ' chars</span>';
   if (it.url) return pdfHtml(it.url);
@@ -834,6 +838,7 @@ async function renderBooks() {
     return;
   }
   booksState.modules = mods;
+  booksState.lib = lib;
   if (!booksState.moduleId || !mods.some(function (m) { return m.id === booksState.moduleId; })) {
     booksState.moduleId = mods.length ? mods[0].id : null;
     booksState.openBookId = null;
@@ -894,6 +899,53 @@ async function renderBooks() {
   });
   await refreshBooks();
 }
+/* ---------------------------------------------- chapter page selection --- */
+/* The picker in common.js offers every page of the book (no 99-page limit) and
+   can size itself from the PDF linked to the book. */
+function chapterPages(ch) {
+  if (ch && Array.isArray(ch.pageSelect) && ch.pageSelect.length) {
+    return ch.pageSelect.map(Number).filter(function (n) { return n >= 1; });
+  }
+  if (ch && (ch.pageStart != null || ch.pageEnd != null)) {
+    const a = [Number(ch.pageStart), Number(ch.pageEnd)].filter(function (n) { return n >= 1; });
+    if (a.length === 2 && a[1] >= a[0]) {
+      const out = [];
+      for (let i = a[0]; i <= a[1] && out.length < 5000; i++) out.push(i);
+      return out;
+    }
+    return a;
+  }
+  return [];
+}
+function bookPageTotal(book) {
+  let max = 0;
+  ((book && book.chapters) || []).forEach(function (c) {
+    [c.pageStart, c.pageEnd].forEach(function (p) { max = Math.max(max, Number(p) || 0); });
+    (c.pageSelect || []).forEach(function (p) { max = Math.max(max, Number(p) || 0); });
+  });
+  return max;
+}
+function bookPdfUrl(book) {
+  const lib = (booksState.lib || []).filter(function (l) { return l.id === (book && book.libraryId); })[0];
+  return lib && lib.url && /\.pdf($|[?#])/i.test(String(lib.url)) ? lib.url : null;
+}
+/* fills the two "Select pages" boxes (add chapter + edit chapter) */
+function initPagePickers(area) {
+  if (!area || !area.querySelector) return;
+  const book = (booksState.books || []).filter(function (b) { return b.id === booksState.openBookId; })[0];
+  const total = bookPageTotal(book);
+  const pdf = bookPdfUrl(book);
+  const add = area.querySelector('#chfPages');
+  if (add && !add.querySelector('[data-pg]')) {
+    add.innerHTML = pagePickerHTML([], total, { pdf: pdf });
+    pgInit(add.querySelector('[data-pg]'));
+  }
+  const edit = area.querySelector('#cePages');
+  if (edit && !edit.querySelector('[data-pg]')) {
+    edit.innerHTML = pagePickerHTML(booksState.editPages || [], total, { pdf: pdf });
+    pgInit(edit.querySelector('[data-pg]'));
+  }
+}
 async function refreshBooks() {
   const area = document.getElementById('booksArea');
   if (!area) return;
@@ -936,6 +988,7 @@ async function refreshBooks() {
   }
   area.innerHTML = html;
   bindBookEvents(area);
+  initPagePickers(area);
 }
 
 function bookDetailHtml(book) {
@@ -954,7 +1007,7 @@ function bookDetailHtml(book) {
   if (can) {
     h += '<form id="chForm" class="qform" style="margin-top:16px"><h4>Add chapter</h4><div class="row">' +
       '<div><label>Title</label><input type="text" id="chfTitle" required></div>' +
-      '<div id="chfPages"><label>Select pages *</label></div>' +
+      '<div id="chfPages" class="page-pick-cell"></div>' +
       '<div><label>Order</label><input type="number" id="chfOrder" min="1"></div>' +
       '</div><label>Content</label>' +
       '<textarea id="chfContent" placeholder="Chapter text (optional)"></textarea>' +
@@ -1121,11 +1174,12 @@ function openChapterEdit(id) {
     (b.chapters || []).forEach(function (c) { if (c.id === id) ch = c; });
   });
   if (!ch) return;
+  booksState.editPages = chapterPages(ch);
   openModal('<h3>Edit chapter</h3><form id="chEditForm">' +
     '<label>Title</label><input type="text" id="ceTitle" value="' + esc(ch.title) + '" required>' +
     '<label>Content</label><textarea id="ceContent">' + esc(ch.content || '') + '</textarea>' +
     '<div class="row">' +
-    '<div id="cePages"><label>Select pages *</label></div>' +
+    '<div id="cePages" class="page-pick-cell"></div>' +
     '<div><label>Order</label><input type="number" id="ceOrder" value="' +
       esc(ch.order == null ? '' : ch.order) + '"></div>' +
     '</div><div class="mt"><button type="submit">Save chapter</button></div></form>');
@@ -1151,6 +1205,7 @@ function openChapterEdit(id) {
     toast('Chapter updated', 'ok');
     await refreshBooks();
   });
+  initPagePickers(document);
 }
 /* ========================================================== submissions ==== */
 async function renderSubmissions() {

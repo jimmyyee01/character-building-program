@@ -444,6 +444,21 @@ tr:hover td { background: #f8faff; }
   border-color: #24508c;
   color: #fff;
 }
+/* picker layout: the chips sit on their own full-width line below the field,
+   wrap, and scroll inside a fixed box so long books still fit the page */
+.page-pick { display: block; flex: 1 1 100%; min-width: 240px; }
+.pg-tools { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-end; margin: 4px 0 6px; }
+.pg-tools label { display: flex; flex-direction: column; font-size: 11px; gap: 2px; }
+.pg-tools input { width: 84px; padding: 4px 6px; font-size: 12px; }
+.pg-grid {
+  max-height: 190px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdff;
+}
+.pg-hint { margin: 2px 0 0; }
 .export-buttons{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 10px}
 .export-buttons button{padding:5px 10px;font-size:12px;border-radius:6px}
 

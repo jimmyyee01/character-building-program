@@ -818,7 +818,8 @@ function r_library_create(array $user, array $body, array $params, ?string $toke
     db()->prepare('INSERT INTO library (id,type,title,scope,`text`,url,file_name,created_at) VALUES (?,?,?,?,?,?,?,?)')
         ->execute([$id, $type, $title, $scope, $text, $url, $fname, now_dt()]);
     $st = db()->prepare('SELECT * FROM library WHERE id=?'); $st->execute([$id]);
-    $lr = lib_row($st->fetch()); $lr['canEdit'] = true; return $lr;
+    $lr = lib_row($st->fetch()); $lr['canEdit'] = true;
+    return ['item' => $lr] + $lr;
 }
 function r_library_update(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin']);

@@ -131,6 +131,10 @@ async function part2(r, tok, check) {
   r = await call('/reports/students', null, supLogin.data.token);
   check('GET /reports/students (super admin, all accounts)',
     supLogin.ok && r.ok && Array.isArray(r.data.students), 'status ' + r.status);
+  r = await call('/reports/students', null, tok.married);
+  check('progress report on an account with no learners returns an empty ranked list',
+    r.ok && Array.isArray(r.data.students) && r.data.students.length === 0 && r.data.average === 0,
+    'status ' + r.status + ' count ' + (r.data.count));
   r = await call('/modules', null, tok.schools);
   check('GET /modules', r.ok && (r.data.modules || []).length >= 3, 'count ' + (r.data.modules || []).length);
   r = await call('/library', null, tok.schools);
