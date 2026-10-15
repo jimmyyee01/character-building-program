@@ -506,10 +506,17 @@ async function renderUsers() {
     '<div class="fixed" style="padding-bottom:10px"><h3 style="margin:0">' + heading +
       ' <span class="badge info">' + usersCache.length + '</span> ' +
       '<span class="badge lock" id="usTableCount">' + usersCache.length + ' shown</span></h3></div>' +
-'<div class="row export-buttons"><button type="button" class="ghost" data-export="print">Print</button><button type="button" class="ghost" data-export="pdf">PDF</button><button type="button" class="ghost" data-export="excel">Excel</button><button type="button" class="ghost" data-export="word">Word</button></div>' +
-(usersCache.length ? usersTableHtml() : '<p class="muted">No users yet.</p>') + '</div>';
-    '</div>' +
-    (usersCache.length ? usersTableHtml() : '<p class="muted">No users yet.</p>') + '</div>';
+  '</div>' +
+  '<div class="row export-buttons" data-target="#usersArea">' +
+    '<button type="button" class="ghost" data-export="print">Print</button>' +
+    '<button type="button" class="ghost" data-export="pdf">PDF</button>' +
+    '<button type="button" class="ghost" data-export="excel">Excel</button>' +
+    '<button type="button" class="ghost" data-export="word">Word</button>' +
+  '</div>' +
+  '<p class="muted small">The list below shows the users that match what you type in the search box.</p>' +
+  '<div id="usersArea">' +
+    (usersCache.length ? usersTableHtml() : '<p class="muted">No users yet.</p>') +
+  '</div></div>';
   el.innerHTML = html;
 
   const roleSel = document.getElementById('ufRole');
@@ -652,12 +659,7 @@ async function renderSupervisors() {
 }
 /* =============================================================== library === */
 
-function pdfHtml(url) {
-  const isPdf = typeof url === 'string' && /\.pdf$/i.test(url);
-  return isPdf
-    ? '<iframe class="pdf-frame" src="' + esc(url) + '" title="PDF preview" loading="lazy"></iframe>'
-    : '<a class="btn ghost small" href="' + esc(url) + '">Open ↗</a>';
-}
+/* pdfHtml() lives in common.js — it renders the book-style single-page reader. */
 
 function libIndicator(it) {
   if (it.fileName) return '<span class="mono small">' + esc(it.fileName) + '</span>';

@@ -786,12 +786,7 @@ async function renderLibrary() {
     }).join('');
 
 
-function pdfHtml(url) {
-  const isPdf = typeof url === 'string' && /\.pdf$/i.test(url);
-  return isPdf
-    ? '<iframe class="pdf-frame" src="' + esc(url) + '" title="PDF preview" loading="lazy"></iframe>'
-    : '<a class="btn ghost small" href="' + esc(url) + '">Open ↗</a>';
-}
+/* pdfHtml() lives in common.js — it renders the book-style single-page reader. */
 
   const rows = items.length ? items.map(function (i) {
     const flags = [];

@@ -203,6 +203,142 @@ function chartWeekly(rows, weeks, opts) {
   return chartBars(buckets, { caption: opts.caption || 'Grouped into the last ' + n + ' weeks' });
 }
 
+/* ================================================ book-style PDF reader === */
+/* PDFs open one page at a time, like turning the pages of a book: no long
+   scroll and no viewer chrome. Prev/Next buttons (or the arrow keys, or the
+   arrows either side of the page) flip from page to page. */
+function pdfSrc(url, page) {
+  return url + '#page=' + page + '&view=Fit&toolbar=0&navpanes=0&pagemode=none';
+}
+function pdfHtml(url, opts) {
+  opts = opts || {};
+  const isPdf = typeof url === 'string' && /\.pdf($|[?#])/i.test(url);
+  if (!isPdf) {
+    return '<a class="btn ghost small" href="' + esc(url) + '" target="_blank" rel="noopener">Open ↗</a>';
+  }
+  const label = opts.title || 'Book';
+  return '<div class="book-reader" data-book="' + esc(url) + '" data-page="1">' +
+    '<div class="book-stage">' +
+      '<button type="button" class="page-turn prev" data-book-turn="-1" aria-label="Previous page"' +
+        ' title="Previous page">‹</button>' +
+      '<div class="book-page"><iframe class="pdf-frame" src="' + esc(pdfSrc(url, 1)) + '" title="' +
+        esc(label) + '" loading="lazy"></iframe></div>' +
+      '<button type="button" class="page-turn next" data-book-turn="1" aria-label="Next page"' +
+        ' title="Next page">›</button>' +
+    '</div>' +
+    '<div class="book-bar">' +
+      '<button type="button" class="ghost small" data-book-turn="-1">‹ Previous</button>' +
+      '<span class="book-page-no">Page <b data-book-page>1</b><span data-book-total></span></span>' +
+      '<button type="button" class="ghost small" data-book-turn="1">Next ›</button>' +
+      '<span class="book-spacer"></span>' +
+      '<span class="muted small book-hint">Use ← → to turn pages</span>' +
+      '<button type="button" class="ghost small" data-book-full>Full page</button>' +
+      '<a class="btn ghost small" href="' + esc(url) + '" target="_blank" rel="noopener">Open ↗</a>' +
+    '</div></div>';
+}
+/* Page count found by scanning the PDF (no libraries, no server round-trip). */
+const pdfPageCache = {};
+function pdfPageCount(url) {
+  if (pdfPageCache[url] != null) return Promise.resolve(pdfPageCache[url]);
+  const done = function (n) { pdfPageCache[url] = n; return n; };
+  if (typeof fetch !== 'function') return Promise.resolve(0);
+  return fetch(url, { credentials: 'same-origin' }).then(function (r) {
+    return r && r.ok ? r.arrayBuffer() : null;
+  }).then(function (buf) {
+    if (!buf || !buf.byteLength || buf.byteLength > 40 * 1024 * 1024) return done(0);
+    const bytes = new Uint8Array(buf);
+    let text = '';
+    const step = 1 << 16;
+    for (let i = 0; i < bytes.length; i += step) {
+      text += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + step, bytes.length)));
+    }
+    const direct = text.match(/\/Type\s*\/Page(?![s])/g);
+    if (direct && direct.length) return done(direct.length);
+    const counts = text.match(/\/Count\s+(\d+)/g) || [];
+    const nums = counts.map(function (s2) { return Number(String(s2).replace(/[^0-9]/g, '')) || 0; });
+    return done(nums.length ? Math.max.apply(null, nums) : 0);
+  }).catch(function () { return done(0); });
+}
+
+function bookRootOf(el) { return el && el.closest ? el.closest('.book-reader') : null; }
+function bookGo(root, delta) {
+  if (!root) return 1;
+  const iframe = root.querySelector('iframe');
+  const total = Number(root.dataset.total || 0);
+  let page = Number(root.dataset.page || 1) + Number(delta || 0);
+  if (page < 1) page = 1;
+  if (total && page > total) page = total;
+  root.dataset.page = page;
+  const no = root.querySelector('[data-book-page]');
+  if (no) no.textContent = String(page);
+  const target = pdfSrc(root.dataset.book, page);
+  if (iframe && iframe.getAttribute('src') !== target) iframe.setAttribute('src', target);
+  root.querySelectorAll('[data-book-turn="-1"]').forEach(function (b) { b.disabled = page <= 1; });
+  root.querySelectorAll('[data-book-turn="1"]').forEach(function (b) {
+    b.disabled = !!total && page >= total;
+  });
+  return page;
+}
+function bookCount(root) {
+  if (!root || root.dataset.counted === '1') return;
+  root.dataset.counted = '1';
+  pdfPageCount(root.dataset.book).then(function (n) {
+    if (!n) return;
+    root.dataset.total = n;
+    const t = root.querySelector('[data-book-total]');
+    if (t) t.textContent = ' of ' + n;
+    bookGo(root, 0);
+  });
+}
+function bookActivate(root) {
+  if (!root) return;
+  document.querySelectorAll('.book-reader.book-active').forEach(function (r) {
+    if (r !== root) r.classList.remove('book-active');
+  });
+  root.classList.add('book-active');
+}
+/* Delegated, so readers rendered later (library, books, chapters) all work. */
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('click', function (e) {
+    const t = e.target;
+    if (!t || !t.closest) return;
+    const turn = t.closest('[data-book-turn]');
+    if (turn) {
+      const root = bookRootOf(turn);
+      if (root) {
+        e.preventDefault();
+        bookActivate(root);
+        bookGo(root, turn.getAttribute('data-book-turn'));
+      }
+      return;
+    }
+    const full = t.closest('[data-book-full]');
+    if (full) {
+      const root = bookRootOf(full);
+      if (root) {
+        const on = root.classList.toggle('book-full');
+        full.textContent = on ? 'Close full page' : 'Full page';
+      }
+    }
+  });
+  document.addEventListener('load', function (e) {
+    const f = e.target;
+    if (f && f.tagName === 'IFRAME' && String(f.className || '').indexOf('pdf-frame') !== -1) {
+      bookCount(bookRootOf(f));
+    }
+  }, true);
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    const tag = String((e.target && e.target.tagName) || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    const root = document.querySelector('.book-reader.book-active') ||
+      document.querySelector('.book-reader');
+    if (!root) return;
+    e.preventDefault();
+    bookGo(root, e.key === 'ArrowRight' ? 1 : -1);
+  });
+}
+
 function blobDownload(name, content, mime) {
   const blob = new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
