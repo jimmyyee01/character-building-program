@@ -435,7 +435,21 @@ async function renderAnalytics() {
   v.innerHTML = loadMsg();
   let d;
   try { d = await API.get('/super/analytics' + analyticsQuery()); }
-  catch (e) { v.innerHTML = errBox(e); return; }
+  catch (e) {
+    if (isStaleServerError(e)) {
+      const hb = await serverBuild();
+      v.innerHTML = '<h2><span class="motto">Be True</span>Analytics &amp; impact</h2>' +
+        staleServerHtml(hb && hb.build, ['super.analytics']) +
+        '<div class="card"><p class="muted small">Restart the backend, then reload — the portfolio ' +
+        'analytics will appear here.</p>' +
+        '<p><button type="button" class="ghost" id="anRetry">Try again</button></p></div>';
+      const rt = document.getElementById('anRetry');
+      if (rt) rt.onclick = renderAnalytics;
+      return;
+    }
+    v.innerHTML = errBox(e);
+    return;
+  }
   ANALYTICS.data = d;
   v.innerHTML = '<h2><span class="motto">Be True</span>Analytics &amp; impact</h2>' +
     analyticsFiltersHtml(d) +
@@ -2142,6 +2156,8 @@ $('superLoginForm').addEventListener('submit', async function (e) {
     $('slPw').value = '';
     toast('Signed in', 'ok');
     init();
+    /* the page is newer than the server? say so right away (see README) */
+    warnIfStaleServer('super.analytics', 'super.analytics');
   } catch (err) { toast(err.message, 'err'); }
 });
 

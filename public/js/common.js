@@ -667,6 +667,43 @@ if (typeof document !== 'undefined' && document.addEventListener) {
   });
 }
 
+/* ================================================ stale server notice ===== */
+/* When the page is newer than the running server ("Unknown endpoint" …), say so
+   clearly instead of a grey error: the backend needs a restart to load the new
+   routes (PHP keeps compiled files until PHP-FPM/Apache restarts). */
+function isStaleServerError(err) {
+  const t = typeof err === 'string' ? err : (err && err.message) || '';
+  return /Unknown endpoint/i.test(t);
+}
+function staleServerHtml(build, missing) {
+  return '<div class="card" style="border-left:5px solid #c62828;background:#fdeeee">' +
+    '<b>This page is newer than the server that answered it.</b>' +
+    '<p class="muted small" style="margin:6px 0 0">Running build: <b>' + esc(build || 'unknown') + '</b>' +
+    (missing && missing.length ? ' — missing: <b>' + esc(missing.join(', ')) + '</b>' : '') +
+    '. Restart the backend so the new routes load (PHP-FPM/Apache, or the Node process), then reload this page. ' +
+    'See <a href="/api/health" target="_blank" rel="noopener">/api/health</a> for the live build.</p></div>';
+}
+/* What build is the server running? (null when there is no /api/health yet) */
+async function serverBuild() {
+  try { return await API.get('/health'); } catch (e) { return null; }
+}
+/* Warn (once) when the server build lacks a feature this page needs. */
+async function warnIfStaleServer(feature, label) {
+  const hb = await serverBuild();
+  if (!hb || !hb.build) return null;
+  const feats = hb.features || [];
+  if (feature && feats.indexOf(feature) === -1) {
+    const el = document.getElementById('staleBuild');
+    if (el) {
+      el.classList.remove('hidden');
+      el.innerHTML = staleServerHtml(hb.build, [feature]);
+    } else if (typeof toast === 'function') {
+      toast('Server build ' + hb.build + ' is older than this page — restart the backend (' + label + ' missing)', 'err');
+    }
+  }
+  return hb;
+}
+
 function blobDownload(name, content, mime) {
   const blob = new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);

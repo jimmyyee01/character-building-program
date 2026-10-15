@@ -1918,6 +1918,17 @@ async function renderAnalytics() {
   let d;
   try { d = await API.get('/admin/analytics' + astatQuery()); }
   catch (e) {
+    if (isStaleServerError(e)) {
+      const hb = await serverBuild();
+      el.innerHTML = '<h2><span class="motto">Be True</span>Analytics &amp; impact</h2>' +
+        staleServerHtml(hb && hb.build, ['admin.analytics']) +
+        '<div class="card"><p class="muted small">Once the backend is restarted, reload this page — the ' +
+        'analytics of this account will appear here.</p>' +
+        '<p><button type="button" class="ghost" id="asRetry">Try again</button></p></div>';
+      const rt = document.getElementById('asRetry');
+      if (rt) rt.onclick = renderAnalytics;
+      return;
+    }
     el.innerHTML = '<div class="card"><p class="muted">Could not load analytics: ' + esc(msg(e)) + '</p></div>';
     toast(msg(e), 'err');
     return;
@@ -2009,6 +2020,8 @@ async function boot() {
   if (!ME.portal) ME.portal = {};
   applyThemeColor(ME.branding.themeColor);
   API.setUser(me.user);
+  /* the page is newer than the server? say so right away (see README) */
+  warnIfStaleServer(ROLE === 'supervisor' ? 'admin.analytics' : 'admin.analytics', 'admin.analytics');
 
   try {
     const t = await resolvePortalType();

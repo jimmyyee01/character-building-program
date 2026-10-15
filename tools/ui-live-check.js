@@ -237,6 +237,12 @@ function dirty(label, html) {
       JSON.stringify((aa.accounts || []).map(a => a.name)));
   }
 
+  check('a stale server is reported clearly instead of a grey error',
+    run(adminCtx, 'isStaleServerError', ['Unknown endpoint: GET /api/admin/analytics']) === true &&
+    run(adminCtx, 'isStaleServerError', ['Something else failed']) === false &&
+    run(adminCtx, 'staleServerHtml', ['2026-01-01-build', ['admin.analytics']])
+      .indexOf('newer than the server') !== -1);
+
   console.log(bad ? '\n' + bad + ' FAILED' : '\nLIVE RENDER OK');
   process.exit(bad ? 1 : 0);
 })().catch(function (e) { console.log('FATAL ' + e.message); process.exit(1); });
