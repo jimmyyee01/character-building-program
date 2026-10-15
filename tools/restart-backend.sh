@@ -81,9 +81,27 @@ if [ "$acted" = 0 ]; then
   if systemctl list-units --type=service --no-legend 2>/dev/null | grep -q 'nginx\.service'; then
     act 'systemctl reload nginx'
   fi
+  if command -v docker >/dev/null 2>&1; then
+    ids="$(docker ps --format '{{.ID}} {{.Ports}}' 2>/dev/null \
+           | grep -E ':(80|443|3000|8080)->' | awk '{print $1}')"
+    if [ -n "$ids" ]; then
+      say 'these containers publish the web ports:'
+      docker ps --format '  {{.Names}}  {{.Image}}  {{.Ports}}' 2>/dev/null \
+        | grep -E ':(80|443|3000|8080)->'
+      for id in $ids; do act "docker restart $id"; done
+      acted=1
+    fi
+  fi
+  for unit in caddy.service sw-cp-server.service; do
+    if systemctl list-units --type=service --no-legend 2>/dev/null | grep -q "$unit"; then
+      say "found $unit (Caddy / Plesk stack)."
+      act "systemctl restart $unit"
+      acted=1
+    fi
+  done
   if [ "$acted" = 0 ]; then
     say "nothing matched — run tools/which-backend.sh and restart what it names"
-    say "(Plesk: Tools & Settings > Services Management; Caddy: systemctl restart caddy)"
+    say "(Plesk: Tools & Settings > Services Management; other panels: their own restart button)"
   fi
 fi
 
