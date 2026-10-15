@@ -396,6 +396,9 @@ tr:hover td { background: #f8faff; }
 .book-frame-wrap .pdf-frame { width: calc(100% + 20px); height: calc(100% + 20px); }
 .book-shield { position: absolute; inset: 0; z-index: 3; cursor: ew-resize; }
 .book-page.turning { animation: bookTurn .2s ease; }
+/* the chapter's own pages, opened automatically when the chapter is clicked */
+.chapter-book { margin-top: 10px; }
+.chapter-book .book-reader { margin-top: 0; }
 @keyframes bookTurn {
   from { opacity: .5; transform: translateX(7px); }
   to { opacity: 1; transform: none; }

@@ -428,13 +428,8 @@ function renderBook() {
     '<div class="card"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">' +
       '<div><h3 style="margin:0">' + esc(d.book.title) + '</h3>' +
       '<span class="muted small">' + esc(d.module.title) + '</span></div>' +
-      '<div>' +
-        /* the whole book unlocks only once every module is complete */
-        (S.flow && S.flow.allDone && d.book.pdf
-          ? pdfHtml(d.book.pdf, { title: 'Open the whole book', button: 'Open full book',
-              note: 'Every module is complete — the full book is now unlocked.' })
-          : '') +
-        '<button class="ghost small" id="backToBooks3">← Books</button></div>' +
+      /* no full-book PDF is offered on this page — only the chapter's own pages */
+      '<div><button class="ghost small" id="backToBooks3">← Books</button></div>' +
     '</div></div>' +
     '<div class="reader">' + listHtml + '<div id="chapterBody">' + body + '</div></div>';
 
@@ -464,13 +459,18 @@ function chapterPanel(d, ch) {
     (ch.content
       ? '<div class="content">' + esc(ch.content) + '</div>'
       : '<p class="muted">No written content for this chapter — read the pages of the PDF book.</p>') +
-    (d.book.pdf
-      ? '<div class="small mt">' + pdfHtml(d.book.pdf, {
-          title: (ch.pageStart && ch.pageEnd) ? 'Chapter pages ' + ch.pageStart + '–' + ch.pageEnd : 'Chapter pages',
-          from: ch.pageStart, to: ch.pageEnd, button: 'Read this chapter',
-          note: 'Only this chapter’s pages can be read here. The whole book opens once you finish every module.'
+    /* clicking the chapter opens that chapter's own pages straight away, with a
+       Close button; the rest of the book is never offered on this page */
+    (d.book.pdf && (ch.pageStart || ch.pageEnd)
+      ? '<div class="chapter-book">' + pdfHtml(d.book.pdf, {
+          open: true, back: true,
+          title: (ch.pageStart && ch.pageEnd)
+            ? 'Chapter pages ' + ch.pageStart + '–' + ch.pageEnd : 'Chapter pages',
+          from: ch.pageStart, to: ch.pageEnd
         }) + '</div>'
-      : '');
+      : (d.book.pdf
+          ? '<p class="muted small mt">This chapter has no page range yet — ask your office to set it.</p>'
+          : ''));
 
   if (ch.submission) {
     html += '<hr><p class="timestamp">Submitted: <b>' + fmtDate(ch.submission.createdAt) + '</b></p>' +

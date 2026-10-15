@@ -338,6 +338,8 @@ function bookReaderHtml(url, opts) {
   const rangeNote = to ? 'Chapter pages ' + from + '–' + to + ' only'
     : 'Turn the pages — the book never scrolls';
   return '<div class="book-reader" data-book="' + esc(url) + '" data-page="' + from + '"' +
+      ' data-book-title="' + esc(label) + '"' +
+      (opts.back ? ' data-book-back="1"' : '') +
       ' data-book-min="' + from + '"' + (to ? ' data-book-max="' + to + '"' : '') + '>' +
     '<div class="book-stage">' +
       '<button type="button" class="page-turn prev" data-book-turn="-1" aria-label="Previous page"' +
@@ -361,6 +363,7 @@ function bookReaderHtml(url, opts) {
       '<span class="book-spacer"></span>' +
       '<span class="muted small book-hint">' + esc(rangeNote) + '</span>' +
       '<button type="button" class="ghost small" data-book-full>Full page</button>' +
+      '<button type="button" class="ghost small danger" data-book-close>Close</button>' +
       '<a class="btn ghost small" href="' + esc(url) + '" target="_blank" rel="noopener">Open ↗</a>' +
     '</div></div>';
 }
@@ -510,6 +513,29 @@ if (typeof document !== 'undefined' && document.addEventListener) {
         const on = root.classList.toggle('book-full');
         full.textContent = on ? 'Close full page' : 'Full page';
       }
+      return;
+    }
+    /* Close: shut the book (and leave a cover the learner can reopen) */
+    const closer = t.closest('[data-book-close]');
+    if (closer) {
+      const root = bookRootOf(closer);
+      if (root) {
+        e.preventDefault();
+        root.classList.remove('book-full');
+        const holder = root.parentNode;
+        if (root.dataset.bookBack === '1' && holder && root.insertAdjacentHTML) {
+          root.insertAdjacentHTML('beforebegin', bookCoverHtml(root.dataset.book, {
+            title: root.dataset.bookTitle || 'Book',
+            from: root.dataset.bookMin,
+            to: root.dataset.bookMax || '',
+            button: 'Open chapter pages',
+            note: 'Reopen this chapter’s pages.'
+          }));
+        }
+        if (root.remove) root.remove();
+        else if (holder && holder.removeChild) holder.removeChild(root);
+      }
+      return;
     }
   });
   document.addEventListener('load', function (e) {

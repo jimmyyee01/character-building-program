@@ -121,10 +121,46 @@ check('a locked book renders a lock card, not a reader',
     const c = bookLockedHtml('Daily Meditations', 'Finish every module to open the books.');
     return c.indexOf('book-open-card locked') !== -1 && c.indexOf('data-book-url') === -1 && c.indexOf('<iframe') === -1;
   })());
-check('the learner app gates the whole book behind finishing every module',
-  /S\.flow && S\.flow\.allDone && d\.book\.pdf/.test(fs.readFileSync(dir + 'js/app.js', 'utf8')) &&
-  /from: ch\.pageStart, to: ch\.pageEnd/.test(fs.readFileSync(dir + 'js/app.js', 'utf8')) &&
-  /bookLockedHtml\(/.test(fs.readFileSync(dir + 'js/app.js', 'utf8')));
+check('a chapter click opens its own pages with a Close button',
+  (function () {
+    const app = fs.readFileSync(dir + 'js/app.js', 'utf8');
+    return /open: true, back: true/.test(app) &&
+      /from: ch\.pageStart, to: ch\.pageEnd/.test(app) &&
+      /chapter-book/.test(app);
+  })());
+check('no full-book PDF is offered on the chapter page',
+  (function () {
+    const app = fs.readFileSync(dir + 'js/app.js', 'utf8');
+    return !/Open the whole book/.test(app) && !/S\.flow && S\.flow\.allDone && d\.book\.pdf/.test(app) &&
+      !/Open full book/.test(app);
+  })());
+check('the reader carries a Close control and can leave a reopenable cover',
+  (function () {
+    const r = bookReaderHtml('/uploads/book.pdf', { title: 'Chapter pages 4-9', from: 4, to: 9, back: true });
+    return r.indexOf('data-book-close') !== -1 && r.indexOf('data-book-back="1"') !== -1 &&
+      r.indexOf('data-book-title="Chapter pages 4-9"') !== -1;
+  })());
+check('Close shuts the book and leaves the cover behind',
+  (function () {
+    const click = (listeners.click || [])[0];
+    if (!click) return false;
+    const root = makeEl('div');
+    root.dataset = { book: '/uploads/book.pdf', bookTitle: 'Chapter pages 4-9', bookMin: '4', bookMax: '9',
+      bookBack: '1', page: '4' };
+    let inserted = '', closed = false;
+    root.insertAdjacentHTML = (pos, html) => { inserted = pos + '|' + html; };
+    root.remove = () => { closed = true; };
+    root.parentNode = makeEl('div');
+    const btn = makeEl('button');
+    btn.setAttribute('data-book-close', '1');
+    btn.closest = sel => (sel === '[data-book-close]' ? btn : (sel === '.book-reader' ? root : null));
+    (listeners.click || []).forEach(function (fn) {
+      try { fn({ target: btn, preventDefault() {} }); } catch (e) {}
+    });
+    return closed && inserted.indexOf('beforebegin|') === 0 &&
+      inserted.indexOf('book-open-card') !== -1 && inserted.indexOf('data-book-from="4"') !== -1 &&
+      inserted.indexOf('data-book-to="9"') !== -1 && inserted.indexOf('Open chapter pages') !== -1;
+  })());
 
 /* the book turns pages instead of scrolling */
 check('reader markup clips the sheet and shields it (no scrolling)',
@@ -286,9 +322,9 @@ pdfPageCount('/uploads/books/alpha.pdf').then(function (n) {
     /function bookCoverHtml/.test(commonSrc) && /function pdfHtml/.test(commonSrc));
   check('library rows and reading views use the closed cover',
     /if \(it\.url\) return pdfHtml\(it\.url\);/.test(admin) &&
-    (pages[1].match(/pdfHtml\(d\.book\.pdf/g) || []).length === 2 &&
-    /pdfHtml\(d\.book\.pdf, \{ title: 'Open the whole book'/.test(pages[1]) &&
-    /pdfHtml\(d\.book\.pdf, \{\n?\s*title:/.test(pages[1]));
+    (pages[1].match(/pdfHtml\(d\.book\.pdf/g) || []).length === 1 &&
+    /open: true, back: true/.test(pages[1]) &&
+    !/pdfHtml\(d\.book\.pdf, \{\s*title: 'Open the whole book'/.test(pages[1]));
   console.log(bad ? bad + ' FAILED' : 'PDF READER + LIST PLACEMENT OK');
   process.exit(bad ? 1 : 0);
 }).catch(function (e) { console.log('FATAL ' + e.message); process.exit(1); });
