@@ -329,6 +329,13 @@ if (typeof document !== 'undefined' && document.addEventListener) {
 function pdfSrc(url, page) {
   return url + '#page=' + page + '&view=Fit&toolbar=0&navpanes=0&pagemode=none';
 }
+/* One sheet of the book. A fresh element per page is what actually moves the
+   browser's PDF viewer: changing only the #page= fragment of a frame that is
+   already loaded is ignored, so every turn re-creates the frame. */
+function bookFrameHtml(url, page, title) {
+  return '<iframe class="pdf-frame" src="' + esc(pdfSrc(url, page)) + '" title="' +
+    esc(title || 'Book') + '" loading="eager" scrolling="no"></iframe>';
+}
 /* The reader itself — only injected when a book is actually opened. */
 function bookReaderHtml(url, opts) {
   opts = opts || {};
@@ -340,6 +347,7 @@ function bookReaderHtml(url, opts) {
   return '<div class="book-reader" data-book="' + esc(url) + '" data-page="' + from + '"' +
       ' data-book-title="' + esc(label) + '"' +
       (opts.back ? ' data-book-back="1"' : '') +
+      ' data-book-rendered="' + from + '"' +
       ' data-book-min="' + from + '"' + (to ? ' data-book-max="' + to + '"' : '') + '>' +
     '<div class="book-stage">' +
       '<button type="button" class="page-turn prev" data-book-turn="-1" aria-label="Previous page"' +
@@ -347,8 +355,7 @@ function bookReaderHtml(url, opts) {
       '<div class="book-page">' +
         /* the sheet is clipped and covered by a shield, so the viewer inside can
            only be moved a page at a time (wheel / swipe / arrows), never scrolled */
-        '<div class="book-frame-wrap"><iframe class="pdf-frame" src="' + esc(pdfSrc(url, from)) +
-          '" title="' + esc(label) + '" loading="lazy" scrolling="no"></iframe></div>' +
+        '<div class="book-frame-wrap">' + bookFrameHtml(url, from, label) + '</div>' +
         '<div class="book-shield" data-book-shield aria-hidden="true"' +
           ' title="Scroll or swipe to turn the page"></div>' +
       '</div>' +
@@ -430,7 +437,6 @@ function pdfPageCount(url) {
 function bookRootOf(el) { return el && el.closest ? el.closest('.book-reader') : null; }
 function bookGo(root, delta) {
   if (!root) return 1;
-  const iframe = root.querySelector('iframe');
   const min = Math.max(1, Number(root.dataset.bookMin || 1));
   const hardMax = Number(root.dataset.bookMax || 0);
   const total = hardMax || Number(root.dataset.total || 0);
@@ -440,8 +446,24 @@ function bookGo(root, delta) {
   root.dataset.page = page;
   const no = root.querySelector('[data-book-page]');
   if (no) no.textContent = String(page);
-  const target = pdfSrc(root.dataset.book, page);
-  if (iframe && iframe.getAttribute('src') !== target) iframe.setAttribute('src', target);
+  /* A fresh frame per page is the only reliable way to move the browser's PDF
+     viewer: editing just the #page= fragment of a loaded frame is ignored. */
+  if (String(root.dataset.bookRendered || '') !== String(page)) {
+    root.dataset.bookRendered = String(page);
+    const frame = bookFrameHtml(root.dataset.book, page, root.dataset.bookTitle);
+    const wrap = root.querySelector('.book-frame-wrap');
+    if (wrap && 'innerHTML' in wrap) {
+      wrap.innerHTML = frame;
+    } else {
+      const old = root.querySelector('iframe');
+      if (old && old.parentNode && old.parentNode.insertAdjacentHTML) {
+        old.parentNode.insertAdjacentHTML('beforebegin', frame);
+        if (old.remove) old.remove();
+      } else if (old) {
+        old.setAttribute('src', pdfSrc(root.dataset.book, page));
+      }
+    }
+  }
   /* a small page-turn flick so it reads like a book */
   const sheet = root.querySelector('.book-page');
   if (sheet && sheet.classList && delta) {

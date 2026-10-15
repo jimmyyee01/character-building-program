@@ -230,6 +230,9 @@ check('pdfSrc builds the single-page fragment',
   pdfSrc('/x.pdf', 7) === '/x.pdf#page=7&view=Fit&toolbar=0&navpanes=0&pagemode=none');
 function fakeRoot(total) {
   const iframe = makeEl('iframe');
+  const wrap = makeEl('div');
+  wrap.className = 'book-frame-wrap';
+  wrap.innerHTML = '';
   const no = makeEl('b');
   const totalEl = makeEl('span');
   const sheet = makeEl('div');
@@ -237,21 +240,44 @@ function fakeRoot(total) {
   const prevs = [makeEl('button'), makeEl('button')];
   const nexts = [makeEl('button'), makeEl('button')];
   const root = makeEl('div');
-  root.dataset = { book: '/uploads/books/alpha.pdf', page: '1' };
+  root.dataset = { book: '/uploads/books/alpha.pdf', page: '1', bookTitle: 'Alpha Book' };
   if (total) root.dataset.total = String(total);
   root.classList.add('book-reader');
-  const map = { iframe: iframe, '[data-book-page]': no, '[data-book-total]': totalEl, '.book-page': sheet };
+  const map = {
+    iframe: iframe, '[data-book-page]': no, '[data-book-total]': totalEl,
+    '.book-page': sheet, '.book-frame-wrap': wrap
+  };
   root.querySelector = sel => map[sel] || null;
   root.querySelectorAll = sel => (sel === '[data-book-turn="-1"]' ? prevs : nexts);
-  root._ = { iframe, no, totalEl, prevs, nexts, sheet };
+  root._ = { iframe, no, totalEl, prevs, nexts, sheet, wrap };
   return root;
 }
 let r = fakeRoot(5);
 bookGo(r, 1);
-check('next page: counter + iframe fragment + button states',
-  Number(r.dataset.page) === 2 && r._.no.textContent === '2' &&
-  r._.iframe.getAttribute('src') === '/uploads/books/alpha.pdf#page=2&view=Fit&toolbar=0&navpanes=0&pagemode=none' &&
-  r._.prevs[0].disabled === false && r._.nexts[0].disabled === false, JSON.stringify(r.dataset));
+check('next page: counter + a freshly built frame + button states',
+  (function () {
+    const ok = Number(r.dataset.page) === 2 && r._.no.textContent === '2' &&
+      r._.wrap.innerHTML.indexOf('<iframe') !== -1 &&
+      r._.wrap.innerHTML.indexOf('#page=2') !== -1 &&
+      r._.wrap.innerHTML.indexOf('view=Fit') !== -1 &&
+      r._.prevs[0].disabled === false && r._.nexts[0].disabled === false;
+    if (!ok) console.log('    frame: ' + r._.wrap.innerHTML.slice(0, 160));
+    return ok;
+  })());
+check('every turn rebuilds the frame (a fragment-only change is ignored by browsers)',
+  (function () {
+    const root = fakeRoot(10);
+    bookGo(root, 1);
+    const first = root._.wrap.innerHTML;
+    root._.wrap.innerHTML = 'MARK';                       /* pretend the frame is loaded */
+    bookGo(root, 0);                                      /* same page: no reload */
+    const same = root._.wrap.innerHTML === 'MARK';
+    bookGo(root, 1);
+    const next = root._.wrap.innerHTML.indexOf('#page=3') !== -1;
+    bookGo(root, -1);
+    const back = root._.wrap.innerHTML.indexOf('#page=2') !== -1;
+    return first.indexOf('#page=2') !== -1 && same && next && back;
+  })());
 bookGo(r, -1); bookGo(r, -1);
 check('cannot page before page 1', Number(r.dataset.page) === 1 && r._.prevs[0].disabled === true);
 bookGo(r, 9);
