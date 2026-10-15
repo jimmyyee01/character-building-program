@@ -12,6 +12,7 @@
     "check:live": "node tools/ui-live-check.js http://127.0.0.1:3000",
     "check:pages": "node tools/pages-api-check.js http://127.0.0.1:3000",
     "check:keywords": "node tools/keywords-api-check.js http://127.0.0.1:3000",
+    "check:routes": "node tools/routes-parity-check.js",
     "check:browser": "node tools/reader-browser-check.js http://127.0.0.1:3000",
     "check:chapter-lock": "node tools/chapter-lock-browser-check.js http://127.0.0.1:3000",
     "check:analytics": "node tools/analytics-api-check.js http://127.0.0.1:3000"

@@ -62,6 +62,8 @@ node tools/api-test.js http://localhost:8080     # PHP backend (see below)
 UI / render checks (no server needed for the first group):
 
 ```bash
+node tools/routes-parity-check.js # every endpoint the UI calls exists on BOTH backends,
+                                  # and the two route tables expose the same paths
 node tools/smoke-pages.js        # every page loads + nav <-> section <-> renderer wiring
 node tools/ui-picker-check.js    # chapter page picker: all pages, wrap/scroll, range/all/clear
 node tools/ui-report-check.js    # progress-report builders + the expander rule
@@ -87,9 +89,9 @@ node tools/analytics-api-check.js http://127.0.0.1:3000 # analytics scope: each 
                                                     # members, copy flags name both people
 ```
 
-Handy npm shortcuts: `npm run check:ui`, `npm run check:api`, `npm run check:api:php`,
-`npm run check:live`, `npm run check:pages`, `npm run check:keywords`, `npm run check:browser`,
-`npm run check:chapter-lock`, `npm run check:analytics`.
+Handy npm shortcuts: `npm run check:routes`, `npm run check:ui`, `npm run check:api`,
+`npm run check:api:php`, `npm run check:live`, `npm run check:pages`, `npm run check:keywords`,
+`npm run check:browser`, `npm run check:chapter-lock`, `npm run check:analytics`.
 
 If you are updating an **existing PHP database**, run the migration once after
 pulling (it only adds what is missing — it never touches data):
