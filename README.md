@@ -44,6 +44,7 @@ super admin — nothing about one school is visible to another.
 | **Married admin** (Covenant Couples) | `admin@married.example` / `Admin@123` |
 | Teacher (Greenfield) | `teacher@greenfield.edu` / `Teacher@123` |
 | Student (Greenfield) | `STU-001` / `Student@123` |
+| **Demo graduate** (Greenfield) | `STU-100` / `Student@123` — has finished every module, so the dashboards, graphs and the expandable learner summary in *Student progress* all have data |
 | Supervisor (Horizon) | `supervisor@horizon.org` / `Super@123` (code `SUP-7788`) |
 | Member (under that supervisor) | `olive@horizon.org` / `Member@123` |
 
@@ -58,10 +59,11 @@ node tools/api-test.js http://localhost:3000     # Node backend (npm start)
 node tools/api-test.js http://localhost:8080     # PHP backend (see below)
 ```
 
-58 checks covering every seeded login, the per-portal role rules (schools /
+72 checks covering every seeded login, the per-portal role rules (schools /
 organization / family / married), the supervisor 100-user cap, account colour,
-reports, certificates and the participant flow. It prints a PASS/FAIL summary
-and exits non-zero if anything fails.
+dashboards + graphs, the ranked *Student progress* report (ordering, level,
+recent work, role scoping), reports, certificates and the participant flow. It
+prints a PASS/FAIL summary and exits non-zero if anything fails.
 
 Run the PHP build without Apache (useful for local testing — `php -S` does not
 read `.htaccess`, so the bundled router does the rewriting):
