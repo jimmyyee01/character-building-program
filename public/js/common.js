@@ -210,12 +210,9 @@ function chartWeekly(rows, weeks, opts) {
 function pdfSrc(url, page) {
   return url + '#page=' + page + '&view=Fit&toolbar=0&navpanes=0&pagemode=none';
 }
-function pdfHtml(url, opts) {
+/* The reader itself — only injected when a book is actually opened. */
+function bookReaderHtml(url, opts) {
   opts = opts || {};
-  const isPdf = typeof url === 'string' && /\.pdf($|[?#])/i.test(url);
-  if (!isPdf) {
-    return '<a class="btn ghost small" href="' + esc(url) + '" target="_blank" rel="noopener">Open ↗</a>';
-  }
   const label = opts.title || 'Book';
   return '<div class="book-reader" data-book="' + esc(url) + '" data-page="1">' +
     '<div class="book-stage">' +
@@ -236,6 +233,28 @@ function pdfHtml(url, opts) {
       '<a class="btn ghost small" href="' + esc(url) + '" target="_blank" rel="noopener">Open ↗</a>' +
     '</div></div>';
 }
+/* A book stays shut until someone clicks it: listings and previews only render
+   this compact cover, so nothing opens (or downloads) on its own. */
+function bookCoverHtml(url, opts) {
+  opts = opts || {};
+  const label = opts.title || 'Book';
+  return '<div class="book-open-card" data-book-url="' + esc(url) + '" data-book-title="' + esc(label) + '">' +
+    '<span class="book-open-icon" aria-hidden="true">📖</span>' +
+    '<span class="book-open-text"><b>' + esc(label) + '</b>' +
+      '<span class="muted small">PDF book — it only opens when you click it.</span></span>' +
+    '<button type="button" class="small" data-book-load>Open book</button>' +
+  '</div>';
+}
+/* pdfHtml(): pass { open: true } to have the reader shown straight away. */
+function pdfHtml(url, opts) {
+  opts = opts || {};
+  const isPdf = typeof url === 'string' && /\.pdf($|[?#])/i.test(url);
+  if (!isPdf) {
+    return '<a class="btn ghost small" href="' + esc(url) + '" target="_blank" rel="noopener">Open ↗</a>';
+  }
+  return opts.open ? bookReaderHtml(url, opts) : bookCoverHtml(url, opts);
+}
+
 /* Page count found by scanning the PDF (no libraries, no server round-trip). */
 const pdfPageCache = {};
 function pdfPageCount(url) {
@@ -302,6 +321,19 @@ if (typeof document !== 'undefined' && document.addEventListener) {
   document.addEventListener('click', function (e) {
     const t = e.target;
     if (!t || !t.closest) return;
+    /* a closed book opens only here — on the click */
+    const cover = t.closest('.book-open-card');
+    if (cover && !t.closest('a')) {
+      e.preventDefault();
+      const url = cover.getAttribute('data-book-url') || cover.dataset.bookUrl;
+      const title = cover.getAttribute('data-book-title') || cover.dataset.bookTitle || 'Book';
+      const holder = cover.parentNode;
+      if (url && holder && cover.insertAdjacentHTML) {
+        cover.insertAdjacentHTML('beforebegin', bookReaderHtml(url, { title: title }));
+        if (cover.remove) cover.remove(); else if (holder.removeChild) holder.removeChild(cover);
+      }
+      return;
+    }
     const turn = t.closest('[data-book-turn]');
     if (turn) {
       const root = bookRootOf(turn);

@@ -86,9 +86,11 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
 - **Modules** — the three seeded modules (GAMMA/BETA/ALPHA) plus the ability to
   add more, set certificate names, summary prompts/colours and completion video.
 - **Library** — upload every book (PDF), letter and video; modules *pick* their
-  content from this library. PDFs open in a **book-style reader**: one page at a
-  time with page-turn arrows either side of the sheet, `←`/`→` keys, a page
-  counter (`Page 3 of 12`) and a full-page mode — no long scrolling document.
+  content from this library. A PDF stays shut until it is clicked: listings and
+  previews show a small cover card ("Open book"), and only then does the reader
+  start — one page at a time with page-turn arrows either side of the sheet,
+  `←`/`→` keys, a page counter (`Page 3 of 12`) and a full-page mode, never a
+  long scrolling document.
 - **Books & Chapters** — set chapters (title, content, page ranges) and enter
   the objective questions (question, options, correct answer).
 - **Users / Reports / Settings** — all users across all tenants, all
