@@ -399,9 +399,12 @@ function bookFit(root) {
     document.documentElement.clientWidth) ? Number(document.documentElement.clientWidth) : 960;
   const full = !!(root.classList && root.classList.contains && root.classList.contains('book-full'));
   const stageW = Number(stage.clientWidth || 0) || docW;
+  /* use the reader's own bounding box when available so the page fits the
+     actual space instead of guessing from the whole window */
+  const readerRect = root.getBoundingClientRect ? root.getBoundingClientRect() : null;
   const availH = full
-    ? (Number(stage.clientHeight || 0) || Math.round(winH * 0.86))
-    : Math.round(winH * 0.78);
+    ? (Number(stage.clientHeight || 0) || Math.round(winH * 0.9))
+    : (readerRect && readerRect.height > 100 ? Math.round(readerRect.height * 0.92) : Math.round(winH * 0.82));
   const box = bookFitBox(stageW - reserved - 4, availH, ratio);
   sheet.style.width = box.w + 'px';
   sheet.style.height = box.h + 'px';
@@ -680,6 +683,8 @@ if (typeof document !== 'undefined' && document.addEventListener) {
         cover.insertAdjacentHTML('beforebegin', bookReaderHtml(url, { title: title, from: from, to: to }));
         if (cover.remove) cover.remove(); else if (holder.removeChild) holder.removeChild(cover);
         bookFitAll();
+        const fresh = holder ? holder.querySelector('.book-reader') : null;
+        if (fresh) bookEnsureFit(fresh);
       }
       return;
     }
