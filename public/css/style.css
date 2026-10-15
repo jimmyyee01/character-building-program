@@ -1,6 +1,8 @@
 /* ============================================================ base ====== */
 :root {
-  --bg: #f3f5fa;
+  --bg: #e6f0fd;              /* light blue page background */
+  --brand-soft: #dce9fb;      /* light tint of the account colour */
+  --brand-tint: #f2f8ff;      /* very light tint of the account colour */
   --panel: #ffffff;
   --ink: #17203a;
   --muted: #66708a;
@@ -67,6 +69,33 @@ img { max-width: 100%; }
 .stat { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
 .stat .n { font-size: 30px; font-weight: 800; color: var(--brand); }
 .stat .l { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
+
+/* ------------------------------------------------------- dashboard ------ */
+/* The dashboard wears the account colour: a coloured header band, tinted
+   statistic cards and a coloured top edge on each dashboard panel. */
+#view-dashboard > h2,
+#view-home > h2 {
+  background: linear-gradient(120deg, var(--brand-2), var(--brand));
+  color: #fff; padding: 14px 20px; border-radius: var(--radius);
+  box-shadow: var(--shadow); margin-bottom: 18px;
+}
+#view-dashboard .stat,
+#view-home .stat,
+.dash-strip .stat {
+  background: linear-gradient(160deg, var(--brand-tint), var(--brand-soft));
+  border: 1px solid var(--brand-soft);
+  border-left: 5px solid var(--brand);
+  box-shadow: 0 6px 18px rgba(23, 32, 58, .06);
+}
+#view-dashboard .stat .l,
+#view-home .stat .l,
+.dash-strip .stat .l { color: var(--brand-2); opacity: .85; }
+#view-dashboard .card,
+#view-home .card { border-top: 4px solid var(--brand); }
+#view-dashboard .progress,
+#view-home .progress { background: var(--brand-soft); }
+#view-dashboard .progress i,
+#view-home .progress i { background: var(--brand); }
 
 .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
 .badge.ok { background: #e2f6ec; color: var(--ok); }

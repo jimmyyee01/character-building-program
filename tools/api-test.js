@@ -168,6 +168,8 @@ async function part3(r, tok, check) {
   check('GET /videos -> {videos}', r.ok && Array.isArray(r.data.videos), 'status ' + r.status);
   r = await call('/thoughts', null, stuTok);
   check('GET /thoughts -> {thoughts}', r.ok && Array.isArray(r.data.thoughts), 'status ' + r.status);
+  r = await call('/dashboard', null, stuTok);
+  check('GET /dashboard -> {recent, certificates}', r.ok && Array.isArray(r.data.recent), 'status ' + r.status);
   r = await call('/final', null, stuTok);
   check('GET /final (403 until every module is done)', r.ok || r.status === 403, 'status ' + r.status);
 

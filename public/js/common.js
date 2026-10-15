@@ -268,11 +268,15 @@ function applyThemeColor(color) {
   if (!themeIsHex(color)) {
     root.style.removeProperty('--brand');
     root.style.removeProperty('--brand-2');
+    root.style.removeProperty('--brand-soft');
+    root.style.removeProperty('--brand-tint');
     return false;
   }
   const c = String(color).trim();
   root.style.setProperty('--brand', c);
   root.style.setProperty('--brand-2', themeShade(c, -0.3));
+  root.style.setProperty('--brand-soft', themeShade(c, 0.84));
+  root.style.setProperty('--brand-tint', themeShade(c, 0.94));
   return true;
 }
 
