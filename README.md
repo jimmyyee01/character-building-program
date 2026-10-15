@@ -121,6 +121,35 @@ they print a red card with the two builds, the step that is missing, the shell
 commands to run and a *Try again* button (`#staleBuild` in `admin.html` /
 `super.html`).
 
+### Restarting the backend (which command?)
+
+The new code is loaded by a **process**, so a `git pull` alone is not enough.
+There is no single service name — find the one you actually run:
+
+```bash
+systemctl list-units --type=service --no-legend | grep -Ei 'php|apache|nginx|node'
+
+# 1) Apache + PHP (this repo's .htaccess build — the usual case)
+sudo systemctl restart apache2
+#    cPanel/Plesk: "Restart PHP" / "Restart Apache". Restarting Apache clears OPcache.
+
+# 2) nginx + PHP-FPM: the unit name is versioned, so derive it from PHP itself
+sudo systemctl restart "php$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')-fpm"
+#    Do not guess php8.2-fpm: if PHP-FPM is not installed you get
+#    "Unit php8.2-fpm.service not found." — that means Apache is running PHP itself.
+
+# 3) Node backend: restart the process
+pm2 restart <app>      # or: systemctl restart <your-service>
+```
+
+Then confirm the running build (this needs no browser):
+
+```bash
+curl -s http://127.0.0.1/api/health      # add -H 'Host: your-domain' if the vhost needs it
+curl -s https://your-site/api/health     # build + features["admin.analytics","super.analytics"], routes 68
+curl -s https://your-site/build.json     # must show the same build
+```
+
 73 checks covering every seeded login, the per-portal role rules (schools /
 organization / family / married), the supervisor 100-user cap, account colour,
 dashboards + graphs, the ranked *Student progress* report (ordering, level,

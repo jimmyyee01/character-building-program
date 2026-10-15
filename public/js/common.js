@@ -680,7 +680,7 @@ function staleServerHtml(build, missing) {
     '<b>This page is newer than the server that answered it.</b>' +
     '<p class="muted small" style="margin:6px 0 0">Running build: <b>' + esc(build || 'unknown') + '</b>' +
     (missing && missing.length ? ' — missing: <b>' + esc(missing.join(', ')) + '</b>' : '') +
-    '. Restart the backend so the new routes load (PHP-FPM/Apache, or the Node process), then reload this page. ' +
+    '. Restart the backend so the new routes load (Apache/PHP-FPM, or the Node process), then reload this page. ' +
     'See <a href="/api/health" target="_blank" rel="noopener">/api/health</a> for the live build.</p></div>';
 }
 /* What build is the server running? (null when there is no /api/health yet) */
@@ -707,7 +707,7 @@ function deploymentNoticeHtml(info) {
   let verdict;
   if (!serverBuild && fileBuild) {
     verdict = 'The <b>files</b> on the server are current (' + esc(fileBuild) + ') but the <b>backend process</b> ' +
-      'is still old (even /api/health is missing). <b>Restart the backend</b> — PHP-FPM/Apache, or the Node process — ' +
+      'is still old (even /api/health is missing). <b>Restart the backend</b> — Apache/PHP-FPM, or the Node process — ' +
       'then reload.';
   } else if (!serverBuild && !fileBuild) {
     verdict = 'Neither /api/health nor /build.json answered, so the folder being served is not the one you ' +
@@ -728,9 +728,11 @@ function deploymentNoticeHtml(info) {
     '<p class="small" style="margin:8px 0 0">On the server, in the folder the domain serves:</p>' +
     '<pre class="small" style="background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;' +
       'overflow:auto">git pull && git log --oneline -1\n' +
-      'grep -n "api/health" php/api.php      # route present in the new build\n' +
-      'sudo systemctl restart php8.2-fpm && sudo systemctl restart apache2   # PHP\n' +
-      '#   (Node instead: restart the process — npm start / pm2 restart)</pre>' +
+      'grep -n "api/health" php/api.php        # present in the new build\n' +
+      'systemctl list-units \'php*-fpm.service\' # is PHP-FPM even installed?\n' +
+      'sudo systemctl restart apache2          # Apache + PHP (.htaccess build)\n' +
+      '#   nginx + PHP-FPM instead: sudo systemctl restart php$(php -r \'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;\')-fpm\n' +
+      '#   Node instead: pm2 restart <app>  |  npm start</pre>' +
     '<p class="small" style="margin:6px 0 0">Then check ' +
       '<a href="/api/health" target="_blank" rel="noopener">/api/health</a> and ' +
       '<a href="/build.json" target="_blank" rel="noopener">/build.json</a> — both should show the same build.</p>' +

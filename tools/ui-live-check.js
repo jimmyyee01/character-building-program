@@ -252,7 +252,9 @@ function dirty(label, html) {
       return filesNewBackendOld.indexOf('backend process') !== -1 &&
         filesNewBackendOld.indexOf('b9') !== -1 &&
         bothOld.indexOf('document root') !== -1 &&
-        mismatch.indexOf('restart the backend') !== -1;
+        mismatch.indexOf('restart the backend') !== -1 &&
+        filesNewBackendOld.indexOf('apache2') !== -1 &&
+        filesNewBackendOld.indexOf('php8.2-fpm') === -1;
     })());
 
   console.log(bad ? '\n' + bad + ' FAILED' : '\nLIVE RENDER OK');
