@@ -298,7 +298,8 @@ tr:hover td { background: #f8faff; }
 .chapter-list button { display: block; width: 100%; text-align: left; background: #f6f8fd;
   color: var(--ink); border: 1px solid var(--line); margin-bottom: 8px; font-weight: 600; }
 .chapter-list button.active { background: var(--brand); color: #fff; border-color: var(--brand); }
-.chapter-list button.locked { opacity: .55; cursor: not-allowed; }
+.chapter-list button.locked,
+.chapter-list button:disabled { opacity: .55; cursor: not-allowed; }
 .chapter-body { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; }
 .chapter-body .content { white-space: pre-wrap; font-size: 16px; line-height: 1.7; }
 .no-paste { background: #fffdf3; border: 1px dashed var(--gold); }

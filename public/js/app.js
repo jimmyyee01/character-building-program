@@ -389,7 +389,7 @@ function renderBook() {
   const d = S.bookData;
   if (!d) return;
   const cur = S.selectedChapterId
-    ? d.chapters.find(function (c) { return c.id === S.selectedChapterId; })
+    ? d.chapters.find(function (c) { return c.id === S.selectedChapterId && c.status !== 'locked'; })
     : null;
   const chapter = cur || activeChapterOf(d) || d.chapters[0];
 
@@ -403,9 +403,14 @@ function renderBook() {
     '<div class="chapter-list">' +
       '<button class="ghost" id="backToBooks">← All books</button>' +
       d.chapters.map(function (c, i) {
-        const cls = (chapter && c.id === chapter.id ? 'active ' : '') + (c.status === 'locked' ? 'locked' : '');
-        return '<button class="' + cls + '" data-ch="' + esc(c.id) + '">' +
-          (c.submission ? '✓ ' : '') + esc(c.title) +
+        /* A chapter that is not active yet must not respond to any click: it is
+           rendered as a real disabled button and no handler is attached below. */
+        const locked = c.status === 'locked';
+        const cls = (chapter && c.id === chapter.id ? 'active ' : '') + (locked ? 'locked' : '');
+        return '<button class="' + cls + '" data-ch="' + esc(c.id) + '"' +
+          (locked ? ' disabled aria-disabled="true" ' +
+            'title="Submit the previous chapter to unlock this one"' : '') +
+          '>' + (locked ? '🔒 ' : '') + (c.submission ? '✓ ' : '') + esc(c.title) +
           (c.status === 'active' && !c.submission ? ' ●' : '') + '</button>';
       }).join('') +
       (d.stage === 'letter' ? '<div class="badge info">LETTER UNLOCKED</div>' : '') +
@@ -438,6 +443,12 @@ function renderBook() {
   const b2 = $('backToBooks2'); if (b2) b2.onclick = backToModule;
 
   $('view-book').querySelectorAll('[data-ch]').forEach(function (b) {
+    const c = d.chapters.find(function (x) { return x.id === b.dataset.ch; });
+    if (!c || c.status === 'locked') {      /* inactive chapter: responds to nothing */
+      b.disabled = true;
+      b.onclick = null;
+      return;
+    }
     b.onclick = function () { S.selectedChapterId = b.dataset.ch; renderBook(); };
   });
   wireChapterPanel(d, chapter);
@@ -452,6 +463,12 @@ function backToModule() {
 
 /* ------------------------------------------------- chapter panel + form -- */
 function chapterPanel(d, ch) {
+  /* An inactive (locked) chapter is only a heading and the reason: no text, no
+     pages and no form — nothing here can be clicked or opened. */
+  if (ch.status === 'locked') {
+    return '<div class="chapter-body"><h3>🔒 ' + esc(ch.title) + '</h3>' +
+      '<p class="muted mt">Submit the previous chapter to unlock this one.</p></div>';
+  }
   const pages = (ch.pageStart && ch.pageEnd) ? ' (pages ' + ch.pageStart + '–' + ch.pageEnd + ')' : '';
   let html = '<div class="chapter-body">' +
     '<h3>' + esc(ch.title) + '</h3>' +
@@ -481,8 +498,6 @@ function chapterPanel(d, ch) {
         ? ' <span class="badge ' + (ch.submission.score >= ch.submission.total * 0.6 ? 'ok' : 'warn') + '">Score ' +
           ch.submission.score + '/' + ch.submission.total + '</span>' : '') +
       keyWordsFeedback(ch, ch.submission);
-  } else if (ch.status === 'locked') {
-    html += '<p class="muted mt">🔒 Submit the previous chapter to unlock this one.</p>';
   } else if (d.module.mode === 'summary') {
     html += '<hr><h4>Summary of your understanding</h4>' +
       '<p class="muted small">Type in your own words — paste/cut is disabled and your work is compared with other students’ submissions.</p>' +

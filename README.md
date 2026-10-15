@@ -310,7 +310,12 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
    While a chapter is open only **that chapter's pages** may be read: clicking
    the chapter opens its page range straight away (with a **Close** button that
    leaves a cover to reopen it), the reader can only turn pages — never scroll —
-   and **no full-book PDF is offered on that page** at all.
+   and **no full-book PDF is offered on that page** at all. A chapter that is not
+   active yet is **inactive**: it is drawn as a disabled button (dimmed, lock
+   glyph, reason on hover) with **no click handler at all**, so clicking it
+   changes nothing — it cannot be opened, and it reveals no text, no pages and no
+   form. Submitting for one is refused by both backends anyway
+   (`Submit previous chapters first`, 403).
 5. **Module 2 — BETA (Personal Relationship & Applied Psychology)** — 3 books,
    chapters end with **objectives shuffled on every login**, then 3 mandatory
    colour-tagged summaries (injustices in the book → injustices in your

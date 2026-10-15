@@ -84,6 +84,42 @@ function dirty(label, html) {
     m ? String(html).slice(Math.max(0, String(html).indexOf(m[0]) - 70), String(html).indexOf(m[0]) + 40) : '');
 }
 
+/* A fake #view-book whose chapter buttons behave like the browser's: a disabled
+   button never fires its handler, so "an inactive chapter responds to no click"
+   is actually testable (the shared makeEl returns no elements for selectors). */
+function bookViewEl() {
+  const el = makeEl('div');
+  const buttons = [];
+  let html = '';
+  Object.defineProperty(el, 'innerHTML', {
+    set(v) {
+      html = String(v);
+      buttons.length = 0;
+      (html.match(/<button[^>]*data-ch="[^"]+"[^>]*>/g) || []).forEach(function (tag) {
+        const b = makeEl('button');
+        b.dataset.ch = /data-ch="([^"]+)"/.exec(tag)[1];
+        b.disabled = /\sdisabled(\s|>)/.test(tag + '>');
+        b.onclick = null;
+        b.click = function () { if (!this.disabled && typeof this.onclick === 'function') this.onclick(); };
+        buttons.push(b);
+      });
+    },
+    get() { return html; }
+  });
+  el.querySelectorAll = function (sel) { return sel === '[data-ch]' ? buttons : []; };
+  el._buttons = buttons;
+  return el;
+}
+/* a 25-character slice of text that survives esc() unchanged (for presence tests) */
+function cleanSlice(s) {
+  s = String(s || '');
+  for (let i = 0; i + 25 <= s.length; i++) {
+    const w = s.substr(i, 25);
+    if (!/[&<>"']/.test(w)) return w;
+  }
+  return '';
+}
+
 (async function () {
   const admin = await login({ slug: 'greenfield-academy', identifier: 'admin@greenfield.edu', password: 'Admin@123' });
   check('login: tenant admin', !!admin);
@@ -175,6 +211,94 @@ function dirty(label, html) {
     run(appCtx, 'statCard', [(flow.modules || []).length, 'Modules completed', 'teal']));
   const mark = run(appCtx, 'portalMarkSrc', ['Greenfield Academy', '#0f766e']);
   check('monogram fallback still renders', mark.indexOf('data:image/svg+xml') === 0);
+
+  /* ------------------- an inactive chapter responds to no click at all ---- */
+  {
+    const book = await api('/book/book_gamma_1', stu);
+    const real = (book.chapters || []).filter(function (c) { return c.status === 'locked'; })[0];
+    /* drive the real payload, with the first chapter open and the second still
+       inactive, so this runs whatever state the database happens to be in */
+    const probe = JSON.parse(JSON.stringify(book));
+    if (probe.chapters.length > 1) {
+      probe.chapters[0].status = 'active';
+      probe.chapters[0].submission = null;
+      probe.chapters[1].status = 'locked';
+      probe.chapters[1].submission = null;
+      probe.stage = 'chapters';
+    }
+    const openCh = probe.chapters[0];
+    const lockedCh = probe.chapters[1];
+    check('book payload has chapters to compare', !!openCh && !!lockedCh, 'chapters=' + probe.chapters.length);
+
+    if (openCh && lockedCh) {
+    const view = bookViewEl();
+    const realGet = appCtx.document.getElementById;
+    appCtx.document.getElementById = function (id) { return id === 'view-book' ? view : makeEl('div'); };
+    appCtx.__probe = probe;
+    vm.runInContext('S.bookData = __probe; S.selectedChapterId = null;', appCtx);
+    run(appCtx, 'renderBook');
+    const html = view.innerHTML;
+    dirty('book view with an inactive chapter', html);
+
+    const tagOf = function (id) {
+      const m = new RegExp('<button[^>]*data-ch="' + id + '"[^>]*>').exec(html);
+      return m ? m[0] : '';
+    };
+    check('an inactive chapter is a disabled button (with the reason on it)',
+      /\sdisabled/.test(tagOf(lockedCh.id)) && /\blocked\b/.test(tagOf(lockedCh.id)) &&
+      tagOf(lockedCh.id).indexOf('unlock this one') !== -1, tagOf(lockedCh.id));
+    check('an open chapter is still clickable', !/\sdisabled/.test(tagOf(openCh.id)), tagOf(openCh.id));
+
+    const btnOf = function (id) {
+      return view._buttons.filter(function (b) { return b.dataset.ch === id; })[0] || null;
+    };
+    vm.runInContext('S.selectedChapterId = null;', appCtx);
+    const lockedBtn = btnOf(lockedCh.id);
+    if (lockedBtn) lockedBtn.click();
+    check('clicking an inactive chapter changes nothing (no handler, button disabled)',
+      vm.runInContext('S.selectedChapterId', appCtx) === null &&
+      (!lockedBtn || (lockedBtn.disabled === true && lockedBtn.onclick === null)));
+
+    const openBtn = btnOf(openCh.id);
+    if (openBtn) openBtn.click();
+    check('clicking the open chapter still opens it',
+      vm.runInContext('S.selectedChapterId', appCtx) === openCh.id,
+      String(vm.runInContext('S.selectedChapterId', appCtx)));
+
+    /* nothing behind the lock: no text, no pages, no form */
+    const lockedPanel = run(appCtx, 'chapterPanel',
+      [{ book: { pdf: '/f/chapter.pdf' }, module: { mode: 'summary' } },
+        { status: 'locked', title: lockedCh.title, content: 'SECRET CHAPTER TEXT',
+          pageStart: 3, pageEnd: 5 }]);
+    dirty('inactive chapter panel', lockedPanel);
+    check('an inactive chapter reveals no text, no pages and no form',
+      lockedPanel.indexOf('SECRET CHAPTER TEXT') === -1 &&
+      lockedPanel.indexOf('chapter-book') === -1 && lockedPanel.indexOf('<iframe') === -1 &&
+      lockedPanel.indexOf('<textarea') === -1 && lockedPanel.indexOf('chSubmit') === -1 &&
+      lockedPanel.indexOf('objBox') === -1 && lockedPanel.indexOf('unlock this one') !== -1,
+      lockedPanel.slice(0, 140));
+
+    /* a stale selection must not render an inactive chapter either */
+    vm.runInContext('S.selectedChapterId = ' + JSON.stringify(lockedCh.id) + ';', appCtx);
+    run(appCtx, 'renderBook');
+    const forced = view.innerHTML;
+    const openSnip = cleanSlice(openCh.content);
+    const lockSnip = cleanSlice(lockedCh.content);
+    check('a forced inactive selection falls back to the open chapter',
+      (openSnip === '' || forced.indexOf(openSnip) !== -1) &&
+      (lockSnip === '' || forced.indexOf(lockSnip) === -1),
+      'open="' + openSnip.slice(0, 18) + '" locked="' + lockSnip.slice(0, 18) + '"');
+
+    /* and the same rule, judged on the untouched payload when it has a lock */
+    if (real) {
+      const realPanel = run(appCtx, 'chapterPanel', [book, real]);
+      check('the payload\'s own inactive chapter is a heading + reason only',
+        realPanel.indexOf('unlock this one') !== -1 && realPanel.indexOf('chapter-book') === -1 &&
+        realPanel.indexOf('<textarea') === -1 && realPanel.indexOf(String(real.title)) !== -1);
+    }
+    appCtx.document.getElementById = realGet;
+    }
+  }
 
   /* ------------------------------------------ real PDF upload end-to-end -- */
   const pdfText = '%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n' +
