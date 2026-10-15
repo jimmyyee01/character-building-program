@@ -183,8 +183,16 @@ gives you `Unit php8.2-fpm.service not found.` / `Unit apache2.service not found
 Instead, ask the machine:
 
 ```bash
-bash tools/which-backend.sh      # read-only: names the process answering + the restart to use
+bash tools/which-backend.sh            # read-only: names the process answering + the restart to use
+sudo bash tools/restart-backend.sh --yes   # restarts just that process, then asks /api/health
 ```
+
+`restart-backend.sh` is a dry run without `--yes`: it finds the process serving
+this folder through `/proc` (Node under pm2 → `pm2 restart <pid>`; Node under
+systemd → `systemctl restart <unit>`; a hand-started `node server/server.js` or
+`php -S` → kill it and start the same command line again) and otherwise falls back
+to PHP-FPM / apache2 / httpd / nginx. Then it prints what `/api/health` and
+`/build.json` answer.
 
 It prints this folder's commit and build marker (and whether `php/api.php` has
 the `/api/health` route), the listening ports, the PHP/Node processes, the

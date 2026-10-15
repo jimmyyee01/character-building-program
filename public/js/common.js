@@ -767,11 +767,12 @@ function deploymentNoticeHtml(info) {
     '<p class="small" style="margin:6px 0 0">' + verdict + '</p>' +
     '<p class="small" style="margin:8px 0 0">On the server, in the folder the domain serves:</p>' +
     '<pre class="small" style="background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;' +
-      'overflow:auto">bash tools/which-backend.sh   # names the process answering + how to restart it\n' +
+      'overflow:auto">bash tools/which-backend.sh          # which process answers, and how to restart it\n' +
+      'sudo bash tools/restart-backend.sh --yes  # restarts just that process\n' +
       'git pull && git log --oneline -1\n' +
-      'grep -n "api/health" php/api.php        # present in the new build\n' +
-      'curl -s localhost/api/health            # JSON? then only the process is old\n' +
-      '# restart that backend: node (pm2 restart <app>) | php-X.Y-fpm | apache2 | httpd | nginx\n' +
+      'grep -n "api/health" php/api.php          # present in the new build\n' +
+      'curl -s localhost/api/health              # JSON? then only the process is old\n' +
+      '# manual: node (pm2 restart) | php-X.Y-fpm | apache2 | httpd | nginx\n' +
       '#   php -S dev server: kill the pid and start the same command again</pre>' +
     '<p class="small" style="margin:6px 0 0">Then check ' +
       '<a href="/api/health" target="_blank" rel="noopener">/api/health</a> and ' +
