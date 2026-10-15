@@ -59,6 +59,26 @@ node tools/api-test.js http://localhost:3000     # Node backend (npm start)
 node tools/api-test.js http://localhost:8080     # PHP backend (see below)
 ```
 
+UI / render checks (no server needed for the first group):
+
+```bash
+node tools/smoke-pages.js        # every page loads + nav <-> section <-> renderer wiring
+node tools/ui-picker-check.js    # chapter page picker: all pages, wrap/scroll, range/all/clear
+node tools/ui-report-check.js    # progress-report builders + the expander rule
+node tools/ui-pdf-check.js       # book reader, books stay shut until clicked, list placement
+```
+
+Checks that talk to a running backend (pass the base URL, default is Node on 3000):
+
+```bash
+node tools/ui-live-check.js http://127.0.0.1:3000   # drives every renderer with real API data
+                                                    # (also uploads a test PDF and reads its page count)
+node tools/pages-api-check.js http://127.0.0.1:3000 # chapter page ranges above 99 round-trip
+```
+
+Handy npm shortcuts: `npm run check:ui`, `npm run check:api`, `npm run check:api:php`,
+`npm run check:live`, `npm run check:pages`.
+
 73 checks covering every seeded login, the per-portal role rules (schools /
 organization / family / married), the supervisor 100-user cap, account colour,
 dashboards + graphs, the ranked *Student progress* report (ordering, level,
