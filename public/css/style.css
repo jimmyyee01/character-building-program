@@ -385,7 +385,21 @@ tr:hover td { background: #f8faff; }
   overflow: hidden; aspect-ratio: 1 / 1.35; max-height: 78vh;
   box-shadow: 0 12px 28px rgba(23, 32, 58, .14);
 }
-.book-page .pdf-frame { width: 100%; height: 100%; border: 0; border-radius: 0; margin: 0; }
+.book-page .pdf-frame {
+  display: block;
+  border: 0; border-radius: 0; margin: 0;
+}
+/* the sheet clips the viewer and covers it with a shield, so the only way to
+   move through the book is a page turn — never a scroll */
+.book-page { position: relative; }
+.book-frame-wrap { position: absolute; inset: 0; overflow: hidden; background: #fff; }
+.book-frame-wrap .pdf-frame { width: calc(100% + 20px); height: calc(100% + 20px); }
+.book-shield { position: absolute; inset: 0; z-index: 3; cursor: ew-resize; }
+.book-page.turning { animation: bookTurn .2s ease; }
+@keyframes bookTurn {
+  from { opacity: .5; transform: translateX(7px); }
+  to { opacity: 1; transform: none; }
+}
 .page-turn {
   flex: 0 0 auto; width: 42px; align-self: center; height: 70px;
   border: 1px solid var(--line); border-radius: 12px; background: #fff;

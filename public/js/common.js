@@ -334,15 +334,22 @@ function bookReaderHtml(url, opts) {
   opts = opts || {};
   const label = opts.title || 'Book';
   const from = Math.max(1, Number(opts.from) || 1);
-  const to = Math.max(from, Number(opts.to) || 0);
-  const rangeNote = to ? 'Chapter pages ' + from + '–' + to + ' only' : 'Use ← → to turn pages';
+  const to = Number(opts.to) > from ? Number(opts.to) : 0;   /* 0 = no upper limit */
+  const rangeNote = to ? 'Chapter pages ' + from + '–' + to + ' only'
+    : 'Turn the pages — the book never scrolls';
   return '<div class="book-reader" data-book="' + esc(url) + '" data-page="' + from + '"' +
       ' data-book-min="' + from + '"' + (to ? ' data-book-max="' + to + '"' : '') + '>' +
     '<div class="book-stage">' +
       '<button type="button" class="page-turn prev" data-book-turn="-1" aria-label="Previous page"' +
         ' title="Previous page">‹</button>' +
-      '<div class="book-page"><iframe class="pdf-frame" src="' + esc(pdfSrc(url, from)) + '" title="' +
-        esc(label) + '" loading="lazy"></iframe></div>' +
+      '<div class="book-page">' +
+        /* the sheet is clipped and covered by a shield, so the viewer inside can
+           only be moved a page at a time (wheel / swipe / arrows), never scrolled */
+        '<div class="book-frame-wrap"><iframe class="pdf-frame" src="' + esc(pdfSrc(url, from)) +
+          '" title="' + esc(label) + '" loading="lazy" scrolling="no"></iframe></div>' +
+        '<div class="book-shield" data-book-shield aria-hidden="true"' +
+          ' title="Scroll or swipe to turn the page"></div>' +
+      '</div>' +
       '<button type="button" class="page-turn next" data-book-turn="1" aria-label="Next page"' +
         ' title="Next page">›</button>' +
     '</div>' +
@@ -432,6 +439,13 @@ function bookGo(root, delta) {
   if (no) no.textContent = String(page);
   const target = pdfSrc(root.dataset.book, page);
   if (iframe && iframe.getAttribute('src') !== target) iframe.setAttribute('src', target);
+  /* a small page-turn flick so it reads like a book */
+  const sheet = root.querySelector('.book-page');
+  if (sheet && sheet.classList && delta) {
+    sheet.classList.remove('turning');
+    void (sheet.offsetWidth || 0);
+    sheet.classList.add('turning');
+  }
   root.querySelectorAll('[data-book-turn="-1"]').forEach(function (b) { b.disabled = page <= min; });
   root.querySelectorAll('[data-book-turn="1"]').forEach(function (b) {
     b.disabled = !!total && page >= total;
@@ -459,6 +473,7 @@ function bookActivate(root) {
   root.classList.add('book-active');
 }
 /* Delegated, so readers rendered later (library, books, chapters) all work. */
+let wheelAcc = 0, wheelLock = 0, touchX = null, touchY = null;
 if (typeof document !== 'undefined' && document.addEventListener) {
   document.addEventListener('click', function (e) {
     const t = e.target;
@@ -503,6 +518,43 @@ if (typeof document !== 'undefined' && document.addEventListener) {
       bookCount(bookRootOf(f));
     }
   }, true);
+  document.addEventListener('wheel', function (e) {
+    const shield = e.target && e.target.closest ? e.target.closest('[data-book-shield]') : null;
+    if (!shield) return;
+    const root = bookRootOf(shield);
+    if (!root) return;
+    e.preventDefault();                      /* the book never scrolls */
+    const now = Date.now();
+    const cool = Number(root.dataset.bookCooldown || 220);
+    if (now - wheelLock < cool) return;
+    wheelAcc += (e.deltaY || 0) + (e.deltaX || 0);
+    if (Math.abs(wheelAcc) > 40) {
+      const step = wheelAcc > 0 ? 1 : -1;
+      wheelAcc = 0;
+      wheelLock = now;
+      bookActivate(root);
+      bookGo(root, step);
+    }
+  }, { passive: false });
+  document.addEventListener('touchstart', function (e) {
+    const shield = e.target && e.target.closest ? e.target.closest('[data-book-shield]') : null;
+    if (!shield) return;
+    const t = e.touches && e.touches[0];
+    if (!t) return;
+    touchX = t.clientX; touchY = t.clientY;
+  }, { passive: true });
+  document.addEventListener('touchend', function (e) {
+    if (touchX == null) return;
+    const t = e.changedTouches && e.changedTouches[0];
+    const dx = t ? t.clientX - touchX : 0;
+    const dy = t ? t.clientY - touchY : 0;
+    touchX = null; touchY = null;
+    if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy)) return;
+    const root = bookRootOf(document.querySelector('[data-book-shield]'));
+    if (!root) return;
+    bookActivate(root);
+    bookGo(root, dx < 0 ? 1 : -1);
+  }, { passive: true });
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
     const tag = String((e.target && e.target.tagName) || '').toLowerCase();

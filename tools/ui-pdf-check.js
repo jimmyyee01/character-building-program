@@ -126,6 +126,69 @@ check('the learner app gates the whole book behind finishing every module',
   /from: ch\.pageStart, to: ch\.pageEnd/.test(fs.readFileSync(dir + 'js/app.js', 'utf8')) &&
   /bookLockedHtml\(/.test(fs.readFileSync(dir + 'js/app.js', 'utf8')));
 
+/* the book turns pages instead of scrolling */
+check('reader markup clips the sheet and shields it (no scrolling)',
+  (function () {
+    const r = bookReaderHtml('/uploads/book.pdf', {});
+    return r.indexOf('class="book-frame-wrap"') !== -1 && r.indexOf('data-book-shield') !== -1 &&
+      r.indexOf('scrolling="no"') !== -1 && r.indexOf('never scrolls') !== -1;
+  })());
+check('wheel over the sheet turns the page and is prevented from scrolling',
+  (function () {
+    const wheel = (listeners.wheel || [])[0];
+    if (!wheel) return false;
+    /* fast reader: cooldown off, so wheel down/up both act */
+    const root = fakeRoot(10);
+    root.dataset.bookCooldown = '0';
+    const shield = makeEl('div');
+    shield.closest = sel => (sel === '[data-book-shield]' ? shield : (sel === '.book-reader' ? root : null));
+    let prevented = false;
+    const down = { target: shield, deltaY: 120, deltaX: 0, preventDefault: function () { prevented = true; } };
+    wheel(down);
+    const a = Number(root.dataset.page);
+    wheel(down);
+    const b = Number(root.dataset.page);
+    wheel({ target: shield, deltaY: -160, deltaX: 0, preventDefault: function () {} });
+    const c = Number(root.dataset.page);
+    /* the shared cooldown stops one flick from flipping several readers/pages */
+    const root2 = fakeRoot(10);
+    const shield2 = makeEl('div');
+    shield2.closest = sel => (sel === '[data-book-shield]' ? shield2 : (sel === '.book-reader' ? root2 : null));
+    wheel({ target: shield2, deltaY: 120, deltaX: 0, preventDefault: function () {} });
+    const d1 = Number(root2.dataset.page);
+    const src = fs.readFileSync(dir + 'js/common.js', 'utf8');
+    const coolOk = /Number\(root\.dataset\.bookCooldown \|\| 220\)/.test(src);
+    return prevented && a === 2 && b === 3 && c === 2 && d1 === 1 && coolOk &&
+      root._.sheet.classList.contains('turning');
+  })());
+check('a swipe left/right turns to the next/previous page',
+  (function () {
+    const start = (listeners.touchstart || [])[0];
+    const end = (listeners.touchend || [])[0];
+    if (!start || !end) return false;
+    const root = fakeRoot(10);
+    const shield = makeEl('div');
+    shield.closest = sel => (sel === '[data-book-shield]' ? shield : (sel === '.book-reader' ? root : null));
+    /* the swipe handler looks the shield up on the document */
+    doc.querySelector = sel => (sel === '[data-book-shield]' ? shield : null);
+    start({ target: shield, touches: [{ clientX: 300, clientY: 100 }] });
+    end({ changedTouches: [{ clientX: 120, clientY: 110 }] });
+    const next = Number(root.dataset.page);
+    start({ target: shield, touches: [{ clientX: 120, clientY: 100 }] });
+    end({ changedTouches: [{ clientX: 320, clientY: 105 }] });
+    const prev = Number(root.dataset.page);
+    doc.querySelector = () => null;
+    return next === 2 && prev === 1;
+  })());
+check('the sheet crops the viewer scrollbar and animates the turn',
+  (function () {
+    const css = fs.readFileSync(dir + 'css/style.css', 'utf8');
+    return /\.book-frame-wrap \{[^}]*overflow: hidden/.test(css) &&
+      /\.book-frame-wrap \.pdf-frame \{ width: calc\(100% \+ 20px\); height: calc\(100% \+ 20px\); \}/.test(css) &&
+      /\.book-shield \{ position: absolute; inset: 0; z-index: 3/.test(css) &&
+      /@keyframes bookTurn/.test(css);
+  })());
+
 /* -------------------------------------------------------- paging logic ---- */
 check('pdfSrc builds the single-page fragment',
   pdfSrc('/x.pdf', 7) === '/x.pdf#page=7&view=Fit&toolbar=0&navpanes=0&pagemode=none');
@@ -133,16 +196,18 @@ function fakeRoot(total) {
   const iframe = makeEl('iframe');
   const no = makeEl('b');
   const totalEl = makeEl('span');
+  const sheet = makeEl('div');
+  sheet.className = 'book-page';
   const prevs = [makeEl('button'), makeEl('button')];
   const nexts = [makeEl('button'), makeEl('button')];
   const root = makeEl('div');
   root.dataset = { book: '/uploads/books/alpha.pdf', page: '1' };
   if (total) root.dataset.total = String(total);
   root.classList.add('book-reader');
-  const map = { iframe: iframe, '[data-book-page]': no, '[data-book-total]': totalEl };
+  const map = { iframe: iframe, '[data-book-page]': no, '[data-book-total]': totalEl, '.book-page': sheet };
   root.querySelector = sel => map[sel] || null;
   root.querySelectorAll = sel => (sel === '[data-book-turn="-1"]' ? prevs : nexts);
-  root._ = { iframe, no, totalEl, prevs, nexts };
+  root._ = { iframe, no, totalEl, prevs, nexts, sheet };
   return root;
 }
 let r = fakeRoot(5);
