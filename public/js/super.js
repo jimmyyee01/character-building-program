@@ -979,7 +979,13 @@ function chapterFieldsHTML(ch) {
       esc(ch && ch.order != null ? ch.order : '') + '"></div>' +
   '</div>' +
   '<label>Content</label><textarea class="ch-content" style="min-height:110px">' +
-    esc(ch ? (ch.content || '') : '') + '</textarea>';
+    esc(ch ? (ch.content || '') : '') + '</textarea>' +
+  (S.curBookSummary
+    ? '<label>Key words (comma separated — the typed answer is assessed against these)</label>' +
+      '<input type="text" class="ch-keywords kw-input" value="' +
+      esc(ch && ch.keywords ? ch.keywords.join(', ') : '') + '" placeholder="' +
+      esc(ch && ch.suggestedKeywords ? ch.suggestedKeywords.join(', ') : 'leave empty to use the words of the chapter text') + '">'
+    : '');
 }
 /* how many pages can be ticked: the highest page already used, or the real
    page count of the PDF linked to the book */
@@ -1085,15 +1091,27 @@ function chapterHTML(ch) {
   const objList = objs.length
     ? objs.map(objectiveHTML).join('')
     : '<p class="muted small">No questions yet.</p>';
+  const kwRow = S.curBookSummary
+    ? '<b class="small">Key words</b>' +
+      ((ch.keywords && ch.keywords.length) || (ch.suggestedKeywords && ch.suggestedKeywords.length)
+        ? '<p class="small muted">' + ((ch.keywords && ch.keywords.length ? ch.keywords : ch.suggestedKeywords) || [])
+            .map(function (k) { return '<span class="kw">' + esc(k) + '</span>'; }).join(' ') +
+          (ch.keywords && ch.keywords.length ? '' : ' <span class="badge lock">auto from the chapter text</span>') + '</p>'
+        : '<p class="muted small">No key words yet — they are taken from the chapter text.</p>')
+    : '';
   return '<div class="obj" style="margin-top:12px">' +
     '<div class="muted small" style="text-transform:uppercase;letter-spacing:.05em">' +
       'Chapter</div>' + head +
     '<hr style="border:0;border-top:1px solid var(--line);margin:12px 0">' +
-    '<b class="small">Questions</b>' + objList + questionFormHTML(id) +
+    (S.curBookSummary
+      ? kwRow + '<p class="muted small">MODE: SUMMARY — learners type their answer for this chapter, so ' +
+        'questions are not used in this module.</p>'
+      : '<b class="small">Questions</b>' + objList + questionFormHTML(id)) +
   '</div>';
 }
 function bookCardHTML(b, isSummary) {
   S.curBook = b;
+  S.curBookSummary = !!isSummary;
   const chapters = (b.chapters || []).slice().sort(function (a, z) {
     return (a.order || 0) - (z.order || 0);
   });
@@ -1153,6 +1171,9 @@ function chapterBody(form) {
       body.pageEnd = Math.max.apply(null, arr);
     }
   }
+  /* MODULE 1 = MODE: SUMMARY — typed answers are assessed against these */
+  const kw = form.querySelector('.ch-keywords');
+  if (kw) body.keywords = kw.value;
   return body;
 }
 async function addChapter(e) {

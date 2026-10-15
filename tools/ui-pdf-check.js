@@ -91,6 +91,41 @@ card.closest = sel => (sel === '.book-open-card' ? card : null);
 check('clicking the cover replaces it with the open reader',
   inserted.indexOf('beforebegin|') === 0 && inserted.indexOf('class="book-reader"') !== -1 &&
   inserted.indexOf('#page=1') !== -1 && removed, inserted.slice(0, 60));
+/* chapter-scoped reading: only the chapter's own pages can be reached */
+check('ranged reader starts at the chapter page and is clamped to it',
+  (function () {
+    const r = bookReaderHtml('/uploads/book.pdf', { title: 'Chapter pages 12-18', from: 12, to: 18 });
+    return r.indexOf('data-page="12"') !== -1 && r.indexOf('data-book-min="12"') !== -1 &&
+      r.indexOf('data-book-max="18"') !== -1 && r.indexOf('#page=12') !== -1 &&
+      r.indexOf('Chapter pages 12') !== -1 && r.indexOf('of 18') !== -1;
+  })());
+check('ranged reader cannot page outside the chapter',
+  (function () {
+    const root = fakeRoot(0);
+    root.dataset = { book: '/uploads/book.pdf', page: '12', bookMin: '12', bookMax: '18' };
+    bookGo(root, -1);
+    const atStart = Number(root.dataset.page) === 12 && root._.prevs[0].disabled === true;
+    bookGo(root, 9);
+    const atEnd = Number(root.dataset.page) === 18 && root._.nexts[0].disabled === true;
+    return atStart && atEnd;
+  })());
+check('a chapter cover carries its page range and never embeds the book',
+  (function () {
+    const c = pdfHtml('/uploads/book.pdf', { title: 'Chapter pages 12-18', from: 12, to: 18 });
+    return c.indexOf('book-open-card') !== -1 && c.indexOf('data-book-from="12"') !== -1 &&
+      c.indexOf('data-book-to="18"') !== -1 && c.indexOf('Pages 12') !== -1 &&
+      c.indexOf('<iframe') === -1 && c.indexOf('book-reader') === -1;
+  })());
+check('a locked book renders a lock card, not a reader',
+  (function () {
+    const c = bookLockedHtml('Daily Meditations', 'Finish every module to open the books.');
+    return c.indexOf('book-open-card locked') !== -1 && c.indexOf('data-book-url') === -1 && c.indexOf('<iframe') === -1;
+  })());
+check('the learner app gates the whole book behind finishing every module',
+  /S\.flow && S\.flow\.allDone && d\.book\.pdf/.test(fs.readFileSync(dir + 'js/app.js', 'utf8')) &&
+  /from: ch\.pageStart, to: ch\.pageEnd/.test(fs.readFileSync(dir + 'js/app.js', 'utf8')) &&
+  /bookLockedHtml\(/.test(fs.readFileSync(dir + 'js/app.js', 'utf8')));
+
 /* -------------------------------------------------------- paging logic ---- */
 check('pdfSrc builds the single-page fragment',
   pdfSrc('/x.pdf', 7) === '/x.pdf#page=7&view=Fit&toolbar=0&navpanes=0&pagemode=none');
@@ -186,7 +221,9 @@ pdfPageCount('/uploads/books/alpha.pdf').then(function (n) {
     /function bookCoverHtml/.test(commonSrc) && /function pdfHtml/.test(commonSrc));
   check('library rows and reading views use the closed cover',
     /if \(it\.url\) return pdfHtml\(it\.url\);/.test(admin) &&
-    (pages[1].match(/pdfHtml\(d\.book\.pdf\)/g) || []).length === 2);
+    (pages[1].match(/pdfHtml\(d\.book\.pdf/g) || []).length === 2 &&
+    /pdfHtml\(d\.book\.pdf, \{ title: 'Open the whole book'/.test(pages[1]) &&
+    /pdfHtml\(d\.book\.pdf, \{\n?\s*title:/.test(pages[1]));
   console.log(bad ? bad + ' FAILED' : 'PDF READER + LIST PLACEMENT OK');
   process.exit(bad ? 1 : 0);
 }).catch(function (e) { console.log('FATAL ' + e.message); process.exit(1); });

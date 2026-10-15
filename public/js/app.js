@@ -428,8 +428,13 @@ function renderBook() {
     '<div class="card"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">' +
       '<div><h3 style="margin:0">' + esc(d.book.title) + '</h3>' +
       '<span class="muted small">' + esc(d.module.title) + '</span></div>' +
-      '<div>' + (d.book.pdf ? pdfHtml(d.book.pdf) : '') +
-      '<button class="ghost small" id="backToBooks3">← Books</button></div>' +
+      '<div>' +
+        /* the whole book unlocks only once every module is complete */
+        (S.flow && S.flow.allDone && d.book.pdf
+          ? pdfHtml(d.book.pdf, { title: 'Open the whole book', button: 'Open full book',
+              note: 'Every module is complete — the full book is now unlocked.' })
+          : '') +
+        '<button class="ghost small" id="backToBooks3">← Books</button></div>' +
     '</div></div>' +
     '<div class="reader">' + listHtml + '<div id="chapterBody">' + body + '</div></div>';
 
@@ -459,7 +464,13 @@ function chapterPanel(d, ch) {
     (ch.content
       ? '<div class="content">' + esc(ch.content) + '</div>'
       : '<p class="muted">No written content for this chapter — read the pages of the PDF book.</p>') +
-    (d.book.pdf ? '<div class="small mt">' + pdfHtml(d.book.pdf) + '</div>' : '');
+    (d.book.pdf
+      ? '<div class="small mt">' + pdfHtml(d.book.pdf, {
+          title: (ch.pageStart && ch.pageEnd) ? 'Chapter pages ' + ch.pageStart + '–' + ch.pageEnd : 'Chapter pages',
+          from: ch.pageStart, to: ch.pageEnd, button: 'Read this chapter',
+          note: 'Only this chapter’s pages can be read here. The whole book opens once you finish every module.'
+        }) + '</div>'
+      : '');
 
   if (ch.submission) {
     html += '<hr><p class="timestamp">Submitted: <b>' + fmtDate(ch.submission.createdAt) + '</b></p>' +
@@ -468,12 +479,14 @@ function chapterPanel(d, ch) {
         : '<span class="badge ok">Original work</span>') +
       (ch.submission.score != null
         ? ' <span class="badge ' + (ch.submission.score >= ch.submission.total * 0.6 ? 'ok' : 'warn') + '">Score ' +
-          ch.submission.score + '/' + ch.submission.total + '</span>' : '');
+          ch.submission.score + '/' + ch.submission.total + '</span>' : '') +
+      keyWordsFeedback(ch, ch.submission);
   } else if (ch.status === 'locked') {
     html += '<p class="muted mt">🔒 Submit the previous chapter to unlock this one.</p>';
   } else if (d.module.mode === 'summary') {
     html += '<hr><h4>Summary of your understanding</h4>' +
       '<p class="muted small">Type in your own words — paste/cut is disabled and your work is compared with other students’ submissions.</p>' +
+      keyWordsHint(ch) +
       '<textarea id="chText" class="no-paste" placeholder="At least 30 characters..."></textarea>' +
       '<div class="mt"><button id="chSubmit">Submit chapter summary</button></div>';
   } else {
@@ -482,6 +495,34 @@ function chapterPanel(d, ch) {
       '<div id="objBox">Loading objectives…</div>';
   }
   return html + '</div>';
+}
+
+/* MODULE 1 is MODE: SUMMARY — the answer is typed, and the chapter's key words
+   help the learner (and the assessment) see whether the chapter was understood. */
+function keyWordsList(ch) {
+  return (ch && Array.isArray(ch.keywords)) ? ch.keywords.filter(Boolean) : [];
+}
+function keyWordsHint(ch) {
+  const list = keyWordsList(ch);
+  if (!list.length) return '';
+  return '<div class="key-words"><b>Key words to use:</b> ' +
+    list.map(function (k) { return '<span class="kw">' + esc(k) + '</span>'; }).join(' ') +
+    '<div class="muted small">Explain them in your own words — your answer is checked against these.</div></div>';
+}
+function keyWordsFeedback(ch, sub) {
+  const list = keyWordsList(ch);
+  if (!list.length) return '';
+  if (sub && sub.keywordScore != null) {
+    const missing = (sub.keywordsMissing || []);
+    return '<div class="key-words"><b>Key words:</b> ' +
+      '<span class="badge ' + (sub.keywordScore >= 60 ? 'ok' : 'warn') + '">' +
+        (sub.keywordsUsed == null ? '' : sub.keywordsUsed + ' of ' + sub.keywordsTotal + ' (' + sub.keywordScore + '%)') +
+      '</span>' +
+      (missing.length
+        ? '<div class="muted small">Not used yet: ' + missing.map(esc).join(', ') + '</div>'
+        : '<div class="muted small">Every key word of this chapter is covered.</div>') + '</div>';
+  }
+  return keyWordsHint(ch);
 }
 
 function wireChapterPanel(d, ch) {
@@ -493,7 +534,11 @@ function wireChapterPanel(d, ch) {
       try {
         const r = await API.post('/submissions',
           { type: 'chapter_summary', chapterId: ch.id, text: t.value });
-        toast(r.warning || 'Chapter summary submitted.', r.warning ? 'err' : 'ok');
+        const a = r.assessment || {};
+        const kw = a.keywordScore == null ? ''
+          : ' Key words: ' + a.keywordsUsed + ' of ' + a.keywordsTotal + ' (' + a.keywordScore + '%)' +
+            (a.keywordsMissing && a.keywordsMissing.length ? ' — missing: ' + a.keywordsMissing.join(', ') : '');
+        toast((r.warning || 'Chapter summary submitted.') + kw, r.warning ? 'err' : 'ok');
         await refreshBook();
       } catch (e) { toast(e.message, 'err'); }
     };
@@ -777,6 +822,13 @@ async function renderCertificates() {
 
 /* ------------------------------------------------------------ library --- */
 function openLibraryItem(item) {
+  /* books only open once every module is complete */
+  if (item.type === 'book' && (item.locked || !(S.flow && S.flow.allDone))) {
+    modal('<h3>' + esc(item.title) + '</h3>' +
+      bookLockedHtml(item.title, 'Finish every module to open the books in the programme.') +
+      '<div class="mt"><button data-close class="ghost">Close</button></div>');
+    return;
+  }
   if (item.type === 'video' && item.url) {
     modal('<h3>' + esc(item.title) + '</h3>' +
       '<video class="video-frame" controls autoplay src="' + esc(item.url) + '"></video>' +
@@ -803,7 +855,9 @@ async function renderLibrary() {
             return '<div class="tenant-chip" style="cursor:pointer" data-lib="' + esc(i.id) + '">' +
               '<b>' + esc(i.title) + '</b> ' +
               (i.fileName ? '<span class="badge info">file</span>' : '') +
-              (i.text ? '<span class="badge lock">text</span>' : '') + '</div>';
+              (i.text ? '<span class="badge lock">text</span>' : '') +
+              (i.type === 'book' && i.locked ? '<span class="badge off">locked until you finish every module</span>' : '') +
+              '</div>';
           }).join('')
         : '<p class="muted">Nothing here yet.</p>') + '</div>';
   }

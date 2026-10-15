@@ -10,7 +10,8 @@
     "check:api": "node tools/api-test.js http://127.0.0.1:3000",
     "check:api:php": "node tools/api-test.js http://127.0.0.1:8080",
     "check:live": "node tools/ui-live-check.js http://127.0.0.1:3000",
-    "check:pages": "node tools/pages-api-check.js http://127.0.0.1:3000"
+    "check:pages": "node tools/pages-api-check.js http://127.0.0.1:3000",
+    "check:keywords": "node tools/keywords-api-check.js http://127.0.0.1:3000"
   },
   "engines": {
     "node": ">=16"

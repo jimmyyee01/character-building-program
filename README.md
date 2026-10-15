@@ -34,7 +34,6 @@ Every school/organization gets its own login URL `/t/<slug>` created by the
 super admin — nothing about one school is visible to another.
 
 ### Seeded accounts (change them from the consoles)
-
 | Account | Credentials |
 |---|---|
 | Super admin | `superadmin` / `SuperAdmin@123` |
@@ -77,7 +76,18 @@ node tools/pages-api-check.js http://127.0.0.1:3000 # chapter page ranges above 
 ```
 
 Handy npm shortcuts: `npm run check:ui`, `npm run check:api`, `npm run check:api:php`,
-`npm run check:live`, `npm run check:pages`.
+`npm run check:live`, `npm run check:pages`, `npm run check:keywords`.
+
+If you are updating an **existing PHP database**, run the migration once after
+pulling (it only adds what is missing — it never touches data):
+
+```bash
+php migrate.php
+```
+
+It adds the key-word columns used to assess typed answers. Until it is run the
+app still works: key words are derived from the chapter text and answers are
+scored when they are read.
 
 73 checks covering every seeded login, the per-portal role rules (schools /
 organization / family / married), the supervisor 100-user cap, account colour,
@@ -117,6 +127,11 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
   to the book and you can type a total, tick a range, tick all pages or clear),
   and it wraps below the title field inside a scrollable box so it always fits
   the page — in the super console and in each account's console.
+- **MODE: SUMMARY chapters (Module 1)** are answered by **typing**, never by
+  selecting. Each chapter carries **key words** taken from its own text (or set
+  by an admin): the learner sees them before typing, their answer is scored on
+  how many it uses, and the score, the words used and the words still missing
+  are shown to the learner and to the office in the progress report.
 - **Users / Reports / Settings** — all users across all tenants, all
   submissions with copy-similarity flags, program name/logo, letter & letter
   video, credentials.
@@ -144,7 +159,11 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
    added), chapters unlock one after another with **typed-only** summaries
    (paste disabled, date/time shown, copy detection vs other students), a
    letter unlocks after all chapters of a book, then the next book; at the end:
-   best-book prompt → completion video → **GAMMA CERTIFICATE**.
+   best-book prompt → completion video → **GAMMA CERTIFICATE**. Each chapter
+   shows the **key words** of its own text and the typed answer is scored on how
+   many of them it uses (score + words still missing are shown straight away).
+   While a chapter is open only **that chapter's pages** may be read — the book
+   covers at the end of the chapter open a reader clamped to that page range.
 5. **Module 2 — BETA (Personal Relationship & Applied Psychology)** — 3 books,
    chapters end with **objectives shuffled on every login**, then 3 mandatory
    colour-tagged summaries (injustices in the book → injustices in your
@@ -152,6 +171,11 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
 6. **Module 3 — ALPHA (Communication, Sex & Applied Character in Leadership)**
    — 4 books, same objective + colour-summary flow (communication, sex,
    character) → **ALPHA CERTIFICATE**.
+7. **Books** stay shut while a learner is working through the modules: a chapter
+   only ever opens its own page range, and the **whole book opens after every
+   module is finished** (the Final records level unlocks the full readers and
+   the library books). The API withholds library book files until then, so it
+   cannot be bypassed from the page.
 
 ---
 

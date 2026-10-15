@@ -74,7 +74,7 @@ function r_book_one($user, $body, $params, $token, $query) {
     if ($lib && ($lib['type'] === 'book')) { $pdf = $lib['url']; $pdfTitle = $lib['title']; }
   }
   $bookOut = array_merge($book, ['pdf' => $pdf, 'pdfTitle' => $pdfTitle]);
-  return ['moduleStatus' => $modStatus,
+  return ['moduleStatus' => $modStatus, 'pdfUnlocked' => all_modules_complete($user),
     'module' => ['id' => $module['id'], 'mode' => $module['mode'], 'title' => $module['title']],
     'book' => $bookOut, 'chapters' => $prog['chapters'], 'stage' => $prog['stage'],
     'summaries' => $prog['summaries'], 'letter' => $prog['letter'], 'letterSubmission' => $prog['letterSubmission']];
@@ -266,8 +266,15 @@ function r_submissions($user, $body, $params, $token, $query) {
   }
   $pdo->prepare('INSERT INTO submissions (id,user_id,tenant_id,type,chapter_id,book_id,module_id,`index`,`text`,answers_json,score,total,color,label,similarity,flagged,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute(
     [$newRow['id'],$newRow['user_id'],$newRow['tenant_id'],$newRow['type'],$newRow['chapter_id'],$newRow['book_id'],$newRow['module_id'],$newRow['index'],$newRow['text'],$newRow['answers_json'],$newRow['score'],$newRow['total'],$newRow['color'],$newRow['label'],$newRow['similarity'],$newRow['flagged'],$newRow['created_at']]);
+  /* typed answers are assessed against the chapter's key words */
+  $kw = submission_assessment($newRow);
+  if ($kw && has_column('submissions', 'keyword_score')) {
+    $pdo->prepare('UPDATE submissions SET keyword_score=?, keywords_used=?, keywords_total=?, keywords_covered_json=?, keywords_missing_json=? WHERE id=?')
+      ->execute([$kw['keywordScore'], $kw['keywordsUsed'], $kw['keywordsTotal'],
+        jenc($kw['keywordsCovered']), jenc($kw['keywordsMissing']), $newRow['id']]);
+  }
   if (!empty($newRow['flagged'])) $warn = 'Your submission was flagged for similarity review.';
-  return ['submission' => sub_meta(n_sub($newRow)), 'warning' => $warn];
+  return ['submission' => sub_meta(n_sub($newRow)), 'assessment' => $kw, 'warning' => $warn];
 }
 function flow_ensure_general($user) {
   $pdo = db();
@@ -415,10 +422,18 @@ function r_library_get($user, $body, $params, $token, $query) {
   $st->execute([$user['tenant_id']]);
   $rows = $st->fetchAll();
   $out = [];
+  $isAdmin = in_array($user['role'], ['super','tenant_admin'], true);
+  $allDone = $isAdmin ? true : all_modules_complete($user);
   foreach ($rows as $r) {
     $row = lib_row($r);
-    if (in_array($user['role'], ['super','tenant_admin'], true)) {
+    if ($isAdmin) {
       $row['canEdit'] = ($user['role'] === 'super') ? true : (($r['scope'] ?? '') === ($user['tenant_id'] ?? ''));
+    }
+    /* learners may not open the books before they finish every module */
+    if (!$isAdmin && ($r['type'] ?? '') === 'book' && !empty($r['url']) && !$allDone) {
+      $row['url'] = null;
+      $row['locked'] = true;
+      $row['lockedReason'] = 'Finish every module to open the books.';
     }
     $out[] = $row;
   }
@@ -452,7 +467,9 @@ function describe_sub($s) {
   return ['id' => $s['id'], 'type' => $s['type'], 'text' => $s['text'], 'createdAt' => $s['createdAt'],
     'color' => $s['color'], 'label' => $s['label'], 'score' => $s['score'], 'total' => $s['total'],
     'flagged' => $s['flagged'], 'similarity' => $s['similarity'], 'chapter' => $chT, 'book' => $bkT,
-    'module' => $mdT, 'index' => $s['index']];
+    'module' => $mdT, 'index' => $s['index'],
+    'keywordScore' => $s['keywordScore'] ?? null, 'keywordsUsed' => $s['keywordsUsed'] ?? null,
+    'keywordsTotal' => $s['keywordsTotal'] ?? null, 'keywordsMissing' => $s['keywordsMissing'] ?? []];
 }
 function r_final($user, $body, $params, $token, $query) {
   global $PARTICIPANTS;

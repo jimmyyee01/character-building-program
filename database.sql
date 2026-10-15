@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS chapters (
   content LONGTEXT NULL,
   page_start VARCHAR(20) NULL,
   page_end VARCHAR(20) NULL,
+  keywords_json LONGTEXT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX (book_id)
 ) ENGINE=InnoDB;
@@ -153,6 +154,11 @@ CREATE TABLE IF NOT EXISTS submissions (
   label VARCHAR(255) NULL,
   similarity INT NOT NULL DEFAULT 0,
   flagged TINYINT(1) NOT NULL DEFAULT 0,
+  keyword_score INT NULL,
+  keywords_used INT NULL,
+  keywords_total INT NULL,
+  keywords_covered_json LONGTEXT NULL,
+  keywords_missing_json LONGTEXT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX (user_id), INDEX (tenant_id), INDEX (type),
   INDEX (chapter_id), INDEX (book_id), INDEX (module_id)

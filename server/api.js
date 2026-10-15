@@ -260,7 +260,11 @@ function subMeta(s) {
   return s ? { id: s.id, createdAt: s.createdAt, score: s.score, flagged: !!s.flagged,
     similarity: s.similarity || 0, color: s.color || null, text: s.text || null,
     bookId: s.bookId || null, chapterId: s.chapterId || null,
-    moduleId: s.moduleId || null, index: s.index || null } : null;
+    moduleId: s.moduleId || null, index: s.index || null,
+    keywordScore: s.keywordScore == null ? null : s.keywordScore,
+    keywordsUsed: s.keywordsUsed == null ? null : s.keywordsUsed,
+    keywordsTotal: s.keywordsTotal == null ? null : s.keywordsTotal,
+    keywordsMissing: s.keywordsMissing || [] } : null;
 }
 
 /* One book inside a module: chapter gating, letter stage, colour summaries. */
@@ -272,10 +276,12 @@ function bookProgress(user, module, book) {
     const type = module.mode === 'summary' ? 'chapter_summary' : 'objectives';
     const sub = findSub(user.id, type, { chapterId: ch.id });
     const unlocked = prevDone;
+    const kwords = chapterKeywords(ch);
     const state = {
       id: ch.id, title: ch.title, content: ch.content,
       pageStart: ch.pageStart, pageEnd: ch.pageEnd, order: ch.order,
       objectiveCount: objectivesOf(ch.id, tenantId).length,
+      keywords: kwords.list, keywordsSource: kwords.source,
       submission: subMeta(sub),
       status: sub ? 'done' : (unlocked ? 'active' : 'locked')
     };
@@ -359,6 +365,12 @@ function moduleProgress(user, module) {
   };
 }
 
+/* Has this learner finished every module? (books unlock only then.) */
+function allModulesComplete(user) {
+  const st = moduleStatuses(user);
+  return st.length > 0 && st.every(s => s.status === 'completed');
+}
+
 function moduleStatuses(user) {
   const modules = ordered(dbm.db.modules);
   let prevOk = true;
@@ -386,6 +398,72 @@ function jaccard(aSet, bSet) {
   const uni = aSet.size + bSet.size - inter;
   return uni ? inter / uni : 0;
 }
+/* ============================================== key words from a chapter == */
+/* Module 1 (and any summary-mode module) is answered by typing, so each chapter
+   carries key words taken from its own text. A learner's summary is assessed on
+   how many of those key words it uses — the list can be curated by an admin, or
+   is derived automatically from the chapter text. */
+const KEYWORD_STOP = new Set(('the and for are but not you all any can had her was one our out day get has him his how man new now old see two way who boy did its let put say she too use that this these those from with have your will they them their there here when where which while what why how about into over after before under above again further once during shall should would could must might been being does doing done having been très para como que los las del una por con mas pero sus esta este esto que son para con sin sobre entre cuando donde porque tambien solo cada otro otra todos todas').split(/\s+/));
+
+/* most telling words of a chapter: frequent, long enough, not a stop word */
+function suggestKeywords(text, max) {
+  const counts = {};
+  normalizeWords(text || '').forEach(function (w) {
+    if (w.length < 4 || KEYWORD_STOP.has(w)) return;
+    counts[w] = (counts[w] || 0) + 1;
+  });
+  return Object.keys(counts).sort(function (a, b) {
+    return counts[b] - counts[a] || b.length - a.length || a.localeCompare(b);
+  }).slice(0, max || 8);
+}
+/* accepts an array or a comma / line separated string, cleans and de-dupes */
+function cleanKeywords(input) {
+  let list = [];
+  if (Array.isArray(input)) list = input;
+  else if (typeof input === 'string') list = input.split(/[,;\n\r]+/);
+  const seen = new Set(), out = [];
+  list.forEach(function (k) {
+    const v = String(k).toLowerCase().replace(/['’]/g, '').replace(/[^a-z0-9\s-]/g, ' ')
+      .replace(/\s+/g, ' ').trim();
+    if (!v || v.length < 3 || v.length > 40 || seen.has(v)) return;
+    seen.add(v);
+    out.push(v);
+  });
+  return out.slice(0, 20);
+}
+/* the key words used for assessment: the curated list, else auto-derived */
+function chapterKeywords(ch) {
+  const own = cleanKeywords(ch && ch.keywords);
+  if (own.length) return { list: own, source: 'set' };
+  const auto = suggestKeywords(ch && ch.content, 8);
+  return { list: auto, source: auto.length ? 'auto' : 'none' };
+}
+function matchKeyWord(token, key) {
+  if (!token || !key) return false;
+  if (token === key) return true;
+  if (token.length >= 5 && key.length >= 5 &&
+      (token.indexOf(key) === 0 || key.indexOf(token) === 0)) return true;
+  if (token.length >= 5 && key.length >= 5 && token.indexOf(key) !== -1) return true;
+  return false;
+}
+/* how much of the chapter's key-word list a typed answer covers */
+function keywordAssessment(text, keywords) {
+  const list = (keywords || []).filter(Boolean);
+  const words = normalizeWords(text || '');
+  const flat = ' ' + String(text || '').toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').replace(/\s+/g, ' ') + ' ';
+  const covered = [], missing = [];
+  list.forEach(function (k) {
+    const parts = String(k).split(' ').filter(Boolean);
+    const hit = parts.length > 1
+      ? flat.indexOf(' ' + k + ' ') !== -1
+      : words.some(function (w) { return matchKeyWord(w, parts[0]); });
+    (hit ? covered : missing).push(k);
+  });
+  return { keywordsTotal: list.length, keywordsUsed: covered.length,
+    keywordScore: list.length ? Math.round(100 * covered.length / list.length) : null,
+    keywordsCovered: covered, keywordsMissing: missing.slice(0, 8) };
+}
+
 /* Compares a typed submission with every other user's submission for the same
    target (same chapter / same summary). >= 75% word overlap is flagged. */
 function assessCopy(user, type, match, text) {
@@ -502,7 +580,7 @@ route('GET', '/api/book/([a-z0-9_-]+)', ({ user, params }) => {
   need(st, 'Module not found', 404);
   const progress = bookProgress(user, module, book);
   const lib = book.libraryId ? dbm.byId('library', book.libraryId) : null;
-  return { ok: true, moduleStatus: st.status,
+  return { ok: true, moduleStatus: st.status, pdfUnlocked: allModulesComplete(user),
     module: { id: module.id, mode: module.mode, title: module.title },
     book: Object.assign({}, progress.book, { pdf: lib && lib.type === 'book' ? (lib.url || null) : null,
       pdfTitle: lib ? lib.title : null }),
@@ -546,6 +624,24 @@ route('POST', '/api/submissions', ({ user, body }) => {
   const text = body.text != null ? String(body.text).trim() : '';
   let sub = null;
   let warning = null;
+  let assessment = null;
+
+  /* typed answers are measured against the chapter's key words */
+  function keywordsFor(base) {
+    if (!text) return null;
+    let list = null;
+    if (base.chapterId) {
+      const ch = dbm.byId('chapters', base.chapterId);
+      if (ch) list = chapterKeywords(ch).list;
+    } else if (base.bookId) {
+      const chs = dbm.where('chapters', c => c.bookId === base.bookId);
+      list = suggestKeywords(chs.map(c => c.content).join(' '), 10);
+    } else if (base.type === 'general_summary') {
+      list = suggestKeywords(dbm.db.chapters.map(c => c.content).join(' '), 12);
+    }
+    if (!list || !list.length) return null;
+    return keywordAssessment(text, list);
+  }
 
   function store(base, matchForCopy) {
     let copy = { similarity: 0, flagged: false };
@@ -554,6 +650,15 @@ route('POST', '/api/submissions', ({ user, body }) => {
       id: dbm.uid('sub'), userId: user.id, tenantId, createdAt: now,
       flagged: copy.flagged, similarity: copy.similarity, text: text || null
     }, base);
+    const kw = keywordsFor(base);
+    if (kw) {
+      assessment = kw;
+      sub.keywordScore = kw.keywordScore;
+      sub.keywordsUsed = kw.keywordsUsed;
+      sub.keywordsTotal = kw.keywordsTotal;
+      sub.keywordsCovered = kw.keywordsCovered;
+      sub.keywordsMissing = kw.keywordsMissing;
+    }
     dbm.collection('submissions').push(sub);
     dbm.save();
     if (copy.flagged) warning = 'Copy assessment: your work matches another submission by ' + copy.similarity + '%.';
@@ -665,7 +770,7 @@ route('POST', '/api/submissions', ({ user, body }) => {
     need(false, 'Unknown submission type');
   }
 
-  return { ok: true, submission: subMeta(sub), warning };
+  return { ok: true, submission: subMeta(sub), assessment: assessment, warning };
 });
 
 /* ----------------------------------------------------- certificates ------ */
@@ -786,6 +891,10 @@ function describeSub(s) {
   return { id: s.id, type: s.type, text: s.text, createdAt: s.createdAt,
     color: s.color || null, label: s.label || null, score: s.score, total: s.total,
     flagged: !!s.flagged, similarity: s.similarity || 0,
+    keywordScore: s.keywordScore == null ? null : s.keywordScore,
+    keywordsUsed: s.keywordsUsed == null ? null : s.keywordsUsed,
+    keywordsTotal: s.keywordsTotal == null ? null : s.keywordsTotal,
+    keywordsMissing: s.keywordsMissing || [],
     chapter: ch ? ch.title : null, book: bk ? bk.title : null,
     module: md ? md.title : null, index: s.index || null };
 }
@@ -857,8 +966,17 @@ route('GET', '/api/library', ({ user }) => {
   need(user, 'Sign in required', 401);
   const items = dbm.where('library', l => l.scope === 'global' || l.scope === user.tenantId);
   const canConfig = user.role === 'super' || user.role === 'tenant_admin';
-  return { ok: true, library: items.map(l => Object.assign({}, l,
-    canConfig ? { canEdit: canEdit(user, l) } : {})) };
+  const allDone = PARTICIPANTS.indexOf(user.role) !== -1 ? allModulesComplete(user) : true;
+  return { ok: true, library: items.map(l => {
+    const base = Object.assign({}, l, canConfig ? { canEdit: canEdit(user, l) } : {});
+    /* learners may not open the books before they finish every module */
+    if (!canConfig && l.type === 'book' && l.url && !allDone) {
+      base.url = null;
+      base.locked = true;
+      base.lockedReason = 'Finish every module to open the books.';
+    }
+    return base;
+  }) };
 });
 
 /* ================================================== super admin ========== */
@@ -1163,6 +1281,9 @@ route('GET', '/api/books', ({ req, user }) => {
       (user.role === 'super' || c.scope === 'global' || c.scope === user.tenantId)));
     return Object.assign({}, b, { canEdit: canEdit(user, b),
       chapters: chs.map(c => Object.assign({}, c, {
+        keywords: cleanKeywords(c.keywords),
+        suggestedKeywords: suggestKeywords(c.content, 8),
+        keywordsSource: (cleanKeywords(c.keywords).length ? 'set' : 'auto'),
         objectives: ordered(dbm.where('objectives', o => o.chapterId === c.id &&
           (user.role === 'super' || o.scope === 'global' || o.scope === user.tenantId))) })) });
   }) };
@@ -1226,6 +1347,7 @@ route('POST', '/api/books/([a-z0-9_-]+)/chapters', ({ user, params, body }) => {
   const ch = { id: dbm.uid('ch'), bookId: book.id, scope, order,
     title: String(body.title).trim(), content: body.content ? String(body.content) : '',
     pageStart: body.pageStart || null, pageEnd: body.pageEnd || null,
+    keywords: cleanKeywords(body.keywords),
     createdAt: dbm.nowISO() };
   dbm.collection('chapters').push(ch);
   dbm.save();
@@ -1242,6 +1364,7 @@ route('PUT', '/api/chapters/([a-z0-9_-]+)', ({ user, params, body }) => {
   if (body.content !== undefined) ch.content = String(body.content || '');
   if (body.pageStart !== undefined) ch.pageStart = body.pageStart;
   if (body.pageEnd !== undefined) ch.pageEnd = body.pageEnd;
+  if (body.keywords !== undefined) ch.keywords = cleanKeywords(body.keywords);
   if (body.order) ch.order = Number(body.order);
   if (body.scope && user.role === 'super') ch.scope = body.scope;
   dbm.save();
@@ -1520,6 +1643,7 @@ route('GET', '/api/reports/students', ({ req, user }) => {
       level = { index: 0, title: '—', percent: 0, state: 'Not started' };
     }
     const tenant = u.tenantId ? dbm.byId('tenants', u.tenantId) : null;
+    const typed = subs.filter(s => s.keywordScore != null);
     return {
       id: u.id, fullName: u.fullName, email: u.email, studentNumber: u.studentNumber,
       className: u.className, role: u.role, suspended: !!u.suspended,
@@ -1528,11 +1652,18 @@ route('GET', '/api/reports/students', ({ req, user }) => {
       submissions: subs.length, lastActiveAt: last,
       certificates: perf.certificates, flagged: perf.flagged,
       progress: perf.overall, modulesCompleted: completed, moduleCount: mods.length, level: level,
+      keywordScore: typed.length
+        ? Math.round(typed.reduce((a, s) => a + s.keywordScore, 0) / typed.length) : null,
+      typedAnswers: typed.length,
       modules: mods.map(m => ({ title: m.title, percent: m.percent, status: m.status })),
       recent: subs.slice().sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).slice(0, 6)
         .map(s => ({ type: s.type, createdAt: s.createdAt, text: String(s.text || '').slice(0, 240),
           score: s.score == null ? null : s.score, total: s.total == null ? null : s.total,
           flagged: !!s.flagged, similarity: s.similarity || 0, label: s.label || null,
+          keywordScore: s.keywordScore == null ? null : s.keywordScore,
+          keywordsUsed: s.keywordsUsed == null ? null : s.keywordsUsed,
+          keywordsTotal: s.keywordsTotal == null ? null : s.keywordsTotal,
+          keywordsMissing: s.keywordsMissing || [],
           chapter: s.chapterId ? ((dbm.byId('chapters', s.chapterId) || {}).title || null) : null,
           book: s.bookId ? ((dbm.byId('books', s.bookId) || {}).title || null) : null }))
     };

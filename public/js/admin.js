@@ -1003,7 +1003,7 @@ function bookDetailHtml(book) {
   }
   const chs = book.chapters || [];
   if (!chs.length) h += '<p class="muted mt">No chapters yet.</p>';
-  chs.forEach(function (ch, i) { h += chapterHtml(ch, i, can); });
+  chs.forEach(function (ch, i) { h += chapterHtml(ch, i, can, book); });
   if (can) {
     h += '<form id="chForm" class="qform" style="margin-top:16px"><h4>Add chapter</h4><div class="row">' +
       '<div><label>Title</label><input type="text" id="chfTitle" required></div>' +
@@ -1011,16 +1011,21 @@ function bookDetailHtml(book) {
       '<div><label>Order</label><input type="number" id="chfOrder" min="1"></div>' +
       '</div><label>Content</label>' +
       '<textarea id="chfContent" placeholder="Chapter text (optional)"></textarea>' +
+      (isSummaryModule(book)
+        ? '<label>Key words (comma separated — the typed answer is assessed against these)</label>' +
+          '<input type="text" class="kw-input" id="chfKeywords" placeholder="Leave empty to use the words that stand out in the chapter text">'
+        : '') +
       '<div class="mt"><button type="submit">Add chapter</button></div></form>';
   }
   return h + '</div>';
 }
-function chapterHtml(ch, idx, can) {
+function chapterHtml(ch, idx, can, book) {
   const pages = (ch.pageStart != null || ch.pageEnd != null)
     ? ' <span class="timestamp">(p. ' + esc(ch.pageStart == null ? '—' : ch.pageStart) +
       '–' + esc(ch.pageEnd == null ? '—' : ch.pageEnd) + ')</span>'
     : '';
   let h = '<div class="chap"><div class="q">' + (idx + 1) + '. ' + esc(ch.title) + pages + '</div>';
+  if (isSummaryModule(book)) h += keyWordsRowHtml(ch);
   if (ch.content) {
     h += '<details class="exp"><summary>Content</summary>' +
       '<div class="small" style="white-space:pre-wrap;margin-top:6px">' + esc(ch.content) + '</div></details>';
@@ -1043,8 +1048,30 @@ function chapterHtml(ch, idx, can) {
       (can ? '<button type="button" class="danger small" data-delobj="' + esc(o.id) + '">Delete</button>' : '') +
       '</div>';
   });
-  if (can) h += questionFormHtml(ch);
+  if (can) {
+    if (isSummaryModule(book)) {
+      h += '<p class="muted small">MODE: SUMMARY — learners type their answer for this chapter, so ' +
+        'questions are not used in this module. The typed answer is assessed against the chapter key words.</p>';
+    } else {
+      h += questionFormHtml(ch);
+    }
+  }
   return h + '</div>';
+}
+/* is the module this book belongs to answered by typing (MODE: SUMMARY)? */
+function isSummaryModule(book) {
+  const mods = booksState.modules || [];
+  const m = mods.filter(function (x) { return x.id === (book && book.moduleId); })[0];
+  return !!m && m.mode === 'summary';
+}
+function keyWordsRowHtml(ch) {
+  const list = (ch && Array.isArray(ch.keywords)) ? ch.keywords : [];
+  const sug = (ch && Array.isArray(ch.suggestedKeywords)) ? ch.suggestedKeywords : [];
+  const show = list.length ? list : sug;
+  if (!show.length) return '';
+  return '<p class="small muted" style="margin:4px 0 0">' +
+    (list.length ? 'Key words: ' : 'Auto key words (from the chapter text): ') +
+    show.map(function (k) { return '<span class="kw">' + esc(k) + '</span>'; }).join(' ') + '</p>';
 }
 function questionFormHtml(ch) {
   let opts = optRowHtml(ch.id, 0, true) + optRowHtml(ch.id, 1, false);
@@ -1121,6 +1148,8 @@ function bindBookEvents(area) {
       }
       const o = document.getElementById('chfOrder').value;
       if (o) body.order = Number(o);
+      const kwEl = document.getElementById('chfKeywords');
+      if (kwEl && kwEl.value.trim()) body.keywords = kwEl.value;
       await API.post('/books/' + booksState.openBookId + '/chapters', body);
       toast('Chapter added', 'ok');
       await refreshBooks();
@@ -1175,9 +1204,16 @@ function openChapterEdit(id) {
   });
   if (!ch) return;
   booksState.editPages = chapterPages(ch);
+  const editBook = (booksState.books || []).filter(function (b) { return b.id === booksState.openBookId; })[0] || null;
   openModal('<h3>Edit chapter</h3><form id="chEditForm">' +
     '<label>Title</label><input type="text" id="ceTitle" value="' + esc(ch.title) + '" required>' +
     '<label>Content</label><textarea id="ceContent">' + esc(ch.content || '') + '</textarea>' +
+    (isSummaryModule(editBook)
+      ? '<label>Key words (comma separated — the typed answer is assessed against these)</label>' +
+        '<input type="text" class="kw-input" id="ceKeywords" value="' +
+        esc((ch.keywords || []).join(', ')) + '" placeholder="' +
+        esc((ch.suggestedKeywords || []).join(', ')) + '">'
+      : '') +
     '<div class="row">' +
     '<div id="cePages" class="page-pick-cell"></div>' +
     '<div><label>Order</label><input type="number" id="ceOrder" value="' +
@@ -1200,6 +1236,8 @@ function openChapterEdit(id) {
     }
     const o = document.getElementById('ceOrder').value;
     if (o) body.order = Number(o);
+    const kwEl = document.getElementById('ceKeywords');
+    if (kwEl) body.keywords = kwEl.value;
     await API.put('/chapters/' + id, body);
     closeModal();
     toast('Chapter updated', 'ok');

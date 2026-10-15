@@ -135,6 +135,36 @@ async function part2(r, tok, check) {
   check('progress report on an account with no learners returns an empty ranked list',
     r.ok && Array.isArray(r.data.students) && r.data.students.length === 0 && r.data.average === 0,
     'status ' + r.status + ' count ' + (r.data.count));
+
+  /* ---- books open for a learner only after every module is complete ---- */
+  const lockStu = await call('/auth/login', { method: 'POST', body: { slug: 'greenfield-academy', identifier: 'STU-001', password: 'Student@123' } });
+  check('student login for the book-lock checks', lockStu.ok && lockStu.data.token);
+  const pdfText = '%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n' +
+    '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n' +
+    '3 0 obj << /Type /Page /Parent 2 0 R >> endobj\ntrailer << /Root 1 0 R /Size 4 >>\n%%EOF\n';
+  r = await call('/library', { method: 'POST', body: { type: 'book', title: 'Lock Check Book', scope: 'global',
+    file: { name: 'lock-check.pdf', base64: Buffer.from(pdfText, 'latin1').toString('base64') } } }, supLogin.data.token);
+  check('book uploaded for the lock check', r.ok && r.data.item, JSON.stringify(r.data).slice(0, 120));
+  const lockId = (r.data.item || {}).id;
+  const stuLib = await call('/library', null, lockStu.data.token);
+  const lockItem = (stuLib.data.library || []).filter(function (i) { return i.id === lockId; })[0] || {};
+  check('learner cannot open a book before finishing every module',
+    lockItem.url === null && lockItem.locked === true, JSON.stringify(lockItem).slice(0, 150));
+  const lockBook = await call('/book/book_gamma_1', null, lockStu.data.token);
+  check('learner book payload says the full book is locked', lockBook.data.pdfUnlocked === false,
+    JSON.stringify(lockBook.data.pdfUnlocked));
+  check('chapter payload always carries the chapter key words',
+    (lockBook.data.chapters || []).every(function (c) { return Array.isArray(c.keywords); }));
+  const grad = await call('/auth/login', { method: 'POST', body: { slug: 'greenfield-academy', identifier: 'STU-100', password: 'Student@123' } });
+  check('demo graduate login', grad.ok && grad.data.token, JSON.stringify(grad.data).slice(0, 120));
+  const gradLib = await call('/library', null, grad.data.token);
+  const openItem = (gradLib.data.library || []).filter(function (i) { return i.id === lockId; })[0] || {};
+  check('a learner who finished every module can open the books',
+    !!openItem.url && openItem.locked !== true, JSON.stringify(openItem).slice(0, 150));
+  const gradBook = await call('/book/book_gamma_1', null, grad.data.token);
+  check('graduate book payload unlocks the full book', gradBook.data.pdfUnlocked === true,
+    JSON.stringify(gradBook.data.pdfUnlocked));
+  await call('/library/' + lockId, { method: 'DELETE' }, supLogin.data.token);
   r = await call('/modules', null, tok.schools);
   check('GET /modules', r.ok && (r.data.modules || []).length >= 3, 'count ' + (r.data.modules || []).length);
   r = await call('/library', null, tok.schools);

@@ -18,9 +18,12 @@ function n_book(array $r): array {
         'createdAt' => iso($r['created_at'] ?? null)];
 }
 function n_chapter(array $r): array {
+    $own = clean_keywords(jdec($r['keywords_json'] ?? null, []));
     return ['id' => $r['id'], 'bookId' => $r['book_id'], 'scope' => $r['scope'],
         'order' => (int)$r['order'], 'title' => $r['title'], 'content' => $r['content'],
         'pageStart' => $r['page_start'], 'pageEnd' => $r['page_end'],
+        'keywords' => $own, 'suggestedKeywords' => suggest_keywords($r['content'] ?? '', 8),
+        'keywordsSource' => $own ? 'set' : 'auto',
         'createdAt' => iso($r['created_at'] ?? null)];
 }
 function n_objective(array $r): array {
@@ -46,6 +49,7 @@ function n_library(array $r): array {
         'fileName' => $r['file_name'], 'createdAt' => iso($r['created_at'] ?? null)];
 }
 function n_sub(array $r): array {
+    $kw = submission_assessment($r);
     return ['id' => $r['id'], 'userId' => $r['user_id'], 'tenantId' => $r['tenant_id'],
         'type' => $r['type'], 'chapterId' => $r['chapter_id'], 'bookId' => $r['book_id'],
         'moduleId' => $r['module_id'], 'index' => $r['index'] !== null ? (int)$r['index'] : null,
@@ -54,6 +58,10 @@ function n_sub(array $r): array {
         'total' => $r['total'] !== null ? (int)$r['total'] : null,
         'color' => $r['color'], 'label' => $r['label'],
         'similarity' => (int)($r['similarity'] ?? 0), 'flagged' => (bool)($r['flagged'] ?? false),
+        'keywordScore' => $kw['keywordScore'] ?? null,
+        'keywordsUsed' => $kw['keywordsUsed'] ?? null,
+        'keywordsTotal' => $kw['keywordsTotal'] ?? null,
+        'keywordsMissing' => $kw['keywordsMissing'] ?? [],
         'createdAt' => iso($r['created_at'] ?? null)];
 }
 function n_cert(array $r): array {
@@ -119,7 +127,11 @@ function sub_meta(?array $s): ?array {
         'flagged' => $s['flagged'], 'similarity' => $s['similarity'],
         'color' => $s['color'], 'text' => $s['text'],
         'bookId' => $s['bookId'], 'chapterId' => $s['chapterId'],
-        'moduleId' => $s['moduleId'], 'index' => $s['index']];
+        'moduleId' => $s['moduleId'], 'index' => $s['index'],
+        'keywordScore' => $s['keywordScore'] ?? null,
+        'keywordsUsed' => $s['keywordsUsed'] ?? null,
+        'keywordsTotal' => $s['keywordsTotal'] ?? null,
+        'keywordsMissing' => $s['keywordsMissing'] ?? []];
 }
 function get_library(?string $id): ?array {
     if (!$id) return null;
@@ -136,8 +148,10 @@ function book_progress(array $user, array $module, array $book): array {
         $type = $module['mode'] === 'summary' ? 'chapter_summary' : 'objectives';
         $sub = find_sub($user['id'], $type, ['chapter_id' => $ch['id']]);
         $unlocked = $prevDone;
+        $kwList = chapter_keywords($ch);
         $states[] = ['id' => $ch['id'], 'title' => $ch['title'], 'content' => $ch['content'],
             'pageStart' => $ch['pageStart'], 'pageEnd' => $ch['pageEnd'], 'order' => $ch['order'],
+            'keywords' => $kwList['list'], 'keywordsSource' => $kwList['source'],
             'objectiveCount' => count(objectives_of($ch['id'], $tenantId)),
             'submission' => sub_meta($sub),
             'status' => $sub ? 'done' : ($unlocked ? 'active' : 'locked')];
@@ -223,6 +237,13 @@ function module_progress(array $user, array $module): array {
         'percent' => $total ? (int)round(100 * $done / $total) : 0,
         'objectiveScore' => $objTotal ? (int)round(100 * $objScore / $objTotal) : null];
 }
+/* Has this learner finished every module? (books unlock only then.) */
+function all_modules_complete(array $user): bool {
+    $st = module_statuses($user);
+    if (!$st) return false;
+    foreach ($st as $s) { if ($s['status'] !== 'completed') return false; }
+    return true;
+}
 function module_statuses(array $user): array {
     $prevOk = true; $out = [];
     foreach (all_modules() as $m) {
@@ -236,6 +257,137 @@ function module_statuses(array $user): array {
             'status' => $status, 'progress' => $p];
     }
     return $out;
+}
+
+/* True when a table already has a column — lets optional new columns (see
+   php/migrate.php) be used without breaking an older database. */
+function has_column(string $table, string $column): bool {
+    static $cache = [];
+    $key = $table . '.' . $column;
+    if (array_key_exists($key, $cache)) return $cache[$key];
+    try {
+        $st = db()->prepare('SELECT COUNT(*) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?');
+        $st->execute([$table, $column]);
+        $cache[$key] = ((int)$st->fetchColumn()) > 0;
+    } catch (Throwable $e) {
+        $cache[$key] = false;
+    }
+    return $cache[$key];
+}
+
+/* ------------------------------------------ key words (typed answers) ----- */
+/* Module 1 is MODE: SUMMARY, so chapters are answered by typing. Each chapter
+   carries key words from its own text; an admin can curate them, otherwise they
+   are derived automatically, and typed answers are scored against them. */
+function keyword_stopwords(): array {
+    static $set = null;
+    if ($set === null) {
+        $set = array_flip(preg_split('/\s+/', 'the and for are but not you all any can had her was one our out day get has him his how man new now old see two way who boy did its let put say she too use that this these those from with have your will they them their there here when where which while what why how about into over after before under above again further once during shall should would could must might been being does doing done having para como que los las del una por con mas pero sus esta este esto son sin sobre entre cuando donde porque tambien solo cada otro otra todos todas'));
+    }
+    return $set;
+}
+function suggest_keywords(?string $text, int $max = 8): array {
+    $counts = [];
+    foreach (normalize_words($text ?? '') as $w) {
+        if (strlen($w) < 4 || isset(keyword_stopwords()[$w])) continue;
+        $counts[$w] = ($counts[$w] ?? 0) + 1;
+    }
+    $keys = array_keys($counts);
+    usort($keys, function ($a, $b) use ($counts) {
+        if ($counts[$b] !== $counts[$a]) return $counts[$b] - $counts[$a];
+        if (strlen($b) !== strlen($a)) return strlen($b) - strlen($a);
+        return strcmp($a, $b);
+    });
+    return array_slice($keys, 0, $max);
+}
+function clean_keywords($input): array {
+    $list = [];
+    if (is_array($input)) $list = $input;
+    elseif (is_string($input)) $list = preg_split('/[,;\n\r]+/', $input);
+    $seen = []; $out = [];
+    foreach ($list as $k) {
+        $v = strtolower((string)$k);
+        $v = str_replace(["'", '’'], '', $v);
+        $v = preg_replace('/[^a-z0-9\s-]/', ' ', $v);
+        $v = trim(preg_replace('/\s+/', ' ', $v));
+        if ($v === '' || strlen($v) < 3 || strlen($v) > 40 || isset($seen[$v])) continue;
+        $seen[$v] = true;
+        $out[] = $v;
+    }
+    return array_slice($out, 0, 20);
+}
+function chapter_keywords(?array $ch): array {
+    $own = clean_keywords($ch['keywords'] ?? []);
+    if ($own) return ['list' => $own, 'source' => 'set'];
+    $auto = suggest_keywords($ch['content'] ?? '', 8);
+    return ['list' => $auto, 'source' => $auto ? 'auto' : 'none'];
+}
+function match_keyword(string $token, string $key): bool {
+    if ($token === '' || $key === '') return false;
+    if ($token === $key) return true;
+    if (strlen($token) >= 5 && strlen($key) >= 5 &&
+        (strpos($token, $key) === 0 || strpos($key, $token) === 0)) return true;
+    if (strlen($token) >= 5 && strlen($key) >= 5 && strpos($token, $key) !== false) return true;
+    return false;
+}
+function keyword_assessment(?string $text, array $keywords): array {
+    $list = array_values(array_filter($keywords, fn($k) => (string)$k !== ''));
+    $words = normalize_words($text ?? '');
+    $flat = ' ' . trim(preg_replace('/\s+/', ' ', preg_replace('/[^a-z0-9\s-]/', ' ', strtolower((string)$text)))) . ' ';
+    $covered = []; $missing = [];
+    foreach ($list as $k) {
+        $parts = array_values(array_filter(explode(' ', (string)$k)));
+        if (count($parts) > 1) $hit = strpos($flat, ' ' . $k . ' ') !== false;
+        else $hit = count(array_filter($words, fn($w) => match_keyword($w, $parts[0]))) > 0;
+        if ($hit) $covered[] = $k; else $missing[] = $k;
+    }
+    return ['keywordsTotal' => count($list), 'keywordsUsed' => count($covered),
+        'keywordScore' => $list ? (int)round(100 * count($covered) / count($list)) : null,
+        'keywordsCovered' => $covered, 'keywordsMissing' => array_slice($missing, 0, 8)];
+}
+
+/* key words a submission is assessed against (cached per request) */
+function submission_keywords(array $sub): array {
+    static $cache = [];
+    $chapterId = $sub['chapter_id'] ?? null;
+    $bookId = $sub['book_id'] ?? null;
+    if ($chapterId !== null) {
+        if (!isset($cache['ch:' . $chapterId])) {
+            $st = db()->prepare('SELECT * FROM chapters WHERE id=? LIMIT 1');
+            $st->execute([$chapterId]);
+            $row = $st->fetch();
+            $cache['ch:' . $chapterId] = $row ? chapter_keywords(n_chapter($row))['list'] : [];
+        }
+        return $cache['ch:' . $chapterId];
+    }
+    if ($bookId !== null) {
+        if (!isset($cache['bk:' . $bookId])) {
+            $st = db()->prepare('SELECT content FROM chapters WHERE book_id=?');
+            $st->execute([$bookId]);
+            $cache['bk:' . $bookId] = suggest_keywords(implode(' ', array_map(fn($r) => (string)$r['content'], $st->fetchAll())), 10);
+        }
+        return $cache['bk:' . $bookId];
+    }
+    if (!isset($cache['all'])) {
+        $st = db()->query('SELECT content FROM chapters');
+        $cache['all'] = suggest_keywords(implode(' ', array_map(fn($r) => (string)$r['content'], $st->fetchAll())), 12);
+    }
+    return $cache['all'];
+}
+/* assessment of a stored submission: saved scores when present, else computed */
+function submission_assessment(array $sub): ?array {
+    if (empty($sub['text'])) return null;
+    if (isset($sub['keyword_score']) && $sub['keyword_score'] !== null) {
+        return ['keywordsTotal' => (int)($sub['keywords_total'] ?? 0),
+            'keywordsUsed' => (int)($sub['keywords_used'] ?? 0),
+            'keywordScore' => (int)$sub['keyword_score'],
+            'keywordsCovered' => jdec($sub['keywords_covered_json'] ?? null, []),
+            'keywordsMissing' => jdec($sub['keywords_missing_json'] ?? null, [])];
+    }
+    $list = submission_keywords($sub);
+    if (!$list) return null;
+    return keyword_assessment((string)$sub['text'], $list);
 }
 
 /* --------------------------------------- copy detection + performance -- */

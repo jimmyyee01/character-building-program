@@ -20,10 +20,14 @@ function book_row(array $r): array {
         'createdAt'=>iso($r['created_at'] ?? null)];
 }
 function chap_row(array $r): array {
-    return ['id'=>$r['id'],'bookId'=>$r['book_id'],'scope'=>$r['scope'],
+    $own = clean_keywords(jdec($r['keywords_json'] ?? null, []));
+    $row = ['id'=>$r['id'],'bookId'=>$r['book_id'],'scope'=>$r['scope'],
         'order'=>(int)$r['order'],'title'=>$r['title'],'content'=>$r['content'],
         'pageStart'=>$r['page_start'],'pageEnd'=>$r['page_end'],
+        'keywords'=>$own,'suggestedKeywords'=>suggest_keywords($r['content'] ?? '', 8),
+        'keywordsSource'=>$own ? 'set' : 'auto',
         'createdAt'=>iso($r['created_at'] ?? null)];
+    return $row;
 }
 function obj_row(array $r): array {
     return ['id'=>$r['id'],'chapterId'=>$r['chapter_id'],'scope'=>$r['scope'],
@@ -385,10 +389,13 @@ function r_reports_students(array $user, array $body, array $params, ?string $to
         $recent = [];
         foreach ($st->fetchAll() as $row) {
             $d = describe_sub(n_sub($row));
+            $a = submission_assessment($row);
             $recent[] = ['type'=>$d['type'] ?? 'summary', 'createdAt'=>$d['createdAt'] ?? null,
                 'text'=>mb_substr((string)($d['text'] ?? ''), 0, 240), 'score'=>$d['score'] ?? null,
                 'total'=>$d['total'] ?? null, 'flagged'=>(bool)($d['flagged'] ?? false),
                 'similarity'=>$d['similarity'] ?? 0, 'label'=>$d['label'] ?? null,
+                'keywordScore'=>$a['keywordScore'] ?? null, 'keywordsUsed'=>$a['keywordsUsed'] ?? null,
+                'keywordsTotal'=>$a['keywordsTotal'] ?? null, 'keywordsMissing'=>$a['keywordsMissing'] ?? [],
                 'chapter'=>$d['chapter'] ?? null, 'book'=>$d['book'] ?? null];
         }
         $mods = $perf['modules'];
@@ -408,12 +415,22 @@ function r_reports_students(array $user, array $body, array $params, ?string $to
         }
         $tn = null;
         if (!empty($u['tenant_id'])) { $t = get_tenant($u['tenant_id']); $tn = $t ? $t['name'] : null; }
+        /* how well this learner uses the chapter key words in typed answers */
+        $ks = $pdo->prepare('SELECT * FROM submissions WHERE user_id=? AND `text` IS NOT NULL');
+        $ks->execute([$u['id']]);
+        $scores = [];
+        foreach ($ks->fetchAll() as $sr) {
+            $a = submission_assessment($sr);
+            if ($a && $a['keywordScore'] !== null) $scores[] = $a['keywordScore'];
+        }
         $students[] = ['id'=>$u['id'], 'fullName'=>$u['full_name'], 'email'=>$u['email'],
             'studentNumber'=>$u['student_number'], 'className'=>$u['class_name'], 'role'=>$u['role'],
             'suspended'=>(bool)$u['suspended'], 'tenantId'=>$u['tenant_id'], 'tenantName'=>$tn,
             'supervisorName'=>$sup, 'submissions'=>$subs, 'lastActiveAt'=>iso($last),
             'certificates'=>(int)$perf['certificates'], 'flagged'=>(int)$perf['flagged'],
             'progress'=>(int)$perf['overall'], 'modulesCompleted'=>$completed, 'moduleCount'=>count($mods),
+            'keywordScore'=>$scores ? (int)round(array_sum($scores) / count($scores)) : null,
+            'typedAnswers'=>count($scores),
             'level'=>$level,
             'modules'=>array_map(fn($m)=>['title'=>$m['title'], 'percent'=>(int)$m['percent'], 'status'=>$m['status']], $mods),
             'recent'=>$recent];
@@ -745,8 +762,18 @@ function r_chapters_create(array $user, array $body, array $params, ?string $tok
     $st = db()->prepare('SELECT COUNT(*) FROM chapters WHERE book_id=?'); $st->execute([$bookId]);
     $ord = $body['order'] ?? ((int)$st->fetchColumn() + 1);
     $id = uid('chp');
-    db()->prepare('INSERT INTO chapters (id,book_id,scope,`order`,title,content,page_start,page_end,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-        ->execute([$id, $bookId, $scope, $ord, $title, $body['content'] ?? null, $body['pageStart'] ?? $body['page_start'] ?? null, $body['pageEnd'] ?? $body['page_end'] ?? null, now_dt()]);
+    if (has_column('chapters', 'keywords_json')) {
+        db()->prepare('INSERT INTO chapters (id,book_id,scope,`order`,title,content,page_start,page_end,keywords_json,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+            ->execute([$id, $bookId, $scope, $ord, $title, $body['content'] ?? null,
+                $body['pageStart'] ?? $body['page_start'] ?? null,
+                $body['pageEnd'] ?? $body['page_end'] ?? null,
+                jenc(clean_keywords($body['keywords'] ?? [])), now_dt()]);
+    } else {
+        db()->prepare('INSERT INTO chapters (id,book_id,scope,`order`,title,content,page_start,page_end,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+            ->execute([$id, $bookId, $scope, $ord, $title, $body['content'] ?? null,
+                $body['pageStart'] ?? $body['page_start'] ?? null,
+                $body['pageEnd'] ?? $body['page_end'] ?? null, now_dt()]);
+    }
     $st = db()->prepare('SELECT * FROM chapters WHERE id=?'); $st->execute([$id]);
     $cr = chap_row($st->fetch()); $cr['canEdit'] = true; return $cr;
 }
@@ -760,6 +787,9 @@ function r_chapters_update(array $user, array $body, array $params, ?string $tok
     if (array_key_exists('content', $body)) { $set[] = 'content=?'; $args[] = $body['content']; }
     if (array_key_exists('pageStart', $body) || array_key_exists('page_start', $body)) { $set[] = 'page_start=?'; $args[] = $body['pageStart'] ?? $body['page_start']; }
     if (array_key_exists('pageEnd', $body) || array_key_exists('page_end', $body)) { $set[] = 'page_end=?'; $args[] = $body['pageEnd'] ?? $body['page_end']; }
+    if (array_key_exists('keywords', $body) && has_column('chapters', 'keywords_json')) {
+        $set[] = 'keywords_json=?'; $args[] = jenc(clean_keywords($body['keywords']));
+    }
     if (isset($body['order'])) { $set[] = '`order`=?'; $args[] = (int)$body['order']; }
     if (count($set)) { $args[] = $id; db()->prepare('UPDATE chapters SET ' . implode(',', $set) . ' WHERE id=?')->execute($args); }
     $st = db()->prepare('SELECT * FROM chapters WHERE id=?'); $st->execute([$id]);

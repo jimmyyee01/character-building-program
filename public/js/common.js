@@ -333,38 +333,57 @@ function pdfSrc(url, page) {
 function bookReaderHtml(url, opts) {
   opts = opts || {};
   const label = opts.title || 'Book';
-  return '<div class="book-reader" data-book="' + esc(url) + '" data-page="1">' +
+  const from = Math.max(1, Number(opts.from) || 1);
+  const to = Math.max(from, Number(opts.to) || 0);
+  const rangeNote = to ? 'Chapter pages ' + from + '–' + to + ' only' : 'Use ← → to turn pages';
+  return '<div class="book-reader" data-book="' + esc(url) + '" data-page="' + from + '"' +
+      ' data-book-min="' + from + '"' + (to ? ' data-book-max="' + to + '"' : '') + '>' +
     '<div class="book-stage">' +
       '<button type="button" class="page-turn prev" data-book-turn="-1" aria-label="Previous page"' +
         ' title="Previous page">‹</button>' +
-      '<div class="book-page"><iframe class="pdf-frame" src="' + esc(pdfSrc(url, 1)) + '" title="' +
+      '<div class="book-page"><iframe class="pdf-frame" src="' + esc(pdfSrc(url, from)) + '" title="' +
         esc(label) + '" loading="lazy"></iframe></div>' +
       '<button type="button" class="page-turn next" data-book-turn="1" aria-label="Next page"' +
         ' title="Next page">›</button>' +
     '</div>' +
     '<div class="book-bar">' +
       '<button type="button" class="ghost small" data-book-turn="-1">‹ Previous</button>' +
-      '<span class="book-page-no">Page <b data-book-page>1</b><span data-book-total></span></span>' +
+      '<span class="book-page-no">Page <b data-book-page>' + from + '</b>' +
+        '<span data-book-total>' + (to ? ' of ' + to : '') + '</span></span>' +
       '<button type="button" class="ghost small" data-book-turn="1">Next ›</button>' +
       '<span class="book-spacer"></span>' +
-      '<span class="muted small book-hint">Use ← → to turn pages</span>' +
+      '<span class="muted small book-hint">' + esc(rangeNote) + '</span>' +
       '<button type="button" class="ghost small" data-book-full>Full page</button>' +
       '<a class="btn ghost small" href="' + esc(url) + '" target="_blank" rel="noopener">Open ↗</a>' +
     '</div></div>';
 }
-/* A book stays shut until someone clicks it: listings and previews only render
-   this compact cover, so nothing opens (or downloads) on its own. */
+/* A book stays shut until someone clicks it, and can be limited to a page range
+   (a chapter's own pages) so the rest of the book is never reachable. */
 function bookCoverHtml(url, opts) {
   opts = opts || {};
   const label = opts.title || 'Book';
-  return '<div class="book-open-card" data-book-url="' + esc(url) + '" data-book-title="' + esc(label) + '">' +
+  const note = opts.note || (opts.from && opts.to
+    ? 'Pages ' + opts.from + '–' + opts.to + ' of the book only.'
+    : 'PDF book — it only opens when you click it.');
+  return '<div class="book-open-card" data-book-url="' + esc(url) + '" data-book-title="' + esc(label) + '"' +
+    (opts.from ? ' data-book-from="' + esc(String(opts.from)) + '"' : '') +
+    (opts.to ? ' data-book-to="' + esc(String(opts.to)) + '"' : '') + '>' +
     '<span class="book-open-icon" aria-hidden="true">📖</span>' +
     '<span class="book-open-text"><b>' + esc(label) + '</b>' +
-      '<span class="muted small">PDF book — it only opens when you click it.</span></span>' +
-    '<button type="button" class="small" data-book-load>Open book</button>' +
+      '<span class="muted small">' + esc(note) + '</span></span>' +
+    '<button type="button" class="small" data-book-load>' + esc(opts.button || 'Open book') + '</button>' +
   '</div>';
 }
-/* pdfHtml(): pass { open: true } to have the reader shown straight away. */
+/* a book the learner may not open yet (e.g. before finishing every module) */
+function bookLockedHtml(title, note) {
+  return '<div class="book-open-card locked">' +
+    '<span class="book-open-icon" aria-hidden="true">🔒</span>' +
+    '<span class="book-open-text"><b>' + esc(title || 'Book') + '</b>' +
+      '<span class="muted small">' + esc(note || 'This book opens once you have completed every module.') + '</span></span>' +
+  '</div>';
+}
+/* pdfHtml(): pass { open: true } to show the reader straight away, or
+   { from, to } to limit it to a page range (a chapter). */
 function pdfHtml(url, opts) {
   opts = opts || {};
   const isPdf = typeof url === 'string' && /\.pdf($|[?#])/i.test(url);
@@ -402,16 +421,18 @@ function bookRootOf(el) { return el && el.closest ? el.closest('.book-reader') :
 function bookGo(root, delta) {
   if (!root) return 1;
   const iframe = root.querySelector('iframe');
-  const total = Number(root.dataset.total || 0);
-  let page = Number(root.dataset.page || 1) + Number(delta || 0);
-  if (page < 1) page = 1;
+  const min = Math.max(1, Number(root.dataset.bookMin || 1));
+  const hardMax = Number(root.dataset.bookMax || 0);
+  const total = hardMax || Number(root.dataset.total || 0);
+  let page = Number(root.dataset.page || min) + Number(delta || 0);
+  if (page < min) page = min;
   if (total && page > total) page = total;
   root.dataset.page = page;
   const no = root.querySelector('[data-book-page]');
   if (no) no.textContent = String(page);
   const target = pdfSrc(root.dataset.book, page);
   if (iframe && iframe.getAttribute('src') !== target) iframe.setAttribute('src', target);
-  root.querySelectorAll('[data-book-turn="-1"]').forEach(function (b) { b.disabled = page <= 1; });
+  root.querySelectorAll('[data-book-turn="-1"]').forEach(function (b) { b.disabled = page <= min; });
   root.querySelectorAll('[data-book-turn="1"]').forEach(function (b) {
     b.disabled = !!total && page >= total;
   });
@@ -420,6 +441,8 @@ function bookGo(root, delta) {
 function bookCount(root) {
   if (!root || root.dataset.counted === '1') return;
   root.dataset.counted = '1';
+  /* a chapter-scoped reader is already limited to its own pages */
+  if (root.dataset.bookMax) return;
   pdfPageCount(root.dataset.book).then(function (n) {
     if (!n) return;
     root.dataset.total = n;
@@ -446,9 +469,11 @@ if (typeof document !== 'undefined' && document.addEventListener) {
       e.preventDefault();
       const url = cover.getAttribute('data-book-url') || cover.dataset.bookUrl;
       const title = cover.getAttribute('data-book-title') || cover.dataset.bookTitle || 'Book';
+      const from = cover.getAttribute('data-book-from') || '';
+      const to = cover.getAttribute('data-book-to') || '';
       const holder = cover.parentNode;
       if (url && holder && cover.insertAdjacentHTML) {
-        cover.insertAdjacentHTML('beforebegin', bookReaderHtml(url, { title: title }));
+        cover.insertAdjacentHTML('beforebegin', bookReaderHtml(url, { title: title, from: from, to: to }));
         if (cover.remove) cover.remove(); else if (holder.removeChild) holder.removeChild(cover);
       }
       return;
