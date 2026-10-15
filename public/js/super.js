@@ -437,9 +437,9 @@ async function renderAnalytics() {
   try { d = await API.get('/super/analytics' + analyticsQuery()); }
   catch (e) {
     if (isStaleServerError(e)) {
-      const hb = await serverBuild();
+      const info = await deploymentInfo();
       v.innerHTML = '<h2><span class="motto">Be True</span>Analytics &amp; impact</h2>' +
-        staleServerHtml(hb && hb.build, ['super.analytics']) +
+        deploymentNoticeHtml(info) +
         '<div class="card"><p class="muted small">Restart the backend, then reload — the portfolio ' +
         'analytics will appear here.</p>' +
         '<p><button type="button" class="ghost" id="anRetry">Try again</button></p></div>';

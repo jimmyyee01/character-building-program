@@ -687,21 +687,72 @@ function staleServerHtml(build, missing) {
 async function serverBuild() {
   try { return await API.get('/health'); } catch (e) { return null; }
 }
+/* Compare the deployed FILES with the running BACKEND — they are updated by
+   different steps (a pull updates the files; a restart loads the backend), so a
+   mismatch points at the missing step. */
+async function deploymentInfo() {
+  const info = { files: null, server: null };
+  try {
+    const res = await fetch('/build.json?t=' + Date.now(), { cache: 'no-store' });
+    if (res.ok) info.files = await res.json();
+  } catch (e) { /* no build.json: very old deployment */ }
+  info.server = await serverBuild();
+  return info;
+}
+function deploymentNoticeHtml(info) {
+  const files = (info && info.files) || null;
+  const server = (info && info.server) || null;
+  const fileBuild = files && files.build ? files.build : null;
+  const serverBuild = server && server.build ? server.build : null;
+  let verdict;
+  if (!serverBuild && fileBuild) {
+    verdict = 'The <b>files</b> on the server are current (' + esc(fileBuild) + ') but the <b>backend process</b> ' +
+      'is still old (even /api/health is missing). <b>Restart the backend</b> — PHP-FPM/Apache, or the Node process — ' +
+      'then reload.';
+  } else if (!serverBuild && !fileBuild) {
+    verdict = 'Neither /api/health nor /build.json answered, so the folder being served is not the one you ' +
+      'pulled. Check the <b>document root</b>, then <code>git pull</code> there and restart the backend.';
+  } else if (serverBuild && fileBuild && serverBuild !== fileBuild) {
+    verdict = 'The backend runs <b>' + esc(serverBuild) + '</b> while the files are <b>' + esc(fileBuild) +
+      '</b> — restart the backend so it loads the same build.';
+  } else {
+    verdict = 'The backend runs <b>' + esc(serverBuild || 'unknown') + '</b> but is missing a feature this page ' +
+      'uses. Restart the backend, then reload.';
+  }
+  return '<div class="card" style="border-left:5px solid #c62828;background:#fdeeee">' +
+    '<b>This page is newer than the server that answered it.</b>' +
+    '<p class="small" style="margin:6px 0 0">' +
+      'Files on the server: <b>' + esc(fileBuild || 'not found (/build.json)') + '</b> · ' +
+      'backend build: <b>' + esc(serverBuild || 'not found (/api/health)') + '</b></p>' +
+    '<p class="small" style="margin:6px 0 0">' + verdict + '</p>' +
+    '<p class="small" style="margin:8px 0 0">On the server, in the folder the domain serves:</p>' +
+    '<pre class="small" style="background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;' +
+      'overflow:auto">git pull && git log --oneline -1\n' +
+      'grep -n "api/health" php/api.php      # route present in the new build\n' +
+      'sudo systemctl restart php8.2-fpm && sudo systemctl restart apache2   # PHP\n' +
+      '#   (Node instead: restart the process — npm start / pm2 restart)</pre>' +
+    '<p class="small" style="margin:6px 0 0">Then check ' +
+      '<a href="/api/health" target="_blank" rel="noopener">/api/health</a> and ' +
+      '<a href="/build.json" target="_blank" rel="noopener">/build.json</a> — both should show the same build.</p>' +
+  '</div>';
+}
 /* Warn (once) when the server build lacks a feature this page needs. */
 async function warnIfStaleServer(feature, label) {
-  const hb = await serverBuild();
-  if (!hb || !hb.build) return null;
-  const feats = hb.features || [];
-  if (feature && feats.indexOf(feature) === -1) {
+  const info = await deploymentInfo();
+  const server = info.server;
+  const feats = (server && server.features) || [];
+  const stale = !server || !server.build || (feature && feats.indexOf(feature) === -1);
+  if (stale) {
     const el = document.getElementById('staleBuild');
     if (el) {
       el.classList.remove('hidden');
-      el.innerHTML = staleServerHtml(hb.build, [feature]);
+      el.innerHTML = deploymentNoticeHtml(info);
     } else if (typeof toast === 'function') {
-      toast('Server build ' + hb.build + ' is older than this page — restart the backend (' + label + ' missing)', 'err');
+      toast('Server build ' + ((server && server.build) || 'unknown') +
+        ' is older than this page — restart the backend (' + label + ')', 'err');
     }
   }
-  return hb;
+  return info;
 }
 
 function blobDownload(name, content, mime) {

@@ -1919,9 +1919,9 @@ async function renderAnalytics() {
   try { d = await API.get('/admin/analytics' + astatQuery()); }
   catch (e) {
     if (isStaleServerError(e)) {
-      const hb = await serverBuild();
+      const info = await deploymentInfo();
       el.innerHTML = '<h2><span class="motto">Be True</span>Analytics &amp; impact</h2>' +
-        staleServerHtml(hb && hb.build, ['admin.analytics']) +
+        deploymentNoticeHtml(info) +
         '<div class="card"><p class="muted small">Once the backend is restarted, reload this page — the ' +
         'analytics of this account will appear here.</p>' +
         '<p><button type="button" class="ghost" id="asRetry">Try again</button></p></div>';

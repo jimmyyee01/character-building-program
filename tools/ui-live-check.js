@@ -242,6 +242,18 @@ function dirty(label, html) {
     run(adminCtx, 'isStaleServerError', ['Something else failed']) === false &&
     run(adminCtx, 'staleServerHtml', ['2026-01-01-build', ['admin.analytics']])
       .indexOf('newer than the server') !== -1);
+  check('the deployment notice separates stale files from a stale backend',
+    (function () {
+      const filesNewBackendOld = run(adminCtx, 'deploymentNoticeHtml',
+        [{ files: { build: 'b9' }, server: null }]);
+      const bothOld = run(adminCtx, 'deploymentNoticeHtml', [{ files: null, server: null }]);
+      const mismatch = run(adminCtx, 'deploymentNoticeHtml',
+        [{ files: { build: 'b9' }, server: { build: 'b1', features: [] } }]);
+      return filesNewBackendOld.indexOf('backend process') !== -1 &&
+        filesNewBackendOld.indexOf('b9') !== -1 &&
+        bothOld.indexOf('document root') !== -1 &&
+        mismatch.indexOf('restart the backend') !== -1;
+    })());
 
   console.log(bad ? '\n' + bad + ' FAILED' : '\nLIVE RENDER OK');
   process.exit(bad ? 1 : 0);

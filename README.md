@@ -99,25 +99,27 @@ scored when they are read.
 ### "Unknown endpoint: GET /api/..." — the server is running older code
 
 That answer comes from the app's own route table, so the code answering the
-request does not have that route yet. Ask the running build what it has:
+request does not have that route yet. Two markers tell you exactly which part is
+stale — files or backend:
+
+* **`/build.json`** — a static file served from the files themselves.
+* **`/api/health`** — served by the running backend.
 
 ```bash
-curl https://your-site/api/health
-# { "ok": true, "backend": "php", "build": "2026-10-15-analytics",
-#   "features": ["health","super.analytics","admin.analytics", ...], "routes": 68 }
+curl -s https://your-site/build.json     # files on the server
+curl -s https://your-site/api/health     # backend that is running
 ```
 
-- `features` must list the endpoint you are calling (for example
-  `super.analytics` for `/api/super/analytics`).
-- If the build or the feature is missing, update the server:
-  1. `git pull` in the deployment folder (and check `git log --oneline -1`),
-  2. restart the backend — the Node process, or PHP-FPM/Apache for PHP, because
-     PHP keeps compiled files in **OPcache** until it is restarted,
-  3. open `/api/health` again and confirm the new build.
-- If `/api/health` itself answers "Unknown endpoint", the deployment is older
-  than the health endpoint: pull, restart, then check again.
-- Two folders (an old deployment and the new pull) is the other common cause —
-  make sure the domain's document root is the folder you pulled.
+| `/build.json` | `/api/health` | What it means / what to do |
+|---|---|---|
+| current build | current build + the feature listed | nothing to do — the endpoint exists |
+| current build | **missing or older** | the **files were updated but the backend process was not**: restart PHP-FPM/Apache (OPcache keeps old code) or the Node process, then reload |
+| **missing or older** | missing or older | the **folder being served is not the one you pulled**: fix the document root, `git pull` there, restart |
+
+Both consoles also show this themselves: if the page is newer than the server
+they print a red card with the two builds, the step that is missing, the shell
+commands to run and a *Try again* button (`#staleBuild` in `admin.html` /
+`super.html`).
 
 73 checks covering every seeded login, the per-portal role rules (schools /
 organization / family / married), the supervisor 100-user cap, account colour,
