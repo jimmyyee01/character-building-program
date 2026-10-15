@@ -26,6 +26,14 @@ async function main() {
 
   let r = await call('/public/portals');
   check('GET /public/portals', r.ok && r.data.ok && (r.data.portals || []).length >= 4);
+  r = await call('/health');
+  check('GET /health reports the running build and its features',
+    r.ok && r.data.ok && !!r.data.build && Array.isArray(r.data.features) &&
+    (r.data.backend === 'node' || r.data.backend === 'php'), JSON.stringify(r.data).slice(0, 160));
+  check('this deployment includes the analytics features',
+    r.ok && (r.data.features || []).indexOf('super.analytics') !== -1 &&
+    (r.data.features || []).indexOf('admin.analytics') !== -1,
+    'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
 
   r = await call('/public/tenant/greenfield-academy');
   check('GET /public/tenant/<slug>', r.ok && r.data.tenant && r.data.tenant.name, 'status ' + r.status);

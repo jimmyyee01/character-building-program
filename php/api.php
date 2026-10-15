@@ -17,6 +17,22 @@ require_once __DIR__ . '/routes_admin.php';
 $PARTICIPANTS = ['student', 'teacher', 'member', 'supervisor'];
 $ADMINS = ['super', 'tenant_admin'];
 
+/* Which build is actually running? Bump this on every release — /api/health
+   reports it, so a server that was not updated is easy to spot. */
+define('APP_BUILD', '2026-10-15-analytics');
+define('APP_FEATURES', 'health,super.analytics,admin.analytics,reports.students,keywords,'
+    . 'reader.book,library.lock,certificates,chapter.pages,exports');
+
+/* Public: which backend and which build is answering. */
+function r_health($user, $body, $params, $token, $query): array {
+    global $routes;
+    $features = array_map('trim', explode(',', APP_FEATURES));
+    return ['ok' => true, 'backend' => 'php', 'build' => APP_BUILD,
+        'features' => $features, 'routes' => count($routes),
+        'php' => PHP_VERSION, 'database' => DB_NAME, 'time' => now_dt(),
+        'analytics' => in_array('super.analytics', $features, true)];
+}
+
 function send_json(int $code, array $obj): void {
     http_response_code($code);
     echo json_encode($obj, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -31,6 +47,7 @@ function route(string $method, string $pattern, string $fn): void {
 }
 
 /* Public + auth */
+route('GET',  '/api/health', 'r_health');
 route('GET',  '/api/public/portals', 'r_public_portals');
 route('GET',  '/api/public/tenant/([a-z0-9-]+)', 'r_public_tenant');
 route('POST', '/api/auth/register', 'r_auth_register');

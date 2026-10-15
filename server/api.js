@@ -16,6 +16,12 @@ class HttpError extends Error {
 }
 function need(cond, message, status) { if (!cond) throw new HttpError(message, status || 400); }
 
+/* Which build is actually running? Bump this on every release — /api/health
+   reports it, so a server that was not updated is easy to spot. */
+const BUILD = '2026-10-15-analytics';
+const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.students', 'keywords',
+  'reader.book', 'library.lock', 'certificates', 'chapter.pages', 'exports'];
+
 function send(res, code, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
@@ -141,6 +147,13 @@ async function handle(req, res, p, body) {
 }
 
 /* ===================================================== public + auth ===== */
+/* Public: which backend and which build is answering (spot a stale deploy). */
+route('GET', '/api/health', () => ({
+  ok: true, backend: 'node', build: BUILD, features: FEATURES, routes: routes.length,
+  node: process.version, time: dbm.nowISO(),
+  analytics: FEATURES.indexOf('super.analytics') !== -1
+}));
+
 route('GET', '/api/public/portals', () => {
   const settings = dbm.db.settings;
   return {

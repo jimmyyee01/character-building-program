@@ -96,6 +96,29 @@ It adds the key-word columns used to assess typed answers. Until it is run the
 app still works: key words are derived from the chapter text and answers are
 scored when they are read.
 
+### "Unknown endpoint: GET /api/..." — the server is running older code
+
+That answer comes from the app's own route table, so the code answering the
+request does not have that route yet. Ask the running build what it has:
+
+```bash
+curl https://your-site/api/health
+# { "ok": true, "backend": "php", "build": "2026-10-15-analytics",
+#   "features": ["health","super.analytics","admin.analytics", ...], "routes": 68 }
+```
+
+- `features` must list the endpoint you are calling (for example
+  `super.analytics` for `/api/super/analytics`).
+- If the build or the feature is missing, update the server:
+  1. `git pull` in the deployment folder (and check `git log --oneline -1`),
+  2. restart the backend — the Node process, or PHP-FPM/Apache for PHP, because
+     PHP keeps compiled files in **OPcache** until it is restarted,
+  3. open `/api/health` again and confirm the new build.
+- If `/api/health` itself answers "Unknown endpoint", the deployment is older
+  than the health endpoint: pull, restart, then check again.
+- Two folders (an old deployment and the new pull) is the other common cause —
+  make sure the domain's document root is the folder you pulled.
+
 73 checks covering every seeded login, the per-portal role rules (schools /
 organization / family / married), the supervisor 100-user cap, account colour,
 dashboards + graphs, the ranked *Student progress* report (ordering, level,
