@@ -43,6 +43,7 @@ super admin — nothing about one school is visible to another.
 | **Married admin** (Covenant Couples) | `admin@married.example` / `Admin@123` |
 | Teacher (Greenfield) | `teacher@greenfield.edu` / `Teacher@123` |
 | Student (Greenfield) | `STU-001` / `Student@123` |
+| Student 2 (Greenfield) | `STU-002` / `Student@123` — used by the chapter-lock browser check |
 | **Demo graduate** (Greenfield) | `STU-100` / `Student@123` — has finished every module, so the dashboards, graphs and the expandable learner summary in *Student progress* all have data |
 | Supervisor (Horizon) | `supervisor@horizon.org` / `Super@123` (code `SUP-7788`) |
 | Member (under that supervisor) | `olive@horizon.org` / `Member@123` |
@@ -75,7 +76,12 @@ node tools/ui-live-check.js http://127.0.0.1:3000   # drives every renderer with
 node tools/pages-api-check.js http://127.0.0.1:3000 # chapter page ranges above 99 round-trip
 node tools/reader-browser-check.js http://127.0.0.1:3000 # the reader in a REAL browser
                                                     # (headless Chrome/Edge: page turns must
-                                                    #  rebuild the frame, not just the fragment)
+                                                    #  rebuild the frame, not just the fragment,
+                                                    #  and the sheet is fitted to the page's shape)
+node tools/chapter-lock-browser-check.js http://127.0.0.1:3000 # submits a chapter in a REAL
+                                                    # browser and proves that chapter then becomes
+                                                    # inactive: disabled, and clicks do nothing
+                                                    # (uses STU-002 — reseed after three runs)
 node tools/analytics-api-check.js http://127.0.0.1:3000 # analytics scope: each account sees
                                                     # only itself, supervisors only their
                                                     # members, copy flags name both people
@@ -83,7 +89,7 @@ node tools/analytics-api-check.js http://127.0.0.1:3000 # analytics scope: each 
 
 Handy npm shortcuts: `npm run check:ui`, `npm run check:api`, `npm run check:api:php`,
 `npm run check:live`, `npm run check:pages`, `npm run check:keywords`, `npm run check:browser`,
-`npm run check:analytics`.
+`npm run check:chapter-lock`, `npm run check:analytics`.
 
 If you are updating an **existing PHP database**, run the migration once after
 pulling (it only adds what is missing — it never touches data):
