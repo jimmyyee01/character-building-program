@@ -407,7 +407,7 @@ function bookFit(root) {
   const readerRect = root.getBoundingClientRect ? root.getBoundingClientRect() : null;
   const availH = full
     ? (Number(stage.clientHeight || 0) || Math.round(winH * 0.9))
-    : (readerRect && readerRect.height > 100 ? Math.round(readerRect.height * 0.92) : Math.round(winH * 0.82));
+    : (readerRect && readerRect.height > 100 ? Math.round(readerRect.height * 0.95) : Math.round(winH * 0.9));
   const box = bookFitBox(stageW - reserved - 4, availH, ratio);
   sheet.style.width = box.w + 'px';
   sheet.style.height = box.h + 'px';
