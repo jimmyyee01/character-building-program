@@ -445,7 +445,7 @@ function pdfSrc(url, page) {
    already loaded is ignored, so every turn re-creates the frame. */
 function bookFrameHtml(url, page, title) {
   return '<iframe class="pdf-frame" src="' + esc(pdfSrc(url, page)) + '" title="' +
-    esc(title || 'Book') + '" loading="eager" scrolling="no"></iframe>';
+    esc(title || 'Book') + '" loading="eager" scrolling="auto"></iframe>';
 }
 /* The reader itself — only injected when a book is actually opened. */
 function bookReaderHtml(url, opts) {
@@ -1111,5 +1111,6 @@ function applyThemeColor(color) {
   root.style.setProperty('--brand-tint', themeShade(c, 0.94));
   return true;
 }
+
 
 
