@@ -10,14 +10,16 @@ const API = {
     const headers = { 'Content-Type': 'application/json' };
     const t = API.token();
     if (t) headers['Authorization'] = 'Bearer ' + t;
-    const init = { method: opts.method || 'GET', headers };
+    const init = { method: opts.method || 'GET', headers, credentials: 'same-origin' };
     if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
     const res = await fetch('/api' + path, init);
     let data = {};
     try { data = await res.json(); } catch (e) {}
     if (res.status === 401 && path.indexOf('/auth/') !== 0 && path !== '/public/portals') {
       API.setToken(null); API.setUser(null);
-      if (!/^\/(super|t\/)/.test(location.pathname) && location.pathname !== '/') location.href = '/';
+      if (!/^\/(super|t\/)/.test(location.pathname) && location.pathname !== '/') {
+        location.href = '/';
+      }
     }
     if (!res.ok || data.ok === false) {
       const err = new Error(data.error || ('Request failed (' + res.status + ')'));
