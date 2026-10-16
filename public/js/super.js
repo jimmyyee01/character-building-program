@@ -702,16 +702,17 @@ function studentDetailHtml(s) {
     '</div>' +
 
     '<div class="sd-tabs">' +
-      '<button type="button" class="sd-tab active" data-tab="overview">Overview</button>' +
-      '<button type="button" class="sd-tab" data-tab="performance">Performance</button>' +
-      '<button type="button" class="sd-tab" data-tab="impact">Program Impact</button>' +
-      '<button type="button" class="sd-tab" data-tab="modules">Module Details</button>' +
-      '<button type="button" class="sd-tab" data-tab="submissions">Submissions</button>' +
+      '<button type="button" class="sd-tab active" data-tab="details">Details</button>' +
+      '<button type="button" class="sd-tab" data-tab="analysis">Analysis</button>' +
+      '<button type="button" class="sd-tab" data-tab="competence">Competence</button>' +
+      '<button type="button" class="sd-tab" data-tab="involvement">Involvement</button>' +
+      '<button type="button" class="sd-tab" data-tab="worksubmitted">Work Submitted</button>' +
+      '<button type="button" class="sd-tab" data-tab="completion">Completion</button>' +
       (s.certificates > 0 ? '<button type="button" class="sd-tab" data-tab="certificates">Certificates</button>' : '') +
     '</div>' +
 
     '<div class="sd-panels">' +
-    '<div class="sd-panel active" id="sd-overview">' +
+    '<div class="sd-panel active" id="sd-details">' +
       '<div class="grid cols-4">' +
         statCardBox((s.progress || 0) + '%', 'Coverage', 'blue') +
         statCardBox(s.submissions || 0, 'Submissions', 'violet') +
@@ -742,7 +743,7 @@ function studentDetailHtml(s) {
         '</div>' +
       '</div>' +   /* close sd-overview */
 
-    '<div class="sd-panel" id="sd-performance">' +
+    '<div class="sd-panel" id="sd-analysis">' +
       '<div class="grid cols-2">' +
         '<div class="card"><h4>Module progress</h4>' +
         (modules.length
@@ -765,15 +766,15 @@ function studentDetailHtml(s) {
         '<p><b>Average keyword score:</b> ' + (s.keywordScore != null ? Math.round(s.keywordScore) + '%' : '—') + '</p>' +
         '<p><b>Typed answers:</b> ' + (s.typedAnswers || 0) + ' submissions with keyword analysis</p>' +
         '<p class="muted small">Keyword scoring checks typed answers against required key words for each chapter.</p>' +
-      '</div>' +   /* close sd-performance */
+      '</div>' +   /* close sd-analysis */
 
-    '<div class="sd-panel" id="sd-impact">' +
+    '<div class="sd-panel" id="sd-competence">' +
       '<div class="grid cols-3">' +
         statCardBox(s.certificates || 0, 'Certificates earned', 'green') +
         statCardBox(modules.filter(m => m.status === 'completed').length, 'Modules completed', 'blue') +
         statCardBox(s.submissions || 0, 'Total submissions', 'violet') +
       '</div>' +
-      '<div class="card"><h4>Program impact summary</h4>' +
+      '<div class="card"><h4>Competence summary</h4>' +
         '<p>This learner has covered <b>' + (s.progress || 0) + '%</b> of the Character Building Programme.</p>' +
         '<p>They have completed <b>' + modules.filter(m => m.status === 'completed').length + ' of ' + s.moduleCount + ' modules</b>, ' +
         'earned <b>' + (s.certificates || 0) + ' certificate' + (s.certificates === 1 ? '' : 's') + '</b>, and made ' +
@@ -783,7 +784,7 @@ function studentDetailHtml(s) {
           s.flagged === 1 ? 'One submission flagged for similarity. Review recommended.' :
           'Multiple submissions flagged. Advisor review advised.') + '</p>' +
       '</div>' +
-      '<div class="card"><h4>Skill development areas</h4>' +
+      '<div class="card"><h4>Competency by module</h4>' +
         '<ul class="impact-list">' +
         (modules.map(function (m) {
           return '<li><b>' + esc(m.title) + '</b> — ' +
@@ -794,27 +795,29 @@ function studentDetailHtml(s) {
         '</ul>' +
       '</div>' +
     '</div>' +
-    '</div>' +   /* close sd-impact */
+    '</div>' +   /* close sd-competence */
 
-    '<div class="sd-panel" id="sd-modules">' +
-      '<div class="card"><h4>Module-by-module breakdown</h4>' +
+    '<div class="sd-panel" id="sd-involvement">' +
+      '<div class="card"><h4>Module engagement</h4>' +
+      '<p class="muted small">Participation and involvement across all assigned modules.</p>' +
       (modules.length
-        ? '<div class="table-wrap"><table><thead><tr><th>Module</th><th>Status</th><th>Coverage</th><th>Progress bar</th></tr></thead><tbody>' +
+        ? '<div class="table-wrap"><table><thead><tr><th>Module</th><th>Status</th><th>Coverage</th><th>Engagement level</th></tr></thead><tbody>' +
           modules.map(function (m) {
+            const level = m.status === 'completed' ? 'High — module mastered' :
+              m.status === 'active' ? 'Medium — currently active' : 'Low — not yet started';
             return '<tr><td class="small"><b>' + esc(m.title) + '</b></td>' +
               '<td><span class="badge ' + (m.status === 'completed' ? 'ok' : m.status === 'active' ? 'info' : 'lock') + '">' +
                 esc(m.status) + '</span></td>' +
                 '<td><b>' + m.percent + '%</b></td>' +
-                '<td><div class="progress" style="height:8px"><i style="width:' + m.percent + '%;' +
-                (m.status === 'completed' ? 'background:#1f7a44' : m.status === 'active' ? 'background:#2f6fd0' : '') + '"></i></div></td>' +
+                '<td class="small muted">' + level + '</td>' +
               '</tr>';
           }).join('') + '</tbody></table></div>'
         : '<p class="muted small">No modules assigned.</p>') +
       '</div>' +
     '</div>' +
 
-    '<div class="sd-panel" id="sd-submissions">' +
-      '<div class="card"><h4>All submissions</h4>' +
+    '<div class="sd-panel" id="sd-worksubmitted">' +
+      '<div class="card"><h4>Work submitted</h4>' +
       (subs.length
         ? '<div class="table-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>Chapter / book</th><th>Score</th><th>Keywords</th><th>Status</th></tr></thead><tbody>' +
           subs.map(function (r) {
@@ -831,7 +834,39 @@ function studentDetailHtml(s) {
           }).join('') + '</tbody></table></div>'
         : '<p class="muted small">No submissions recorded.</p>') +
       '</div>' +
-    '</div>' +
+    '</div>' +   /* close sd-worksubmitted */
+
+    '<div class="sd-panel" id="sd-completion">' +
+      '<div class="grid cols-3">' +
+        statCardBox((s.progress || 0) + '%', 'Program coverage', 'blue') +
+        statCardBox(s.modulesCompleted + '/' + s.moduleCount, 'Modules completed', 'green') +
+        statCardBox((s.progress || 0) >= 100 ? 'Complete' : 'In progress', 'Status', s.progress >= 100 ? 'green' : 'warn') +
+      '</div>' +
+      '<div class="card"><h4>Completion status</h4>' +
+        '<p>Overall programme coverage: <b>' + (s.progress || 0) + '%</b></p>' +
+        '<p>Modules finished: <b>' + s.modulesCompleted + ' of ' + s.moduleCount + '</b></p>' +
+        '<p>Current level: <b>' + esc(s.level ? s.level.title : '—') + '</b> (' + esc(s.level ? s.level.state : '—') + ')</p>' +
+        '<p>' +
+          (s.progress >= 100
+            ? 'This learner has <b>completed</b> the entire Character Building Programme.'
+            : 'This learner still needs to complete <b>' + (s.moduleCount - s.modulesCompleted) + ' more module' + (s.moduleCount - s.modulesCompleted === 1 ? '' : 's') + '</b> to finish the programme.') +
+        '</p>' +
+        '<p><b>Estimated time to complete:</b> ' +
+          ((s.moduleCount - s.modulesCompleted) * 4) + ' weeks (approx. 4 weeks per remaining module).' +
+        '</p>' +
+      '</div>' +
+      '<div class="card"><h4>Completion checklist</h4>' +
+        '<ul class="impact-list">' +
+        '<li><b>Programme coverage:</b> ' + (s.progress || 0) + '% — ' +
+          (s.progress >= 100 ? 'Complete' : 'In progress') + '</li>' +
+        '<li><b>Modules completed:</b> ' + s.modulesCompleted + ' of ' + s.moduleCount + '</li>' +
+        '<li><b>Work submitted:</b> ' + (s.submissions || 0) + ' submission' + (s.submissions === 1 ? '' : 's') + '</li>' +
+        '<li><b>Certificates earned:</b> ' + (s.certificates || 0) + ' certificate' + (s.certificates === 1 ? '' : 's') + '</li>' +
+        '<li><b>Copy flags:</b> ' + (s.flagged || 0) + ' — ' +
+          (s.flagged === 0 ? 'Clean record' : 'Review recommended') + '</li>' +
+        '</ul>' +
+      '</div>' +
+    '</div>' +   /* close sd-completion */
 
     (s.certificates > 0 ? (
       '<div class="sd-panel" id="sd-certificates">' +
