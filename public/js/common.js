@@ -373,15 +373,16 @@ if (typeof document !== 'undefined' && document.addEventListener) {
    whole page is visible — the page is scaled down (its print gets smaller) rather
    than cropped. bookFitBox() is the maths on its own so it can be tested. */
 function bookFitBox(availW, availH, ratio) {
-  /* Scale the page down to fit BOTH width AND height so the whole page is
-     visible with no scrolling. Text stays as large as possible while
-     everything fits — use Next/Previous to turn pages. */
+  /* Fit by WIDTH only so the PDF text is as large as possible (maximum zoom
+     for readability). The page height is determined by the aspect ratio — if
+     it is taller than the viewer, the iframe scrolls vertically so every line
+     is reachable without leaving the page. */
   const r = Number(ratio) > 0 ? Number(ratio) : 1 / 1.414;
   const maxW = Math.max(80, Number(availW) || 0);
   const maxH = Math.max(80, Number(availH) || 0);
   let w = maxW;
   let h = w / r;
-  if (h > maxH) { h = maxH; w = h * r; }   /* scale down to fit height too */
+  if (h > maxH) { h = maxH; }   /* cap height, let iframe scroll vertically */
   return { w: Math.round(w), h: Math.round(h) };
 }
 function bookFit(root) {
@@ -434,9 +435,10 @@ function bookFitAll() {
    scroll and no viewer chrome. Prev/Next buttons (or the arrow keys, or the
    arrows either side of the page) flip from page to page. */
 function pdfSrc(url, page) {
-  /* zoom=page-fit AND view=Fit: every viewer shows the WHOLE page inside the
-     frame (the text may be smaller, but nothing is cut off) */
-  return url + '#page=' + page + '&view=Fit&zoom=page-fit&toolbar=0&navpanes=0&pagemode=none';
+  /* zoom=page-width: the page is scaled to fit the viewer width, so the text
+     is as large as possible. If the page is taller than the viewer, the
+     iframe scrolls vertically so every line is readable. */
+  return url + '#page=' + page + '&view=FitH&zoom=page-width&toolbar=0&navpanes=0&pagemode=none';
 }
 /* One sheet of the book. A fresh element per page is what actually moves the
    browser's PDF viewer: changing only the #page= fragment of a frame that is
@@ -1109,4 +1111,5 @@ function applyThemeColor(color) {
   root.style.setProperty('--brand-tint', themeShade(c, 0.94));
   return true;
 }
+
 

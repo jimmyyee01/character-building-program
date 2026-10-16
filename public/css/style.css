@@ -133,8 +133,8 @@ img { max-width: 100%; }
 .donut-wrap .legend { flex-direction: column; gap: 6px; margin-top: 0; }
 .bars { display: grid; gap: 8px; }
 .bar-row { display: grid; grid-template-columns: minmax(70px, 128px) 1fr 42px; gap: 8px; align-items: center; font-size: 12px; }
-.bar-row .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bar-row .track { background: #eef2f8; border-radius: 6px; height: 12px; overflow: hidden; }
+.bar-row .label { overflow: auto; text-overflow: ellipsis; white-space: nowrap; }
+.bar-row .track { background: #eef2f8; border-radius: 6px; height: 12px; overflow: auto; }
 .bar-row .track i { display: block; height: 100%; border-radius: 6px; }
 .bar-row b { text-align: right; }
 /* expandable learner summary inside the progress ranking table */
@@ -267,7 +267,7 @@ tr:hover td { background: #f8faff; }
 .app-side .video-item.watched .dot { background: var(--ok); }
 .app-main { flex: 1; padding: 22px 26px; min-width: 0; }
 .pinned-video { position: fixed; right: 18px; bottom: 18px; width: 300px; z-index: 90;
-  background: #000; border-radius: 12px; overflow: hidden; box-shadow: 0 12px 34px rgba(0,0,0,.4); }
+  background: #000; border-radius: 12px; overflow: auto; box-shadow: 0 12px 34px rgba(0,0,0,.4); }
 .pinned-video video { width: 100%; display: block; }
 .pinned-video .bar { background: #14213d; color: #fff; font-size: 12px; padding: 6px 9px;
   display: flex; justify-content: space-between; align-items: center; gap: 6px; }
@@ -276,7 +276,7 @@ tr:hover td { background: #f8faff; }
 .dash-strip { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   margin-bottom: 20px; }
 .dash-strip .stat .n { font-size: 26px; }
-.progress { height: 9px; background: #e9edf6; border-radius: 999px; overflow: hidden; }
+.progress { height: 9px; background: #e9edf6; border-radius: 999px; overflow: auto; }
 .progress > i { display: block; height: 100%; background: linear-gradient(90deg, var(--brand), #4f8ae0); }
 
 .module-card { background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
@@ -357,7 +357,7 @@ tr:hover td { background: #f8faff; }
   border-radius: 8px;
   background: #000;
   margin: 6px 0;
-  overflow: hidden;
+  overflow: auto;
 }
 
 /* closed-book cover shown in listings and previews until it is clicked */
@@ -397,9 +397,8 @@ tr:hover td { background: #f8faff; }
    the available space, the iframe scrolls vertically so every line is reachable. */
 .book-page { position: relative; aspect-ratio: 1 / 1.414; }
 .book-frame-wrap { position: absolute; inset: 0; overflow: hidden; background: #fff; }
-.book-frame-wrap .pdf-frame { width: 100%; height: 100%; overflow: hidden; }
-/* No scrolling — the whole page fits and Next/Previous turn the pages. */
-.book-reader { overflow-y: hidden; }
+.book-frame-wrap .pdf-frame { width: 100%; height: 100%; overflow: auto; }
+.book-reader { overflow-y: visible; }
 .book-shield { position: absolute; inset: 0; z-index: 3; cursor: ew-resize; }
 .book-page.turning { animation: bookTurn .2s ease; }
 /* the chapter's own pages, opened automatically when the chapter is clicked */
@@ -580,4 +579,5 @@ tr:hover td { background: #f8faff; }
   .sd-tab { padding: 8px 12px; font-size: 12px; }
   .sd-panels { padding: 16px; }
 }
+
 
