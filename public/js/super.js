@@ -576,7 +576,7 @@ function statCardBox(n, label, tone) {
 function supProgressTable(list) {
   if (!list.length) return '<p class="muted">No learners yet.</p>';
   let h = '<div class="table-wrap"><table id="supProgressTable"><thead><tr>' +
-    '<th>#</th><th>Learner</th><th>Account</th><th>Level (module)</th><th>Covered</th>' +
+    '<th>#</th><th>Learner</th><th>Account</th><th>Level (module)</th><th class="sort-col" title="Sorted by performance (coverage %)">Covered <span class="sort-dir">▼</span></th>' +
     '<th>Submissions</th><th>Certificates</th><th>Flagged</th><th>Last active</th><th>Details</th>' +
     '</tr></thead><tbody>';
   list.forEach(function (s, i) {
@@ -584,7 +584,7 @@ function supProgressTable(list) {
     const level = s.level || {};
     const ident = [s.email, s.studentNumber].filter(Boolean).map(esc).join(' · ');
     h += '<tr data-search="' + esc(searchText(s)) + '">' +
-      '<td><b>' + (i + 1) + '</b></td>' +
+      '<td><span class="rank-badge rank-' + Math.min(5, i + 1) + '">' + (i + 1) + '</span></td>' +
       '<td>' +
         '<button type="button" class="small ghost" data-student="' + esc(s.id) + '">' +
           '<b>' + esc(s.fullName || '—') + '</b>' +

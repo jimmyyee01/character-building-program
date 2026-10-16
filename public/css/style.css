@@ -580,4 +580,35 @@ tr:hover td { background: #f8faff; }
   .sd-panels { padding: 16px; }
 }
 
+/* Sort column indicator on the progress ranking table */
+.sort-col {
+  cursor: pointer;
+  color: var(--brand);
+  font-weight: 700;
+}
+.sort-col:hover { background: #f6f8fc; }
+.sort-dir {
+  font-size: 11px;
+  margin-left: 4px;
+  opacity: .7;
+}
+
+/* Performance-based rank badges on the progress table */
+.rank-badge {
+  display: inline-block;
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: #eef2fa;
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 12px;
+  text-align: center;
+  line-height: 26px;
+}
+.rank-badge.rank-1 { background: #fbbf24; color: #451a03; }
+.rank-badge.rank-2 { background: #a3e635; color: #14532d; }
+.rank-badge.rank-3 { background: #fcd34d; color: #422006; }
+.rank-badge.rank-4 { background: #bfdbfe; color: #1e3a8a; }
+.rank-badge.rank-5 { background: #cffafe; color: #0f766e; }
+
 
