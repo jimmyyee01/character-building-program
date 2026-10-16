@@ -676,7 +676,9 @@ function studentDetailHtml(s) {
     '<div class="student-detail-card">' +
     '<div class="sd-header">' +
       '<button type="button" class="sd-close" onclick="closeStudentDetail()">&times;</button>' +
-      '<div class="sd-avatar">' + esc((s.fullName || '?').charAt(0).toUpperCase()) + '</div>' +
+      '<div class="sd-avatar">' +
+        (s.photo ? '<img src="' + esc(s.photo) + '" class="sd-avatar-img" alt="">' : esc((s.fullName || '?').charAt(0).toUpperCase())) +
+      '</div>' +
       '<div class="sd-info">' +
         '<h2>' + esc(s.fullName || '—') + '</h2>' +
         '<div class="sd-sub">' +
@@ -1809,7 +1811,8 @@ function userRow(u) {
   if (u.email) ident.push(esc(u.email));
   if (u.studentNumber) ident.push(esc(u.studentNumber));
   if (!ident.length) ident.push('<span class="muted">—</span>');
-  return '<tr data-search="' + esc(searchText(u)) + '"><td><b>' + esc(u.fullName || '—') + '</b><div>' + roleBadge(u.role) + '</div></td>' +
+  const photoHtml = u.photo ? '<img src="' + esc(u.photo) + '" class="user-photo-sm" alt="">' : '<span class="user-photo-empty">?</span>';
+  return '<tr data-search="' + esc(searchText(u)) + '"><td>' + photoHtml + '<div class="user-name-wrap"><b>' + esc(u.fullName || '—') + '</b><div>' + roleBadge(u.role) + '</div></div></td>' +
     '<td class="small">' + ident.join('<br>') + '</td>' +
     '<td class="small">' + esc(u.className || '—') + '</td>' +
     '<td class="small">' + esc(u.supervisorName || '—') + '</td>' +
@@ -1868,6 +1871,10 @@ async function renderUsers() {
         '<div><label>Full name *</label><input type="text" id="cuName" required></div>' +
       '</div>' +
       '<div class="row">' +
+        '<div><label>Photo (optional)</label>' +
+          '<input type="file" id="cuPhoto" accept="image/*">' +
+          '<div class="mt"><img id="cuPhotoPreview" alt="Photo preview" class="hidden" style="height:80px;border-radius:10px;border:1px solid var(--line);padding:4px;background:#fff"></div>' +
+        '</div>' +
         '<div><label>Email</label><input type="email" id="cuEmail"></div>' +
         '<div><label>Student number</label><input type="text" id="cuNumber"></div>' +
         '<div><label>School class</label><input type="text" id="cuClass" placeholder="e.g. Grade 10A"></div>' +
@@ -1897,7 +1904,22 @@ async function renderUsers() {
     applyTableSearch('usTable', 'usSearch');
   });
   applyTableSearch('usTable', 'usSearch');
+  initUserPhotoPreview();
 }
+/* Photo preview for user creation form. */
+function initUserPhotoPreview() {
+  const input = $('cuPhoto');
+  const preview = $('cuPhotoPreview');
+  if (!input || !preview) return;
+  input.onchange = function () {
+    const f = this.files && this.files[0];
+    if (!f) { preview.classList.add('hidden'); preview.src = ''; return; }
+    const r = new FileReader();
+    r.onload = function () { preview.src = r.result; preview.classList.remove('hidden'); };
+    r.readAsDataURL(f);
+  };
+}
+
 async function createUser(e) {
   e.preventDefault();
   try {
@@ -1918,6 +1940,11 @@ async function createUser(e) {
     if (!body.password) throw new Error('Enter a password');
     const cls = val('cuClass');
     if (cls) body.className = cls;
+    /* Optional photo upload */
+    const photoInput = $('cuPhoto');
+    if (photoInput && photoInput.files && photoInput.files[0]) {
+      body.photo = await fileToDataUrl(photoInput.files[0]);
+    }
     await API.post('/super/users', body);
     toast('User created', 'ok');
     renderUsers();
