@@ -502,6 +502,7 @@ async function renderProgress() {
   try { d = await API.get('/reports/students'); }
   catch (e) { v.innerHTML = errBox(e); return; }
   const list = d.students || [];
+  S.progressCache = { list: list, meta: d };
   const finished = function (s) { return s.moduleCount > 0 && s.modulesCompleted === s.moduleCount; };
   const byAccount = {};
   list.forEach(function (s) { const k = s.tenantName || '—'; byAccount[k] = (byAccount[k] || 0) + 1; });
@@ -554,11 +555,18 @@ async function renderProgress() {
   applyTableSearch('supProgress', 'spSearch');
   v.onclick = function (e) {
     const b = e.target.closest('button[data-sum]');
-    if (!b) return;
-    const row = document.getElementById('sum-' + b.dataset.sum);
-    if (!row) return;
-    const nowHidden = row.classList.toggle('hidden');
-    b.textContent = nowHidden ? 'Summary' : 'Hide summary';
+    if (b) {
+      const row = document.getElementById('sum-' + b.dataset.sum);
+      if (!row) return;
+      const nowHidden = row.classList.toggle('hidden');
+      b.textContent = nowHidden ? 'Summary' : 'Hide summary';
+      return;
+    }
+    const st = e.target.closest('button[data-student]');
+    if (st) {
+      openStudentDetail(st.dataset.student);
+      return;
+    }
   };
 }
 function statCardBox(n, label, tone) {
@@ -569,7 +577,7 @@ function supProgressTable(list) {
   if (!list.length) return '<p class="muted">No learners yet.</p>';
   let h = '<div class="table-wrap"><table id="supProgressTable"><thead><tr>' +
     '<th>#</th><th>Learner</th><th>Account</th><th>Level (module)</th><th>Covered</th>' +
-    '<th>Submissions</th><th>Certificates</th><th>Flagged</th><th>Last active</th><th>Summary</th>' +
+    '<th>Submissions</th><th>Certificates</th><th>Flagged</th><th>Last active</th><th>Details</th>' +
     '</tr></thead><tbody>';
   list.forEach(function (s, i) {
     const done = s.moduleCount > 0 && s.modulesCompleted === s.moduleCount;
@@ -577,7 +585,10 @@ function supProgressTable(list) {
     const ident = [s.email, s.studentNumber].filter(Boolean).map(esc).join(' · ');
     h += '<tr data-search="' + esc(searchText(s)) + '">' +
       '<td><b>' + (i + 1) + '</b></td>' +
-      '<td><b>' + esc(s.fullName || '—') + '</b>' +
+      '<td>' +
+        '<button type="button" class="small ghost" data-student="' + esc(s.id) + '">' +
+          '<b>' + esc(s.fullName || '—') + '</b>' +
+        '</button>' +
         (ident ? '<div class="small muted">' + ident + '</div>' : '') + '</td>' +
       '<td class="small">' + esc(s.tenantName || '—') +
         (s.supervisorName ? '<div class="muted">sup. ' + esc(s.supervisorName) + '</div>' : '') + '</td>' +
@@ -633,7 +644,229 @@ function supSummaryRow(s) {
       : '<p class="muted small">No submissions recorded.</p>') +
   '</div></td></tr>';
 }
-/* ======================================================== portals ======== */
+
+/* Open the full student detail modal when a learner name is clicked. */
+function openStudentDetail(studentId) {
+  const s = S.progressCache && S.progressCache.list
+    ? S.progressCache.list.find(x => x.id === studentId)
+    : null;
+  if (!s) return;
+  const modal = document.getElementById('studentDetailModal');
+  if (!modal) return;
+  modal.innerHTML = studentDetailHtml(s);
+  modal.classList.remove('hidden');
+  initStudentDetailTabs();
+}
+function closeStudentDetail() {
+  const modal = document.getElementById('studentDetailModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+/* Build the full student detail view with dropdown tabs. */
+function studentDetailHtml(s) {
+  const done = s.moduleCount > 0 && s.modulesCompleted === s.moduleCount;
+  const level = s.level || {};
+  const tenant = s.tenantName || '—';
+  const subs = s.recent || [];
+  const modules = s.modules || [];
+  const scored = subs.filter(x => x.score != null && x.total != null);
+  const avgPct = scored.length ? Math.round(scored.reduce((a, x) => a + (x.score / x.total * 100), 0) / scored.length) : 0;
+
+  return '<div class="student-detail-overlay" onclick="if(event.target===this) closeStudentDetail()">' +
+    '<div class="student-detail-card">' +
+    '<div class="sd-header">' +
+      '<button type="button" class="sd-close" onclick="closeStudentDetail()">&times;</button>' +
+      '<div class="sd-avatar">' + esc((s.fullName || '?').charAt(0).toUpperCase()) + '</div>' +
+      '<div class="sd-info">' +
+        '<h2>' + esc(s.fullName || '—') + '</h2>' +
+        '<div class="sd-sub">' +
+          '<span class="badge info">' + esc(level.title || '—') + '</span>' +
+          '<span class="badge ' + (s.suspended ? 'off' : 'ok') + '">' +
+            (s.suspended ? 'Suspended' : 'Active') + '</span>' +
+        '</div>' +
+        '<div class="sd-sub muted small">' +
+          esc(tenant) +
+          (s.supervisorName ? ' · Supervisor: ' + esc(s.supervisorName) : '') +
+          (s.studentNumber ? ' · ID: ' + esc(s.studentNumber) : '') +
+          (s.email ? ' · ' + esc(s.email) : '') +
+        '</div>' +
+      '</div>' +
+      '<div class="sd-progress">' +
+        '<div class="sd-prog-label">Programme coverage</div>' +
+        '<div class="progress mt" style="height:14px"><i style="width:' + (s.progress || 0) + '%"></i></div>' +
+        '<div class="sd-prog-val"><b>' + (s.progress || 0) + '%</b> covered · ' +
+          s.modulesCompleted + '/' + s.moduleCount + ' modules</div>' +
+      '</div>' +
+    '</div>' +
+
+    '<div class="sd-tabs">' +
+      '<button type="button" class="sd-tab active" data-tab="overview">Overview</button>' +
+      '<button type="button" class="sd-tab" data-tab="performance">Performance</button>' +
+      '<button type="button" class="sd-tab" data-tab="impact">Program Impact</button>' +
+      '<button type="button" class="sd-tab" data-tab="modules">Module Details</button>' +
+      '<button type="button" class="sd-tab" data-tab="submissions">Submissions</button>' +
+      (s.certificates > 0 ? '<button type="button" class="sd-tab" data-tab="certificates">Certificates</button>' : '') +
+    '</div>' +
+
+    '<div class="sd-panels">' +
+    '<div class="sd-panel active" id="sd-overview">' +
+      '<div class="grid cols-4">' +
+        statCardBox((s.progress || 0) + '%', 'Coverage', 'blue') +
+        statCardBox(s.submissions || 0, 'Submissions', 'violet') +
+        statCardBox(s.certificates || 0, 'Certificates', 'green') +
+        statCardBox(s.flagged || 0, 'Copy flags', 'red') +
+      '</div>' +
+      '<div class="grid cols-2">' +
+        '<div class="card"><h4>Recent work</h4>' +
+        (subs.length
+          ? '<div class="table-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>Chapter / book</th><th>Result</th></tr></thead><tbody>' +
+            subs.map(function (r) {
+              const where = [r.book, r.chapter].filter(Boolean).map(esc).join(' — ') || esc(r.label || '—');
+              const status = r.flagged
+                ? '<span class="flag">Copied ' + esc(r.similarity) + '%</span>'
+                : (r.total != null ? '<span class="badge ok">' + esc(r.score) + '/' + esc(r.total) + '</span>'
+                   : '<span class="badge ok">Submitted</span>');
+              return '<tr><td class="small">' + fmtDate(r.createdAt) + '</td><td class="small">' + esc(r.type) + '</td>' +
+                '<td class="small">' + where + '</td><td>' + status + '</td></tr>';
+            }).join('') + '</tbody></table></div>'
+          : '<p class="muted small">No submissions recorded.</p>') +
+        '</div>' +
+        '<div class="card"><h4>Account info</h4>' +
+        '<p><b>Role:</b> ' + esc(s.role) + '</p>' +
+        '<p><b>Last active:</b> ' + (s.lastActiveAt ? fmtDate(s.lastActiveAt) : 'never') + '</p>' +
+        '<p><b>Modules completed:</b> ' + s.modulesCompleted + ' of ' + s.moduleCount + '</p>' +
+        '<p><b>Average score:</b> ' + (avgPct ? avgPct + '%' : '—') + '</p>' +
+        '<p><b>Status:</b> ' + (s.suspended ? 'Suspended' : 'Active') + '</p>' +
+        '</div>' +
+      '</div>' +   /* close sd-overview */
+
+    '<div class="sd-panel" id="sd-performance">' +
+      '<div class="grid cols-2">' +
+        '<div class="card"><h4>Module progress</h4>' +
+        (modules.length
+          ? chartProgress(modules.map(function (m) {
+              return { label: m.title, percent: m.percent,
+                color: m.status === 'completed' ? '#1f7a44' : (m.status === 'active' ? '#2f6fd0' : '#94a3b8') };
+            }))
+          : '<p class="muted small">No modules assigned.</p>') +
+        '</div>' +
+        '<div class="card"><h4>Score distribution</h4>' +
+        (scored.length
+          ? chartBarsH(scored.slice(0, 10).map(function (r) {
+              return { label: [r.book, r.chapter].filter(Boolean).join(' — ') || (r.label || 'Item'),
+                value: Math.round(r.score / r.total * 100), color: r.flagged ? '#cf3b3b' : '#24508c' };
+            }))
+          : '<p class="muted small">No scored submissions yet.</p>') +
+        '</div>' +
+      '</div>' +
+      '<div class="card mt"><h4>Keyword assessment</h4>' +
+        '<p><b>Average keyword score:</b> ' + (s.keywordScore != null ? Math.round(s.keywordScore) + '%' : '—') + '</p>' +
+        '<p><b>Typed answers:</b> ' + (s.typedAnswers || 0) + ' submissions with keyword analysis</p>' +
+        '<p class="muted small">Keyword scoring checks typed answers against required key words for each chapter.</p>' +
+      '</div>' +   /* close sd-performance */
+
+    '<div class="sd-panel" id="sd-impact">' +
+      '<div class="grid cols-3">' +
+        statCardBox(s.certificates || 0, 'Certificates earned', 'green') +
+        statCardBox(modules.filter(m => m.status === 'completed').length, 'Modules completed', 'blue') +
+        statCardBox(s.submissions || 0, 'Total submissions', 'violet') +
+      '</div>' +
+      '<div class="card"><h4>Program impact summary</h4>' +
+        '<p>This learner has covered <b>' + (s.progress || 0) + '%</b> of the Character Building Programme.</p>' +
+        '<p>They have completed <b>' + modules.filter(m => m.status === 'completed').length + ' of ' + s.moduleCount + ' modules</b>, ' +
+        'earned <b>' + (s.certificates || 0) + ' certificate' + (s.certificates === 1 ? '' : 's') + '</b>, and made ' +
+        '<b>' + (s.submissions || 0) + ' submission' + (s.submissions === 1 ? '' : 's') + '</b> across the programme.</p>' +
+        '<p><b>Copy flags:</b> ' + (s.flagged || 0) + ' — ' +
+        (s.flagged === 0 ? 'No copy-paste flags detected. Original work throughout.' :
+          s.flagged === 1 ? 'One submission flagged for similarity. Review recommended.' :
+          'Multiple submissions flagged. Advisor review advised.') + '</p>' +
+      '</div>' +
+      '<div class="card"><h4>Skill development areas</h4>' +
+        '<ul class="impact-list">' +
+        (modules.map(function (m) {
+          return '<li><b>' + esc(m.title) + '</b> — ' +
+            (m.status === 'completed' ? 'Mastered (' + m.percent + '% coverage)' :
+             m.status === 'active' ? 'In progress (' + m.percent + '% coverage)' :
+             'Not started (' + m.percent + '% coverage)') + '</li>';
+        }).join('')) +
+        '</ul>' +
+      '</div>' +
+    '</div>' +
+    '</div>' +   /* close sd-impact */
+
+    '<div class="sd-panel" id="sd-modules">' +
+      '<div class="card"><h4>Module-by-module breakdown</h4>' +
+      (modules.length
+        ? '<div class="table-wrap"><table><thead><tr><th>Module</th><th>Status</th><th>Coverage</th><th>Progress bar</th></tr></thead><tbody>' +
+          modules.map(function (m) {
+            return '<tr><td class="small"><b>' + esc(m.title) + '</b></td>' +
+              '<td><span class="badge ' + (m.status === 'completed' ? 'ok' : m.status === 'active' ? 'info' : 'lock') + '">' +
+                esc(m.status) + '</span></td>' +
+                '<td><b>' + m.percent + '%</b></td>' +
+                '<td><div class="progress" style="height:8px"><i style="width:' + m.percent + '%;' +
+                (m.status === 'completed' ? 'background:#1f7a44' : m.status === 'active' ? 'background:#2f6fd0' : '') + '"></i></div></td>' +
+              '</tr>';
+          }).join('') + '</tbody></table></div>'
+        : '<p class="muted small">No modules assigned.</p>') +
+      '</div>' +
+    '</div>' +
+
+    '<div class="sd-panel" id="sd-submissions">' +
+      '<div class="card"><h4>All submissions</h4>' +
+      (subs.length
+        ? '<div class="table-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>Chapter / book</th><th>Score</th><th>Keywords</th><th>Status</th></tr></thead><tbody>' +
+          subs.map(function (r) {
+            const where = [r.book, r.chapter].filter(Boolean).map(esc).join(' — ') || esc(r.label || '—');
+            const status = r.flagged
+              ? '<span class="flag">Copied ' + esc(r.similarity) + '%</span>'
+              : (r.total != null ? '<span class="badge ok">' + esc(r.score) + '/' + esc(r.total) + '</span>'
+                 : '<span class="badge ok">Submitted</span>');
+            const kw = r.keywordScore != null ? '<span class="small">' + Math.round(r.keywordScore) + '%</span>' : '<span class="muted">—</span>';
+            return '<tr><td class="small">' + fmtDate(r.createdAt) + '</td><td class="small">' + esc(r.type) + '</td>' +
+              '<td class="small">' + where + '</td><td>' + status + '</td><td>' + kw + '</td>' +
+              '<td class="small">' + (r.text ? esc(r.text.slice(0, 120)) + (r.text.length > 120 ? '…' : '') : '—') + '</td>' +
+              '</tr>';
+          }).join('') + '</tbody></table></div>'
+        : '<p class="muted small">No submissions recorded.</p>') +
+      '</div>' +
+    '</div>' +
+
+    (s.certificates > 0 ? (
+      '<div class="sd-panel" id="sd-certificates">' +
+        '<div class="card"><h4>Certificates earned</h4>' +
+        '<p class="muted small">' + (s.certificates || 0) + ' certificate' + (s.certificates === 1 ? '' : 's') + ' awarded for completed modules.</p>' +
+        '<div class="cert-grid">' +
+        (s.certs || []).map(function (c) {
+          return '<div class="cert-card">' +
+            '<div class="cert-title">' + esc(c.title || 'Certificate') + '</div>' +
+            '<div class="cert-code mono small">' + esc(c.code || '—') + '</div>' +
+            '<div class="cert-date small muted">' + (c.issuedAt ? fmtDate(c.issuedAt) : '—') + '</div>' +
+            '<div class="cert-perf small"><b>Performance:</b> ' + esc(c.performance || '—') + '%</div>' +
+          '</div>';
+        }).join('') +
+        '</div>' +
+      '</div>'
+    ) : '') +
+
+    '</div>' +   /* close sd-panels */
+    '</div>' +   /* close student-detail-card */
+    '</div>';    /* close overlay */
+
+function initStudentDetailTabs() {
+  const modal = document.getElementById('studentDetailModal');
+  if (!modal) return;
+  modal.querySelectorAll('.sd-tab').forEach(function (tab) {
+    tab.onclick = function () {
+      const target = tab.dataset.tab;
+      modal.querySelectorAll('.sd-tab').forEach(function (t) { t.classList.remove('active'); });
+      modal.querySelectorAll('.sd-panel').forEach(function (p) { p.classList.remove('active'); });
+      tab.classList.add('active');
+      const p = document.getElementById('sd-' + target);
+      if (p) p.classList.add('active');
+    };
+  });
+}
+
 function winRowHTML(from, to) {
   return '<div class="row win-row" style="align-items:flex-end;margin-bottom:8px">' +
     '<div><label class="muted small" style="margin:0 0 3px">From</label>' +
