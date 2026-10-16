@@ -898,12 +898,12 @@ function studentDetailHtml(s) {
       '</div>' +
     '</div>' +   /* close sd-completion */
 
-    (s.certificates > 0 ? (
+    (s.certificates > 0 && s.certs && s.certs.length ? (
       '<div class="sd-panel" id="sd-certificates">' +
         '<div class="card"><h4>Certificates earned</h4>' +
         '<p class="muted small">' + (s.certificates || 0) + ' certificate' + (s.certificates === 1 ? '' : 's') + ' awarded for completed modules.</p>' +
         '<div class="cert-grid">' +
-        (s.certs || []).map(function (c) {
+        s.certs.map(function (c) {
           return '<div class="cert-card">' +
             '<div class="cert-title">' + esc(c.title || 'Certificate') + '</div>' +
             '<div class="cert-code mono small">' + esc(c.code || '—') + '</div>' +
