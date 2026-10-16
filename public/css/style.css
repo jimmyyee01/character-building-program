@@ -496,6 +496,79 @@ tr:hover td { background: #f8faff; }
 .export-buttons button{padding:5px 10px;font-size:12px;border-radius:6px}
 
 /* ================================================== student detail modal ==== */
+/* Student profile list in the Details tab */
+.sd-profile-list p {
+  margin: 6px 0; padding: 6px 0;
+  border-bottom: 1px solid #f0f3f9; font-size: 14px;
+}
+.sd-profile-list p:last-child { border-bottom: 0; }
+
+/* Competence rating badge + scale */
+.sd-competence-rating { margin-bottom: 12px; }
+.rating-badge {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 10px 18px; border-radius: 12px;
+  font-weight: 700; font-size: 15px; color: #fff;
+}
+.rating-badge.rating-excellent { background: #1f9d63; }
+.rating-badge.rating-good { background: #2f6fd0; }
+.rating-badge.rating-fair { background: #d4761b; }
+.rating-badge.rating-weak { background: #cf3b3b; }
+.rating-badge.rating-none { background: #94a3b8; }
+.rating-label { font-size: 15px; }
+.rating-score { font-size: 20px; font-weight: 800; }
+.rating-desc { color: var(--muted); font-size: 13px; margin: 10px 0 8px; }
+.rating-scale {
+  position: relative; display: flex; border-radius: 8px;
+  overflow: hidden; margin-top: 18px;
+}
+.scale-seg {
+  flex: 1; text-align: center; color: #fff; font-size: 11px;
+  padding: 5px 0; font-weight: 600;
+}
+.rating-marker {
+  position: relative; margin-top: -1px; transform: translateX(-50%);
+  text-align: center;
+}
+.rating-marker span {
+  display: inline-block; background: var(--ink); color: #fff;
+  font-size: 11px; font-weight: 700; padding: 2px 8px;
+  border-radius: 6px; margin-top: 3px;
+}
+.rating-marker::before {
+  content: ''; display: block; width: 0; height: 0;
+  border-left: 5px solid transparent; border-right: 5px solid transparent;
+  border-bottom: 6px solid var(--ink); margin: 0 auto;
+}
+
+/* Involvement submission timeline */
+.sd-timeline { margin-top: 8px; }
+.timeline-row {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+}
+.timeline-date { min-width: 70px; color: var(--muted); text-align: right; }
+.timeline-bar {
+  flex: 1; height: 20px; background: #eef2fa; border-radius: 999px;
+  overflow: hidden;
+}
+.timeline-bar i {
+  display: block; height: 100%; border-radius: 999px;
+  background: var(--brand); min-width: 8px;
+}
+.timeline-count { min-width: 110px; color: var(--muted); }
+
+/* Completion progress ring */
+.sd-ring-wrap {
+  display: flex; align-items: center; gap: 24px;
+  flex-wrap: wrap; margin-top: 4px;
+}
+.sd-ring { flex-shrink: 0; }
+.sd-ring-info { flex: 1; min-width: 180px; }
+.sd-ring-info p {
+  margin: 6px 0; font-size: 14px; color: var(--muted);
+}
+.sd-ring-info b { color: var(--ink); }
+
 .student-detail-overlay {
   position: fixed; inset: 0; z-index: 1000; background: rgba(23, 32, 58, .45);
   display: flex; align-items: center; justify-content: center; padding: 24px;

@@ -764,12 +764,21 @@ function studentDetailHtml(s) {
             }).join('') + '</tbody></table></div>'
           : '<p class="muted small">No submissions recorded.</p>') +
         '</div>' +
-        '<div class="card"><h4>Account info</h4>' +
+        '<div class="card"><h4>Student profile</h4>' +
+        (s.photo ? '<div class="mt" style="text-align:center"><img src="' + esc(s.photo) + '" style="width:96px;height:96px;border-radius:14px;object-fit:cover;border:2px solid var(--line)"></div>' : '') +
+        '<div class="sd-profile-list">' +
+        '<p><b>Full name:</b> ' + esc(s.fullName || '—') + '</p>' +
         '<p><b>Role:</b> ' + esc(s.role) + '</p>' +
+        '<p><b>Email:</b> ' + (s.email ? esc(s.email) : '—') + '</p>' +
+        '<p><b>Student number:</b> ' + (s.studentNumber ? esc(s.studentNumber) : '—') + '</p>' +
+        '<p><b>Class:</b> ' + (s.className ? esc(s.className) : '—') + '</p>' +
+        '<p><b>Organization:</b> ' + esc(s.tenantName || '—') + '</p>' +
+        '<p><b>Supervisor:</b> ' + (s.supervisorName ? esc(s.supervisorName) : '—') + '</p>' +
+        '<p><b>Status:</b> ' + (s.suspended ? '<span class="badge off">Suspended</span>' : '<span class="badge ok">Active</span>') + '</p>' +
         '<p><b>Last active:</b> ' + (s.lastActiveAt ? fmtDate(s.lastActiveAt) : 'never') + '</p>' +
         '<p><b>Modules completed:</b> ' + s.modulesCompleted + ' of ' + s.moduleCount + '</p>' +
         '<p><b>Average score:</b> ' + (avgPct ? avgPct + '%' : '—') + '</p>' +
-        '<p><b>Status:</b> ' + (s.suspended ? 'Suspended' : 'Active') + '</p>' +
+        '</div>' +
         '</div>' +
       '</div>' +   /* close sd-details grid */
 
@@ -807,6 +816,29 @@ function studentDetailHtml(s) {
         statCardBox(modules.filter(m => m.status === 'completed').length, 'Modules completed', 'blue') +
         statCardBox(s.submissions || 0, 'Total submissions', 'violet') +
       '</div>' +
+      '<div class="card"><h4>Competence rating</h4>' +
+        '<div class="sd-competence-rating">' +
+        (function () {
+          const rating = avgPct >= 80 ? { label: 'Excellent', cls: 'excellent', color: '#1f9d63', desc: 'Outstanding performance across all assessed work.' }
+            : avgPct >= 60 ? { label: 'Good', cls: 'good', color: '#2f6fd0', desc: 'Solid understanding with consistent performance.' }
+            : avgPct >= 40 ? { label: 'Fair', cls: 'fair', color: '#d4761b', desc: 'Adequate understanding — more practice needed.' }
+            : avgPct > 0 ? { label: 'Needs Improvement', cls: 'weak', color: '#cf3b3b', desc: 'Significant gaps identified — review and support recommended.' }
+            : { label: 'Not assessed yet', cls: 'none', color: '#94a3b8', desc: 'No scored submissions to assess competence.' };
+          return '<div class="rating-badge rating-' + rating.cls + '">' +
+            '<span class="rating-label">' + rating.label + '</span>' +
+            '<span class="rating-score">' + (avgPct ? avgPct + '%' : '—') + '</span>' +
+            '</div>' +
+            '<p class="rating-desc">' + esc(rating.desc) + '</p>' +
+            '<div class="rating-scale">' +
+            '<span class="scale-seg" style="background:#cf3b3b">0-39</span>' +
+            '<span class="scale-seg" style="background:#d4761b">40-59</span>' +
+            '<span class="scale-seg" style="background:#2f6fd0">60-79</span>' +
+            '<span class="scale-seg" style="background:#1f9d63">80-100</span>' +
+            '</div>' +
+            (avgPct > 0 ? '<div class="rating-marker" style="left:' + Math.min(97, Math.max(3, avgPct)) + '%"><span>' + avgPct + '%</span></div>' : '');
+        })() +
+        '</div>' +   /* close sd-competence-rating */
+      '</div>' +     /* close rating card */
       '<div class="card"><h4>Competence summary</h4>' +
         '<p>This learner has covered <b>' + (s.progress || 0) + '%</b> of the Character Building Programme.</p>' +
         '<p>They have completed <b>' + modules.filter(m => m.status === 'completed').length + ' of ' + s.moduleCount + ' modules</b>, ' +
@@ -830,6 +862,33 @@ function studentDetailHtml(s) {
     '</div>' +   /* close sd-competence panel */
 
     '<div class="sd-panel" id="sd-involvement">' +
+      '<div class="card"><h4>Submission activity timeline</h4>' +
+      '<p class="muted small">Recent submission frequency showing the learner\'s involvement over time.</p>' +
+      (function () {
+        if (!subs.length) return '<p class="muted small">No submissions to show.</p>';
+        /* group submissions by date */
+        const byDate = {};
+        subs.forEach(function (r) {
+          const d = r.createdAt ? String(r.createdAt).slice(0, 10) : 'unknown';
+          byDate[d] = (byDate[d] || 0) + 1;
+        });
+        const dates = Object.keys(byDate).sort().reverse();
+        const maxCount = Math.max.apply(null, dates.map(function (d) { return byDate[d]; }));
+        return '<div class="sd-timeline">' + dates.map(function (d) {
+          const count = byDate[d];
+          const pct = Math.max(8, Math.round(count / maxCount * 100));
+          const dt = new Date(d + 'T00:00:00');
+          const label = isNaN(dt.getTime()) ? d : dt.toLocaleDateString(undefined, { month: 'short', day: '2-digit' });
+          return '<div class="timeline-row">' +
+            '<span class="timeline-date small">' + esc(label) + '</span>' +
+            '<span class="timeline-bar"><i style="width:' + pct + '%;background:var(--brand)"></i></span>' +
+            '<span class="timeline-count small"><b>' + count + '</b> submission' + (count === 1 ? '' : 's') + '</span>' +
+            '</div>';
+        }).join('') + '</div>' +
+        '<p class="muted small mt"><b>' + subs.length + '</b> submission' + (subs.length === 1 ? '' : 's') +
+        ' shown across <b>' + dates.length + '</b> active day' + (dates.length === 1 ? '' : 's') + '.</p>';
+      })() +
+      '</div>' +
       '<div class="card"><h4>Module engagement</h4>' +
       '<p class="muted small">Participation and involvement across all assigned modules.</p>' +
       (modules.length
@@ -874,6 +933,30 @@ function studentDetailHtml(s) {
         statCardBox(s.modulesCompleted + '/' + s.moduleCount, 'Modules completed', 'green') +
         statCardBox((s.progress || 0) >= 100 ? 'Complete' : 'In progress', 'Status', s.progress >= 100 ? 'green' : 'warn') +
       '</div>' +
+      '<div class="card"><h4>Completion overview</h4>' +
+        '<div class="sd-ring-wrap">' +
+        (function () {
+          const pct = Math.min(100, Math.max(0, Number(s.progress) || 0));
+          const r = 54, c = 2 * Math.PI * r;
+          const filled = c * pct / 100;
+          const color = pct >= 100 ? '#1f9d63' : pct >= 60 ? '#2f6fd0' : pct >= 30 ? '#d4761b' : '#94a3b8';
+          return '<svg class="sd-ring" viewBox="0 0 128 128" width="128" height="128">' +
+            '<circle cx="64" cy="64" r="' + r + '" fill="none" stroke="#e3e7f2" stroke-width="12"/>' +
+            '<circle cx="64" cy="64" r="' + r + '" fill="none" stroke="' + color + '" stroke-width="12" ' +
+            'stroke-dasharray="' + filled.toFixed(1) + ' ' + (c - filled).toFixed(1) + '" ' +
+            'stroke-linecap="round" transform="rotate(-90 64 64)"/>' +
+            '<text x="64" y="60" text-anchor="middle" font-size="26" font-weight="800" fill="' + color + '">' + pct + '%</text>' +
+            '<text x="64" y="80" text-anchor="middle" font-size="10" fill="#66708a">COMPLETE</text>' +
+            '</svg>' +
+            '<div class="sd-ring-info">' +
+            '<p><b>' + s.modulesCompleted + ' of ' + s.moduleCount + '</b> modules completed</p>' +
+            '<p><b>' + (s.submissions || 0) + '</b> submission' + (s.submissions === 1 ? '' : 's') + ' made</p>' +
+            '<p><b>' + (s.certificates || 0) + '</b> certificate' + (s.certificates === 1 ? '' : 's') + ' earned</p>' +
+            '<p><b>' + (s.moduleCount - s.modulesCompleted) + '</b> module' + (s.moduleCount - s.modulesCompleted === 1 ? '' : 's') + ' remaining</p>' +
+            '</div>';   /* close sd-ring-info */
+        })() +
+        '</div>' +   /* close sd-ring-wrap */
+      '</div>' +     /* close overview card */
       '<div class="card"><h4>Completion status</h4>' +
         '<p>Overall programme coverage: <b>' + (s.progress || 0) + '%</b></p>' +
         '<p>Modules finished: <b>' + s.modulesCompleted + ' of ' + s.moduleCount + '</b></p>' +
