@@ -771,7 +771,9 @@ function studentDetailHtml(s) {
         '<p><b>Average score:</b> ' + (avgPct ? avgPct + '%' : '—') + '</p>' +
         '<p><b>Status:</b> ' + (s.suspended ? 'Suspended' : 'Active') + '</p>' +
         '</div>' +
-      '</div>' +   /* close sd-overview */
+      '</div>' +   /* close sd-details grid */
+
+    '</div>' +   /* close sd-details panel */
 
     '<div class="sd-panel" id="sd-analysis">' +
       '<div class="grid cols-2">' +
@@ -796,7 +798,8 @@ function studentDetailHtml(s) {
         '<p><b>Average keyword score:</b> ' + (s.keywordScore != null ? Math.round(s.keywordScore) + '%' : '—') + '</p>' +
         '<p><b>Typed answers:</b> ' + (s.typedAnswers || 0) + ' submissions with keyword analysis</p>' +
         '<p class="muted small">Keyword scoring checks typed answers against required key words for each chapter.</p>' +
-      '</div>' +   /* close sd-analysis */
+      '</div>' +   /* close keyword card */
+    '</div>' +   /* close sd-analysis */
 
     '<div class="sd-panel" id="sd-competence">' +
       '<div class="grid cols-3">' +
@@ -823,9 +826,8 @@ function studentDetailHtml(s) {
              'Not started (' + m.percent + '% coverage)') + '</li>';
         }).join('')) +
         '</ul>' +
-      '</div>' +
-    '</div>' +
-    '</div>' +   /* close sd-competence */
+      '</div>' +   /* close card */
+    '</div>' +   /* close sd-competence panel */
 
     '<div class="sd-panel" id="sd-involvement">' +
       '<div class="card"><h4>Module engagement</h4>' +
@@ -911,13 +913,15 @@ function studentDetailHtml(s) {
             '<div class="cert-perf small"><b>Performance:</b> ' + esc(c.performance || '—') + '%</div>' +
           '</div>';
         }).join('') +
-        '</div>' +
-      '</div>'
+        '</div>' +   /* close cert-grid */
+      '</div>' +     /* close card */
+      '</div>'       /* close sd-certificates panel */
     ) : '') +
 
     '</div>' +   /* close sd-panels */
     '</div>' +   /* close student-detail-card */
     '</div>';    /* close overlay */
+}
 
 function initStudentDetailTabs() {
   const modal = document.getElementById('studentDetailModal');
