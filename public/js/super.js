@@ -98,21 +98,10 @@ function reloadView() { RENDERERS[S.view](); }
 async function init() {
   if (!API.token()) { showLogin(); return; }
   try {
-    /* Raw check first so a dead token shows the login card instead of
-       bouncing the super admin off /super (requireSession redirects). */
-    const chk = await API.get('/me');
-    if (!chk.user || chk.user.role !== 'super') {
-      await requireSession(['super']);
-      return;
-    }
     const me = await requireSession(['super']);
     startApp(me.user);
   } catch (e) {
-    if (e && e.status === 401) {
-      API.setToken(null); API.setUser(null); showLogin();
-    } else if (e && e.message && e.message !== 'Not permitted') {
-      toast(e.message, 'err');
-    }
+    API.setToken(null); API.setUser(null); showLogin();
   }
 }
 function startApp(user) {

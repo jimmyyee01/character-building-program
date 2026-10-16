@@ -90,15 +90,10 @@ function downloadText(filename, text) {
   URL.revokeObjectURL(a.href);
 }
 async function requireSession(roles) {
-  try {
-    const me = await API.get('/me');
-    if (roles && roles.indexOf(me.user.role) === -1) throw new Error('Not permitted');
-    API.setUser(me.user);
-    return me;
-  } catch (e) {
-    location.href = '/';
-    throw e;
-  }
+  const me = await API.get('/me');
+  if (roles && roles.indexOf(me.user.role) === -1) throw new Error('Not permitted');
+  API.setUser(me.user);
+  return me;
 }
 
 /* ============================================================== charts === */
