@@ -553,9 +553,12 @@ async function renderProgress() {
     }
   });
   applyTableSearch('supProgress', 'spSearch');
+  console.log('[renderProgress] Click handler attached to view-progress, students:', list.length);
   v.onclick = function (e) {
+    console.log('[renderProgress] Click detected on progress section:', e.target.tagName, e.target.className, e.target.dataset.student || 'no-student-data');
     const b = e.target.closest('button[data-sum]');
     if (b) {
+      console.log('[renderProgress] Clicked summary button:', b.dataset.sum);
       const row = document.getElementById('sum-' + b.dataset.sum);
       if (!row) return;
       const nowHidden = row.classList.toggle('hidden');
@@ -564,10 +567,20 @@ async function renderProgress() {
     }
     const st = e.target.closest('button[data-student]');
     if (st) {
+      console.log('[renderProgress] Clicked student button:', st.dataset.student);
       openStudentDetail(st.dataset.student);
       return;
     }
   };
+
+  // Fallback: document-level click handler for student buttons
+  document.addEventListener('click', function (e) {
+    const st = e.target.closest('button[data-student]');
+    if (st && !e.defaultPrevented) {
+      console.log('[document] Clicked student button (fallback):', st.dataset.student);
+      openStudentDetail(st.dataset.student);
+    }
+  });
 }
 function statCardBox(n, label, tone) {
   return '<div class="stat tone-' + tone + '"><div class="n">' + esc(n == null ? 0 : n) +
