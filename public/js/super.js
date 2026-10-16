@@ -647,15 +647,32 @@ function supSummaryRow(s) {
 
 /* Open the full student detail modal when a learner name is clicked. */
 function openStudentDetail(studentId) {
+  console.log('[openStudentDetail] Looking for student:', studentId);
+  console.log('[openStudentDetail] progressCache:', S.progressCache ? 'set' : 'null');
   const s = S.progressCache && S.progressCache.list
     ? S.progressCache.list.find(x => x.id === studentId)
     : null;
-  if (!s) return;
+  if (!s) {
+    console.warn('[openStudentDetail] Student not found in cache:', studentId);
+    console.log('[openStudentDetail] Available students:', S.progressCache ? S.progressCache.list.map(x => x.id) : []);
+    return;
+  }
+  console.log('[openStudentDetail] Found student:', s.fullName, s.id);
   const modal = document.getElementById('studentDetailModal');
-  if (!modal) return;
-  modal.innerHTML = studentDetailHtml(s);
-  modal.classList.remove('hidden');
-  initStudentDetailTabs();
+  if (!modal) {
+    console.error('[openStudentDetail] studentDetailModal div not found in DOM');
+    return;
+  }
+  try {
+    modal.innerHTML = studentDetailHtml(s);
+    modal.classList.remove('hidden');
+    initStudentDetailTabs();
+    console.log('[openStudentDetail] Modal opened successfully');
+  } catch (err) {
+    console.error('[openStudentDetail] Error rendering student detail:', err);
+    modal.innerHTML = '<div class="card"><h3>Error loading student details</h3><p class="muted small">' + esc(err.message) + '</p></div>';
+    modal.classList.remove('hidden');
+  }
 }
 function closeStudentDetail() {
   const modal = document.getElementById('studentDetailModal');
