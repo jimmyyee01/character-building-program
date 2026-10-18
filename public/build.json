@@ -1,6 +1,6 @@
 {
-  "build": "2026-10-15-analytics",
-  "features": ["health", "super.analytics", "admin.analytics", "reports.students", "keywords",
+  "build": "2026-10-18-period-marks",
+  "features": ["health", "super.analytics", "admin.analytics", "reports.students", "reports.module-performers", "keywords",
     "reader.book", "library.lock", "certificates", "chapter.pages", "exports"],
   "note": "Static build marker. If /api/health has no build, the FILES are newer than the backend process (restart it). If this file is missing or shows an older build, the FOLDER being served is not the one you pulled."
 }

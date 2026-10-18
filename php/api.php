@@ -19,8 +19,8 @@ $ADMINS = ['super', 'tenant_admin'];
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-define('APP_BUILD', '2026-10-15-analytics');
-define('APP_FEATURES', 'health,super.analytics,admin.analytics,reports.students,keywords,'
+define('APP_BUILD', '2026-10-18-period-marks');
+define('APP_FEATURES', 'health,super.analytics,admin.analytics,reports.students,reports.module-performers,keywords,'
     . 'reader.book,library.lock,certificates,chapter.pages,exports');
 
 /* Public: which backend and which build is answering. */

@@ -34,6 +34,10 @@ async function main() {
     r.ok && (r.data.features || []).indexOf('super.analytics') !== -1 &&
     (r.data.features || []).indexOf('admin.analytics') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
+  check('this deployment includes calendar-year period marks rankings',
+    r.ok && r.data.build === '2026-10-18-period-marks' &&
+      (r.data.features || []).indexOf('reports.module-performers') !== -1,
+    'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
 
   r = await call('/public/tenant/greenfield-academy');
   check('GET /public/tenant/<slug>', r.ok && r.data.tenant && r.data.tenant.name, 'status ' + r.status);

@@ -18,8 +18,8 @@ function need(cond, message, status) { if (!cond) throw new HttpError(message, s
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-const BUILD = '2026-10-15-analytics';
-const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.students', 'keywords',
+const BUILD = '2026-10-18-period-marks';
+const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.students', 'reports.module-performers', 'keywords',
   'reader.book', 'library.lock', 'certificates', 'chapter.pages', 'exports'];
 
 function send(res, code, obj) {
@@ -2305,7 +2305,6 @@ route('GET', '/api/super/submissions', ({ req, user }) => {
 });
 
 module.exports = { handle };
-
 
 
 

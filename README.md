@@ -224,7 +224,7 @@ Then confirm the running build (this needs no browser):
 
 ```bash
 curl -s http://127.0.0.1/api/health      # add -H 'Host: your-domain' if the vhost needs it
-curl -s https://your-site/api/health     # build + features["admin.analytics","super.analytics"], routes 69
+curl -s https://your-site/api/health     # build 2026-10-18-period-marks, reports.module-performers, routes 69
 curl -s https://your-site/build.json     # must show the same build
 ```
 
