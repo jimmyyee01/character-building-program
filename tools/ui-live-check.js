@@ -396,9 +396,14 @@ function cleanSlice(s) {
             out.indexOf('Top 10 — Graduation') !== -1);
         }
         if (label === 'admin console' && key === 'progress') {
-          check('account admins and supervisors get module and graduation ranking views',
+          check('account admins and supervisors get module, graduation and period ranking controls',
             out.indexOf('id="accountRankingView"') !== -1 &&
-            out.indexOf('Top 10 — Graduation') !== -1);
+            out.indexOf('Top 10 — Graduation') !== -1 &&
+            out.indexOf('id="accountRankingYear"') !== -1 &&
+            out.indexOf('id="accountRankingFrom"') !== -1 &&
+            out.indexOf('id="accountRankingTo"') !== -1 &&
+            out.indexOf('id="accountRankingMarks"') !== -1 &&
+            out.indexOf('Top 10 — All modules completed') !== -1);
         }
         dirty(label + ' - ' + key, out);
       }

@@ -107,6 +107,49 @@ const accountGraduationRanking = vm.runInContext('accountRankingHtml', ctx)('gra
 checks.push(['account graduation ranking excludes unfinished learners and caps at ten',
   (accountGraduationRanking.match(/<td><b>\d+<\/b><\/td>/g) || []).length === 10 &&
   accountGraduationRanking.indexOf('Unfinished learner') === -1]);
+const periodStudents = Array.from({ length: 12 }, function (_, i) {
+  return { id: 'period_' + i, fullName: 'Period Learner ' + i, studentNumber: 'P-' + i,
+    combinedPercent: 100 - i * 4, objectivePercent: 100 - i * 5,
+    objectiveScore: 20 - i, objectiveTotal: 20, activityCount: 4 };
+});
+const accountPeriodRanking = vm.runInContext('accountPeriodRankingHtml', ctx)(
+  { scope: 'module', module: { id: 'module_a', title: 'Module A' },
+    from: '2026-04-01', to: '2026-06-30',
+    rankings: { combined: periodStudents, objectives: periodStudents } }, 'combined');
+checks.push(['account admins get a date-filtered module ranking capped at ten',
+  (accountPeriodRanking.match(/<td><b>\d+<\/b><\/td>/g) || []).length === 10 &&
+  accountPeriodRanking.indexOf('Period Learner 0') < accountPeriodRanking.indexOf('Period Learner 1') &&
+  accountPeriodRanking.indexOf('Period Learner 9') !== -1 &&
+  accountPeriodRanking.indexOf('Period Learner 10') === -1]);
+checks.push(['account period ranking displays the selected date range',
+  accountPeriodRanking.indexOf('2026') !== -1]);
+checks.push(['combined marks ranking includes objective and written activity scores',
+  accountPeriodRanking.indexOf('average percentage across scored objective and written activities') !== -1 &&
+  accountPeriodRanking.indexOf('Combined marks (%)') !== -1 &&
+  accountPeriodRanking.indexOf('Scored activities') !== -1]);
+const accountObjectiveRanking = vm.runInContext('accountPeriodRankingHtml', ctx)(
+  { scope: 'module', module: { id: 'module_a', title: 'Module A' },
+    from: '2026-04-01', to: '2026-06-30',
+    rankings: { combined: periodStudents, objectives: periodStudents } }, 'objectives');
+checks.push(['objective-only marks ranking shows earned and available points',
+  accountObjectiveRanking.indexOf('Objective marks (%)') !== -1 &&
+  accountObjectiveRanking.indexOf('objective-question points earned out of points available') !== -1 &&
+  accountObjectiveRanking.indexOf('20 / 20') !== -1]);
+const allModulesRanking = vm.runInContext('accountPeriodRankingHtml', ctx)(
+  { scope: 'all-completed', module: null, moduleCount: 3,
+    completedBy: '2026-06-30', from: '2026-04-01', to: '2026-06-30',
+    rankings: { combined: periodStudents, objectives: periodStudents } }, 'combined');
+checks.push(['all-modules period ranking labels learners completed by the selected period end',
+  allModulesRanking.indexOf('All modules completed') !== -1 &&
+  allModulesRanking.indexOf('completed all 3 modules') !== -1 &&
+  allModulesRanking.indexOf('2026') !== -1]);
+const adminSource = fs.readFileSync(path.join(base, 'admin.js'), 'utf8');
+checks.push(['account-admin ranking includes calendar-year and custom date controls',
+  adminSource.indexOf('id="accountRankingYear"') !== -1 &&
+  adminSource.indexOf('id="accountRankingFrom"') !== -1 &&
+  adminSource.indexOf('id="accountRankingTo"') !== -1 &&
+  adminSource.indexOf("'/reports/module-performers?' + scope") !== -1 &&
+  adminSource.indexOf('Top 10 — All modules completed') !== -1]);
 const moduleRanking = vm.runInContext('moduleRankingHTML', superCtx)('module:module_a', rankingStudents.slice(0, 12), modules);
 checks.push(['module top 10 sorts by module progress and caps at ten',
   (moduleRanking.match(/<td><b>\d+<\/b><\/td>/g) || []).length === 10 &&

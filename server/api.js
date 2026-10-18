@@ -2050,6 +2050,17 @@ route('GET', '/api/reports/students', ({ req, user }) => {
   else if (user.role === 'supervisor') list = list.filter(u => u.supervisorId === user.id);
   else { const tid = qp(req, 'tenantId'); if (tid) list = list.filter(u => u.tenantId === tid); }
 
+  const learnerIds = new Set(list.map(u => u.id));
+  const activityYears = new Set();
+  dbm.where('submissions', s => learnerIds.has(s.userId) && s.moduleId).forEach(s => {
+    const year = String(s.createdAt || '').slice(0, 4);
+    if (/^\d{4}$/.test(year)) activityYears.add(year);
+  });
+  dbm.where('certificates', c => learnerIds.has(c.userId) && c.type === 'module').forEach(c => {
+    const year = String(c.issuedAt || '').slice(0, 4);
+    if (/^\d{4}$/.test(year)) activityYears.add(year);
+  });
+
   const students = list.map(u => {
     const perf = performance(u);
     const subs = dbm.where('submissions', s => s.userId === u.id);
@@ -2097,10 +2108,119 @@ route('GET', '/api/reports/students', ({ req, user }) => {
 
   const total = students.length;
   return { ok: true, students: students, count: total,
+    activityYears: Array.from(activityYears).sort().reverse(),
     average: total ? Math.round(students.reduce((s, x) => s + x.progress, 0) / total) : 0,
     finished: students.filter(s => s.moduleCount > 0 && s.modulesCompleted === s.moduleCount).length,
     started: students.filter(s => s.submissions > 0).length,
     notStarted: students.filter(s => s.submissions === 0).length };
+});
+
+route('GET', '/api/reports/module-performers', ({ req, user }) => {
+  requireRole(user, ADMINS.concat(['supervisor']));
+  const moduleId = qp(req, 'moduleId');
+  const allCompleted = qp(req, 'scope') === 'all-completed';
+  const from = qp(req, 'from');
+  const to = qp(req, 'to');
+  need(allCompleted || moduleId, 'Choose a module or all-modules view', 400);
+  const selectedModule = allCompleted ? null : dbm.byId('modules', moduleId);
+  need(allCompleted || selectedModule, 'Module not found', 404);
+  need(from && to && /^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to),
+    'Choose a valid start and end date', 400);
+  const start = new Date(from + 'T00:00:00.000Z');
+  const end = new Date(to + 'T00:00:00.000Z');
+  need(!Number.isNaN(start.getTime()) && start.toISOString().slice(0, 10) === from &&
+    !Number.isNaN(end.getTime()) && end.toISOString().slice(0, 10) === to,
+  'Choose valid calendar dates', 400);
+  need(from <= to, 'The start date must be before or equal to the end date', 400);
+  need(from.slice(0, 4) === to.slice(0, 4), 'Choose a period within one calendar year', 400);
+  const moduleIds = allCompleted
+    ? ordered(dbm.db.modules).map(module => module.id)
+    : [selectedModule.id];
+  need(moduleIds.length > 0, 'There are no modules to rank', 400);
+
+  let learners = dbm.db.users.filter(u => PARTICIPANTS.indexOf(u.role) !== -1);
+  if (user.role === 'tenant_admin') learners = learners.filter(u => u.tenantId === user.tenantId);
+  else if (user.role === 'supervisor') learners = learners.filter(u => u.supervisorId === user.id);
+  else {
+    const tenantId = qp(req, 'tenantId');
+    if (tenantId) learners = learners.filter(u => u.tenantId === tenantId);
+  }
+
+  const eligibleLearners = allCompleted
+    ? learners.filter(student => {
+      const completedModuleIds = new Set(dbm.where('certificates', certificate =>
+        certificate.userId === student.id && certificate.type === 'module' &&
+        moduleIds.indexOf(certificate.moduleId) !== -1 &&
+        String(certificate.issuedAt || '').slice(0, 10) <= to
+      ).map(certificate => certificate.moduleId));
+      return completedModuleIds.size === moduleIds.length;
+    })
+    : learners;
+  const eligibleIds = new Set(eligibleLearners.map(student => student.id));
+  const moduleIdSet = new Set(moduleIds);
+  const scores = new Map();
+  function scoreFor(userId) {
+    let result = scores.get(userId);
+    if (!result) {
+      result = { activityMarks: 0, activityCount: 0, objectiveScore: 0, objectiveTotal: 0 };
+      scores.set(userId, result);
+    }
+    return result;
+  }
+  dbm.where('submissions', submission => eligibleIds.has(submission.userId) &&
+    moduleIdSet.has(submission.moduleId) &&
+    String(submission.createdAt || '').slice(0, 10) >= from &&
+    String(submission.createdAt || '').slice(0, 10) <= to
+  ).forEach(submission => {
+    const marks = scoreFor(submission.userId);
+    if (submission.type === 'objectives' && Number(submission.total) > 0) {
+      const total = Number(submission.total);
+      const earned = Math.max(0, Math.min(total, Number(submission.score) || 0));
+      marks.activityMarks += earned * 100 / total;
+      marks.activityCount++;
+      marks.objectiveScore += earned;
+      marks.objectiveTotal += total;
+    } else if (['chapter_summary', 'letter_summary', 'book_summary'].indexOf(submission.type) !== -1) {
+      const assessment = assessOf(submission);
+      if (assessment && assessment.keywordScore != null && Number.isFinite(Number(assessment.keywordScore))) {
+        marks.activityMarks += Math.max(0, Math.min(100, Number(assessment.keywordScore)));
+        marks.activityCount++;
+      }
+    }
+  });
+  function studentRow(student) {
+    const marks = scores.get(student.id) || {
+      activityMarks: 0, activityCount: 0, objectiveScore: 0, objectiveTotal: 0
+    };
+    return {
+      id: student.id, fullName: student.fullName, studentNumber: student.studentNumber,
+      className: student.className,
+      combinedPercent: marks.activityCount ? Math.round(marks.activityMarks / marks.activityCount) : null,
+      activityCount: marks.activityCount,
+      objectiveScore: marks.objectiveScore,
+      objectiveTotal: marks.objectiveTotal,
+      objectivePercent: marks.objectiveTotal
+        ? Math.round(100 * marks.objectiveScore / marks.objectiveTotal) : null
+    };
+  }
+  const candidates = eligibleLearners.map(studentRow);
+  function topTen(metric) {
+    return candidates.filter(student => student[metric] != null).sort((a, b) =>
+      b[metric] - a[metric] ||
+      (b.objectivePercent == null ? -1 : b.objectivePercent) -
+        (a.objectivePercent == null ? -1 : a.objectivePercent) ||
+      String(a.fullName).localeCompare(String(b.fullName))
+    ).slice(0, 10);
+  }
+  return {
+    ok: true,
+    scope: allCompleted ? 'all-completed' : 'module',
+    module: allCompleted ? null : { id: selectedModule.id, title: selectedModule.title },
+    moduleCount: moduleIds.length,
+    from, to,
+    completedBy: allCompleted ? to : null,
+    rankings: { combined: topTen('combinedPercent'), objectives: topTen('objectivePercent') }
+  };
 });
 
 route('GET', '/api/admin/overview', ({ user }) => {
@@ -2185,12 +2305,6 @@ route('GET', '/api/super/submissions', ({ req, user }) => {
 });
 
 module.exports = { handle };
-
-
-
-
-
-
 
 
 

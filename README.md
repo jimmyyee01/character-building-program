@@ -224,16 +224,17 @@ Then confirm the running build (this needs no browser):
 
 ```bash
 curl -s http://127.0.0.1/api/health      # add -H 'Host: your-domain' if the vhost needs it
-curl -s https://your-site/api/health     # build + features["admin.analytics","super.analytics"], routes 68
+curl -s https://your-site/api/health     # build + features["admin.analytics","super.analytics"], routes 69
 curl -s https://your-site/build.json     # must show the same build
 ```
 
-93 checks covering every seeded login, the per-portal role rules (schools /
+The API suite covers every seeded login, the per-portal role rules (schools /
 organization / family / married), the supervisor 100-user cap, account colour,
 both console dashboards (including `/super/overview`, whose missing `tenants`
 used to 500 the super dashboard), the ranked *Student progress* report (ordering,
-level, recent work, role scoping), reports, certificates and the participant
-flow. It prints a PASS/FAIL summary and exits non-zero if anything fails.
+level, recent work, period-based module top 10s and role scoping), reports,
+certificates and the participant flow. It prints a PASS/FAIL summary and exits
+non-zero if anything fails.
 
 Run the PHP build without Apache (useful for local testing — `php -S` does not
 read `.htaccess`, so the bundled router does the rewriting):
@@ -295,6 +296,15 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
 - Users (students, teachers, members), supervisors with **100-user limit**.
   **Self-registration is disabled** — only super admin, tenant admins and
   supervisors add users (single form or **bulk insert** up to 500 CSV rows).
+- **Student progress → Top performers** — view the top 10 per module for a
+  selected calendar year and custom date range, ranked by marks earned during
+  that period. Admins can choose a combined percentage (objective-question
+  accuracy and written-answer keyword scores, with each scored activity weighted
+  equally) or objective-question marks only. The all-modules view ranks period
+  marks across modules and includes only learners who had completed every module
+  by the selected period's end. Tenant admins see only their account, and
+  supervisors see only their assigned learners. The graduation ranking remains
+  available separately.
 - Own library uploads, picking books into modules, chapters, and **all
   questions** (school/org admin or super admin only).
 - Submissions & copy-flags for their own people, certificates, branding —

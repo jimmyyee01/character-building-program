@@ -139,6 +139,51 @@ async function part2(r, tok, check) {
     !r.data.students.length || r.data.students[0].modules.every(function (m) {
       return typeof m.id === 'string' && typeof m.percent === 'number';
     }));
+  check('progress report provides available calendar years for module activity',
+    Array.isArray(r.data.activityYears) && r.data.activityYears.every(function (year) {
+      return /^\d{4}$/.test(year);
+    }));
+  const periodReport = r;
+  const rankingYear = (periodReport.data.activityYears || [])[0] || String(new Date().getFullYear());
+  r = await call('/reports/module-performers?moduleId=mod_beta&from=' + rankingYear +
+    '-01-01&to=' + rankingYear + '-12-31', null, tok.schools);
+  const accountLearnerIds = new Set((periodReport.data.students || []).map(function (s) { return s.id; }));
+  check('module period ranking is scoped to the account and capped at ten',
+    r.ok && r.data.scope === 'module' && Array.isArray(r.data.rankings.combined) &&
+      r.data.rankings.combined.length > 0 && r.data.rankings.combined.length <= 10 &&
+      r.data.rankings.combined.every(function (s) {
+        return accountLearnerIds.has(s.id) && s.combinedPercent >= 0 && s.activityCount > 0;
+      }) && r.data.rankings.combined.every(function (s, i, rows) {
+        return i === 0 || rows[i - 1].combinedPercent >= s.combinedPercent;
+      }),
+    'status ' + r.status + ' count ' + ((r.data.rankings && r.data.rankings.combined || []).length));
+  check('module rankings return objective-only marks with points earned and available',
+    Array.isArray(r.data.rankings.objectives) && r.data.rankings.objectives.length > 0 &&
+      r.data.rankings.objectives.every(function (s) {
+        return s.objectivePercent >= 0 && s.objectiveScore > 0 && s.objectiveTotal >= s.objectiveScore;
+      }));
+  r = await call('/reports/module-performers?scope=all-completed&from=' + rankingYear +
+    '-01-01&to=' + rankingYear + '-12-31', null, tok.schools);
+  const completedLearnerIds = new Set((periodReport.data.students || []).filter(function (student) {
+    return student.moduleCount > 0 && student.modulesCompleted === student.moduleCount;
+  }).map(function (student) { return student.id; }));
+  check('all-modules ranking includes completed learners and marks from every module',
+    r.ok && r.data.scope === 'all-completed' && r.data.moduleCount >= 3 &&
+      Array.isArray(r.data.rankings.combined) &&
+      r.data.rankings.combined.some(function (s) {
+        return s.id === (periodReport.data.students.find(function (student) {
+          return student.studentNumber === 'STU-100';
+        }) || {}).id;
+      }) && r.data.rankings.objectives.length > 0 &&
+      r.data.rankings.combined.every(function (s) { return completedLearnerIds.has(s.id); }) &&
+      r.data.rankings.objectives.every(function (s) { return completedLearnerIds.has(s.id); }),
+    'status ' + r.status + ' count ' + ((r.data.rankings && r.data.rankings.combined || []).length));
+  r = await call('/reports/module-performers?moduleId=mod_beta&from=' + rankingYear +
+    '-12-31&to=' + rankingYear + '-01-01', null, tok.schools);
+  check('module period ranking rejects an inverted date range', r.status === 400, 'status ' + r.status);
+  r = await call('/reports/module-performers?moduleId=mod_beta&from=' + rankingYear +
+    '-01-01&to=' + (Number(rankingYear) + 1) + '-01-01', null, tok.schools);
+  check('module period ranking rejects a range crossing calendar years', r.status === 400, 'status ' + r.status);
   const supLogin = await call('/auth/super-login', { method: 'POST', body: { username: 'superadmin', password: 'SuperAdmin@123' } });
   r = await call('/reports/students', null, supLogin.data.token);
   check('GET /reports/students (super admin, all accounts)',
@@ -232,6 +277,9 @@ async function part2(r, tok, check) {
   check('student blocked from admin report (403)', r.status === 403, 'status ' + r.status);
   r = await call('/reports/students', null, stu.data.token);
   check('student blocked from student-progress report (403)', r.status === 403, 'status ' + r.status);
+  r = await call('/reports/module-performers?moduleId=mod_beta&from=2026-01-01&to=2026-12-31',
+    null, stu.data.token);
+  check('student blocked from period marks rankings (403)', r.status === 403, 'status ' + r.status);
   r = await call('/not-a-real-endpoint', null, stu.data.token);
   check('unknown endpoint -> 404', r.status === 404, 'status ' + r.status);
 

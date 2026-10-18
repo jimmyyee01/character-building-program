@@ -1593,7 +1593,16 @@ async function renderProgress() {
     modules.map(function (m) {
       return '<option value="module:' + esc(String(m.id)) + '">Top 10 — ' + esc(m.title) + '</option>';
     }).join('') +
+    '<option value="all-completed">Top 10 — All modules completed</option>' +
     '<option value="graduation">Top 10 — Graduation</option>';
+  const activityYears = (d.activityYears || []).map(Number).filter(function (year) {
+    return Number.isInteger(year) && year >= 2000 && year <= 9999;
+  });
+  const rankingYears = activityYears.length ? activityYears : [new Date().getFullYear()];
+  const defaultYear = String(rankingYears[0]);
+  const yearOptions = rankingYears.map(function (year) {
+    return '<option value="' + year + '">' + year + '</option>';
+  }).join('');
   el.innerHTML = '<h2><span class="motto">Be True</span>Student progress</h2>' +
     '<div class="grid cols-4">' +
       statCard(d.count, 'Learners', 'blue') +
@@ -1614,9 +1623,20 @@ async function renderProgress() {
           .map(function (s) { return { label: s.fullName, value: s.certificates, color: '#b8217a' }; })) + '</div>' +
     '</div></div>' +
     '<div class="card"><h3>Top performers</h3>' +
-    '<p class="muted small">Rank learners in each module or see graduates who completed every module.</p>' +
+    '<p class="muted small">Rank module marks or marks across all modules for learners who completed every module by the selected period end.</p>' +
     '<label for="accountRankingView">Choose a view</label>' +
     '<select id="accountRankingView">' + rankingOptions + '</select>' +
+    '<label for="accountRankingMarks">Rank by marks</label>' +
+    '<select id="accountRankingMarks"><option value="combined">Combined marks — objective and written activities</option>' +
+      '<option value="objectives">Objective-question marks only</option></select>' +
+    '<div id="accountRankingPeriod" class="row mt hidden">' +
+      '<div><label for="accountRankingYear">Calendar year</label>' +
+        '<select id="accountRankingYear">' + yearOptions + '</select></div>' +
+      '<div><label for="accountRankingFrom">Period start</label>' +
+        '<input id="accountRankingFrom" type="date" min="' + defaultYear + '-01-01" max="' + defaultYear + '-12-31" value="' + defaultYear + '-01-01"></div>' +
+      '<div><label for="accountRankingTo">Period end</label>' +
+        '<input id="accountRankingTo" type="date" min="' + defaultYear + '-01-01" max="' + defaultYear + '-12-31" value="' + defaultYear + '-12-31"></div>' +
+    '</div>' +
     '<div id="accountTopPerformers" class="mt">' +
       accountRankingHtml('', list, modules) + '</div></div>' +
     '<div class="card"><div class="row" style="align-items:flex-end">' +
@@ -1644,10 +1664,62 @@ async function renderProgress() {
     applyTableSearch(table, search, document.getElementById('pgCount'));
   }
   const rankingView = document.getElementById('accountRankingView');
-  if (rankingView) rankingView.addEventListener('change', function () {
-    document.getElementById('accountTopPerformers').innerHTML =
-      accountRankingHtml(this.value, list, modules);
+  const rankingMarks = document.getElementById('accountRankingMarks');
+  const rankingPeriod = document.getElementById('accountRankingPeriod');
+  const rankingYear = document.getElementById('accountRankingYear');
+  const rankingFrom = document.getElementById('accountRankingFrom');
+  const rankingTo = document.getElementById('accountRankingTo');
+  let rankingRequest = 0;
+  async function renderAccountTopPerformers() {
+    const request = ++rankingRequest;
+    const view = rankingView ? rankingView.value : '';
+    const allCompletedView = view === 'all-completed';
+    const target = document.getElementById('accountTopPerformers');
+    const isModuleView = String(view).indexOf('module:') === 0;
+    if (rankingPeriod) {
+      if (isModuleView || allCompletedView) rankingPeriod.classList.remove('hidden');
+      else rankingPeriod.classList.add('hidden');
+    }
+    if (!isModuleView && !allCompletedView) {
+      target.innerHTML = accountRankingHtml(view, list, modules);
+      return;
+    }
+    const year = rankingYear.value;
+    const from = rankingFrom.value;
+    const to = rankingTo.value;
+    if (!from || !to || from.slice(0, 4) !== year || to.slice(0, 4) !== year || from > to) {
+      target.innerHTML = '<p class="muted">Choose a valid date range within the selected year.</p>';
+      return;
+    }
+    target.innerHTML = '<p class="muted">Loading period rankings…</p>';
+    try {
+      const scope = allCompletedView ? 'scope=all-completed' :
+        'moduleId=' + encodeURIComponent(view.slice(7));
+      const data = await API.get('/reports/module-performers?' + scope +
+        '&from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to));
+      if (request !== rankingRequest) return;
+      target.innerHTML = accountPeriodRankingHtml(data,
+        rankingMarks ? rankingMarks.value : 'combined');
+    } catch (e) {
+      if (request !== rankingRequest) return;
+      target.innerHTML = '<p class="muted">' + esc(msg(e)) + '</p>';
+      toast(msg(e), 'err');
+    }
+  }
+  if (rankingView) rankingView.addEventListener('change', renderAccountTopPerformers);
+  if (rankingMarks) rankingMarks.addEventListener('change', renderAccountTopPerformers);
+  if (rankingYear) rankingYear.addEventListener('change', function () {
+    const year = this.value;
+    rankingFrom.min = year + '-01-01';
+    rankingFrom.max = year + '-12-31';
+    rankingTo.min = year + '-01-01';
+    rankingTo.max = year + '-12-31';
+    rankingFrom.value = year + '-01-01';
+    rankingTo.value = year + '-12-31';
+    renderAccountTopPerformers();
   });
+  if (rankingFrom) rankingFrom.addEventListener('change', renderAccountTopPerformers);
+  if (rankingTo) rankingTo.addEventListener('change', renderAccountTopPerformers);
   el.onclick = function (e) {
     const b = e.target.closest('button[data-sum]');
     if (!b) return;
@@ -1708,6 +1780,45 @@ function accountRankingHtml(view, students, modules) {
       }).join('') + '</tbody></table></div>';
   }
   return '<p class="muted">Choose a module or graduation view to see the top 10 performers.</p>';
+}
+
+function accountPeriodRankingHtml(report, metric) {
+  const module = report.module;
+  const title = 'Top 10 — ' + esc(module ? module.title : 'All modules completed');
+  const from = report.from;
+  const to = report.to;
+  const students = (report.rankings && report.rankings[metric]) || [];
+  const format = function (date) { return date ? fmtDate(date + 'T12:00:00') : '—'; };
+  const rows = students.slice(0, 10);
+  if (!rows.length) {
+    return '<h4>' + title + '</h4><p class="muted">No scored work was recorded during this period for the selected marks view.</p>';
+  }
+  const allCompleted = report.scope === 'all-completed';
+  const scoreHeader = metric === 'objectives' ? 'Objective marks (%)' : 'Combined marks (%)';
+  return '<h4>' + title + '</h4><p class="muted small">Period: ' + esc(format(from)) + ' – ' +
+    esc(format(to)) + (allCompleted
+      ? '. Only learners who had completed all ' + esc(String(report.moduleCount)) +
+        ' modules by ' + esc(format(report.completedBy)) + ' are included.'
+      : '. Scores include work submitted in the selected period.') +
+    (metric === 'objectives'
+      ? ' Ranked by objective-question points earned out of points available.'
+      : ' Ranked by the average percentage across scored objective and written activities; each activity counts equally.') +
+    '</p><div class="table-wrap"><table><thead><tr><th>Rank</th><th>Learner</th><th>' +
+    scoreHeader + '</th><th>Objective points</th>' +
+    (metric === 'combined' ? '<th>Scored activities</th>' : '') +
+    '</tr></thead><tbody>' +
+    rows.map(function (student, index) {
+      return '<tr><td><b>' + (index + 1) + '</b></td><td>' + esc(student.fullName || '—') +
+        (student.studentNumber ? '<div class="muted small">' + esc(student.studentNumber) + '</div>' : '') +
+        (student.className ? '<div class="muted small">' + esc(student.className) + '</div>' : '') +
+        '</td><td><b>' + esc(String(metric === 'objectives'
+          ? student.objectivePercent : student.combinedPercent)) + '%</b></td><td>' +
+        (student.objectiveTotal
+          ? esc(String(student.objectiveScore)) + ' / ' + esc(String(student.objectiveTotal))
+          : '—') + '</td>' +
+        (metric === 'combined' ? '<td>' + esc(String(student.activityCount || 0)) + '</td>' : '') +
+        '</tr>';
+    }).join('') + '</tbody></table></div>';
 }
 
 function progressTableHtml(list) {
@@ -2124,15 +2235,6 @@ async function boot() {
 }
 
 boot();
-
-
-
-
-
-
-
-
-
 
 
 

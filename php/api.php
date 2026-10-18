@@ -101,6 +101,7 @@ route('GET',    '/api/admin/overview', 'r_admin_overview');
 route('GET',    '/api/admin/submissions', 'r_admin_submissions');
 route('GET',    '/api/admin/certificates', 'r_admin_certificates');
 route('GET',    '/api/reports/students', 'r_reports_students');
+route('GET',    '/api/reports/module-performers', 'r_reports_module_performers');
 route('GET',    '/api/super/analytics', 'r_super_analytics');
 route('GET',    '/api/admin/analytics', 'r_admin_analytics');
 
@@ -166,4 +167,3 @@ try {
     error_log('[cbp-api] ' . $e->getMessage());
     send_json(500, ['ok' => false, 'error' => 'Server error']);
 }
-

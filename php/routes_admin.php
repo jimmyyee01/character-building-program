@@ -807,6 +807,26 @@ function r_reports_students(array $user, array $body, array $params, ?string $to
     require_role($user, ['super','tenant_admin','supervisor']);
     $rows = scoped_user_rows($user, $query);
     $pdo = db();
+    $participantIds = array_values(array_map(fn($u) => $u['id'],
+        array_filter($rows, fn($u) => in_array($u['role'], ['student','teacher','member'], true))));
+    $activityYears = [];
+    if (count($participantIds)) {
+        $ph = implode(',', array_fill(0, count($participantIds), '?'));
+        $st = $pdo->prepare("SELECT created_at FROM submissions WHERE user_id IN ($ph) AND module_id IS NOT NULL");
+        $st->execute($participantIds);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $createdAt) {
+            $year = substr((string)$createdAt, 0, 4);
+            if (preg_match('/^\d{4}$/', $year)) $activityYears[$year] = true;
+        }
+        $st = $pdo->prepare("SELECT issued_at FROM certificates WHERE user_id IN ($ph) AND type='module'");
+        $st->execute($participantIds);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $issuedAt) {
+            $year = substr((string)$issuedAt, 0, 4);
+            if (preg_match('/^\d{4}$/', $year)) $activityYears[$year] = true;
+        }
+    }
+    $activityYears = array_keys($activityYears);
+    rsort($activityYears, SORT_STRING);
     $students = [];
     foreach ($rows as $u) {
         if (!in_array($u['role'], ['student','teacher','member'], true)) continue;
@@ -874,11 +894,128 @@ function r_reports_students(array $user, array $body, array $params, ?string $to
         return strcmp((string)$a['fullName'], (string)$b['fullName']);
     });
     $n = count($students);
-    return ['students'=>$students, 'count'=>$n,
+    return ['students'=>$students, 'count'=>$n, 'activityYears'=>$activityYears,
         'average'=>$n ? (int)round(array_sum(array_map(fn($s)=>$s['progress'], $students)) / $n) : 0,
         'finished'=>count(array_filter($students, fn($s)=>$s['moduleCount'] > 0 && $s['modulesCompleted'] === $s['moduleCount'])),
         'started'=>count(array_filter($students, fn($s)=>$s['submissions'] > 0)),
         'notStarted'=>count(array_filter($students, fn($s)=>$s['submissions'] === 0))];
+}
+function r_reports_module_performers(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super','tenant_admin','supervisor']);
+    $moduleId = trim((string)($query['moduleId'] ?? ''));
+    $allCompleted = ($query['scope'] ?? '') === 'all-completed';
+    $from = trim((string)($query['from'] ?? ''));
+    $to = trim((string)($query['to'] ?? ''));
+    need($allCompleted || $moduleId !== '', 'Choose a module or all-modules view');
+    $moduleRow = null;
+    if (!$allCompleted) {
+        $st = db()->prepare('SELECT * FROM modules WHERE id=? LIMIT 1');
+        $st->execute([$moduleId]);
+        $moduleRow = $st->fetch();
+        need((bool)$moduleRow, 'Module not found', 404);
+    }
+    need((bool)preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) &&
+        (bool)preg_match('/^\d{4}-\d{2}-\d{2}$/', $to), 'Choose a valid start and end date');
+    $fromDate = DateTimeImmutable::createFromFormat('!Y-m-d', $from);
+    $toDate = DateTimeImmutable::createFromFormat('!Y-m-d', $to);
+    need($fromDate && $fromDate->format('Y-m-d') === $from &&
+        $toDate && $toDate->format('Y-m-d') === $to, 'Choose valid calendar dates');
+    need($from <= $to, 'The start date must be before or equal to the end date');
+    need(substr($from, 0, 4) === substr($to, 0, 4), 'Choose a period within one calendar year');
+
+    $moduleIds = $allCompleted
+        ? array_column(all_modules(), 'id')
+        : [$moduleId];
+    need(count($moduleIds) > 0, 'There are no modules to rank');
+    $rows = array_values(array_filter(scoped_user_rows($user, []),
+        fn($u) => in_array($u['role'], ['student','teacher','member'], true)));
+    $eligible = [];
+    $ranked = [];
+    if (count($rows)) {
+        $ids = array_values(array_map(fn($u) => $u['id'], $rows));
+        if ($allCompleted) {
+            $userPh = implode(',', array_fill(0, count($ids), '?'));
+            $modulePh = implode(',', array_fill(0, count($moduleIds), '?'));
+            $st = db()->prepare("SELECT user_id,module_id FROM certificates
+                WHERE type='module' AND issued_at < DATE_ADD(?, INTERVAL 1 DAY)
+                AND user_id IN ($userPh) AND module_id IN ($modulePh)");
+            $st->execute(array_merge([$to], $ids, $moduleIds));
+            $completed = [];
+            foreach ($st->fetchAll() as $certificate) {
+                $completed[$certificate['user_id']][$certificate['module_id']] = true;
+            }
+            foreach ($rows as $student) {
+                if (count($completed[$student['id']] ?? []) === count($moduleIds)) $eligible[] = $student;
+            }
+        } else {
+            $eligible = $rows;
+        }
+        $ids = array_values(array_map(fn($u) => $u['id'], $eligible));
+        if (count($ids)) {
+            $userPh = implode(',', array_fill(0, count($ids), '?'));
+            $modulePh = implode(',', array_fill(0, count($moduleIds), '?'));
+            $st = db()->prepare("SELECT *
+                FROM submissions WHERE DATE(created_at) BETWEEN ? AND ?
+                AND user_id IN ($userPh) AND module_id IN ($modulePh)");
+            $st->execute(array_merge([$from, $to], $ids, $moduleIds));
+            $scores = [];
+            foreach ($st->fetchAll() as $submission) {
+                $studentId = $submission['user_id'];
+                if (!isset($scores[$studentId])) {
+                    $scores[$studentId] = ['activityMarks'=>0, 'activityCount'=>0,
+                        'objectiveScore'=>0, 'objectiveTotal'=>0];
+                }
+                if ($submission['type'] === 'objectives' && (int)$submission['total'] > 0) {
+                    $total = (int)$submission['total'];
+                    $earned = max(0, min($total, (int)$submission['score']));
+                    $scores[$studentId]['activityMarks'] += $earned * 100 / $total;
+                    $scores[$studentId]['activityCount']++;
+                    $scores[$studentId]['objectiveScore'] += $earned;
+                    $scores[$studentId]['objectiveTotal'] += $total;
+                } elseif (in_array($submission['type'], ['chapter_summary','letter_summary','book_summary'], true)) {
+                    $assessment = submission_assessment($submission);
+                    if ($assessment && $assessment['keywordScore'] !== null) {
+                        $scores[$studentId]['activityMarks'] += max(0, min(100, (int)$assessment['keywordScore']));
+                        $scores[$studentId]['activityCount']++;
+                    }
+                }
+            }
+            foreach ($eligible as $student) {
+                $marks = $scores[$student['id']] ?? [
+                    'activityMarks'=>0, 'activityCount'=>0, 'objectiveScore'=>0, 'objectiveTotal'=>0];
+                $eligibleRow = [
+                    'id'=>$student['id'], 'fullName'=>$student['full_name'],
+                    'studentNumber'=>$student['student_number'], 'className'=>$student['class_name'],
+                    'combinedPercent'=>$marks['activityCount']
+                        ? (int)round($marks['activityMarks'] / $marks['activityCount']) : null,
+                    'activityCount'=>$marks['activityCount'],
+                    'objectiveScore'=>$marks['objectiveScore'],
+                    'objectiveTotal'=>$marks['objectiveTotal'],
+                    'objectivePercent'=>$marks['objectiveTotal']
+                        ? (int)round(100 * $marks['objectiveScore'] / $marks['objectiveTotal']) : null];
+                if ($eligibleRow['combinedPercent'] !== null || $eligibleRow['objectivePercent'] !== null) {
+                    $ranked[] = $eligibleRow;
+                }
+            }
+        }
+    }
+    $topTen = function(string $metric) use ($ranked): array {
+        $rows = array_values(array_filter($ranked, fn($student) => $student[$metric] !== null));
+        usort($rows, function ($a, $b) use ($metric) {
+            if ($a[$metric] !== $b[$metric]) return $b[$metric] <=> $a[$metric];
+            if ($a['objectivePercent'] !== $b['objectivePercent']) {
+                return ($b['objectivePercent'] ?? -1) <=> ($a['objectivePercent'] ?? -1);
+            }
+            return strcmp((string)$a['fullName'], (string)$b['fullName']);
+        });
+        return array_slice($rows, 0, 10);
+    };
+    $module = $moduleRow ? n_module($moduleRow) : null;
+    return ['scope'=>$allCompleted ? 'all-completed' : 'module',
+        'module'=>$module ? ['id'=>$module['id'], 'title'=>$module['title']] : null,
+        'moduleCount'=>count($moduleIds), 'from'=>$from, 'to'=>$to,
+        'completedBy'=>$allCompleted ? $to : null,
+        'rankings'=>['combined'=>$topTen('combinedPercent'), 'objectives'=>$topTen('objectivePercent')]];
 }
 function r_admin_overview(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin','supervisor']);
