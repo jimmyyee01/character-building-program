@@ -116,6 +116,7 @@ function public_user(array $u): array {
         'fullName' => $u['full_name'], 'email' => $u['email'],
         'studentNumber' => $u['student_number'], 'className' => $u['class_name'],
         'photo' => $u['photo'], 'supervisorId' => $u['supervisor_id'],
+        'supervisorWaitlisted' => (bool)($u['supervisor_waitlisted'] ?? false),
         'supervisorCode' => $u['supervisor_code'],
         'letterFeedbackAt' => iso($u['letter_feedback_at'] ?? null),
         'optionalVideoSeen' => (bool)($u['optional_video_seen'] ?? false),
@@ -126,6 +127,7 @@ function public_user(array $u): array {
 function normalize_user(array $u): array {
     $u['tenant_id'] = $u['tenant_id'] ?? null;
     $u['supervisor_id'] = $u['supervisor_id'] ?? null;
+    $u['supervisor_waitlisted'] = (int)($u['supervisor_waitlisted'] ?? 0);
     $u['supervisor_code'] = $u['supervisor_code'] ?? null;
     $u['email'] = $u['email'] ?? null;
     $u['student_number'] = $u['student_number'] ?? null;
@@ -222,5 +224,4 @@ function save_upload($file): ?string {
     file_put_contents(UPLOAD_DIR . '/' . $name, base64_decode((string)$file['base64']));
     return '/uploads/' . $name;
 }
-
 

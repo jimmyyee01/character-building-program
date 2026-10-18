@@ -19,8 +19,9 @@ $ADMINS = ['super', 'tenant_admin'];
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-define('APP_BUILD', '2026-10-18-period-marks');
-define('APP_FEATURES', 'health,super.analytics,admin.analytics,reports.students,reports.module-performers,keywords,'
+define('APP_BUILD', '2026-10-18-messaging-alerts');
+define('APP_FEATURES', 'health,super.analytics,admin.analytics,reports.students,reports.student-roster,reports.student-detail,reports.module-performers,'
+    . 'users.supervisor-auto-assignment,messaging,notifications,keywords,'
     . 'reader.book,library.lock,certificates,chapter.pages,exports');
 
 /* Public: which backend and which build is answering. */
@@ -101,6 +102,14 @@ route('GET',    '/api/admin/overview', 'r_admin_overview');
 route('GET',    '/api/admin/submissions', 'r_admin_submissions');
 route('GET',    '/api/admin/certificates', 'r_admin_certificates');
 route('GET',    '/api/reports/students', 'r_reports_students');
+route('GET',    '/api/reports/student-detail', 'r_reports_student_detail');
+route('GET',    '/api/reports/student-roster', 'r_reports_student_roster');
+route('GET',    '/api/messages', 'r_messages_list');
+route('POST',   '/api/messages', 'r_messages_send');
+route('GET',    '/api/messages/([a-zA-Z0-9_-]+)', 'r_messages_thread_get');
+route('POST',   '/api/messages/([a-zA-Z0-9_-]+)', 'r_messages_reply');
+route('GET',    '/api/notifications', 'r_notifications_list');
+route('PUT',    '/api/notifications/([a-zA-Z0-9_-]+)/read', 'r_notification_read');
 route('GET',    '/api/reports/module-performers', 'r_reports_module_performers');
 route('GET',    '/api/super/analytics', 'r_super_analytics');
 route('GET',    '/api/admin/analytics', 'r_admin_analytics');

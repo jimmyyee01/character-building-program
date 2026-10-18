@@ -6,8 +6,10 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const DB_FILE = path.join(DATA_DIR, 'db.json');
+const DB_FILE = process.env.APP_DB_FILE
+  ? path.resolve(process.env.APP_DB_FILE)
+  : path.join(__dirname, '..', 'data', 'db.json');
+const DATA_DIR = path.dirname(DB_FILE);
 
 let db = null;
 let saveTimer = null;

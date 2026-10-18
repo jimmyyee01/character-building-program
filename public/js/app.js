@@ -140,6 +140,7 @@ async function boot() {
   if (S.me.user.role === 'tenant_admin') { location.href = '/admin'; return; }
   if (S.me.user.role === 'super') { location.href = '/super'; return; }
   API.setUser(S.me.user);
+  initCommunicationWidget();
   const b = S.me.branding;
   applyThemeColor(b.themeColor);
   $('sideName').textContent = b.tenantName || b.programName;
@@ -1131,7 +1132,6 @@ boot().catch(function (e) {
   console.error(e);
   toast(e.message || 'Failed to start', 'err');
 });
-
 
 
 

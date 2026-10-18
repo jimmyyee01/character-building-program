@@ -273,6 +273,7 @@ function r_submissions($user, $body, $params, $token, $query) {
       ->execute([$kw['keywordScore'], $kw['keywordsUsed'], $kw['keywordsTotal'],
         jenc($kw['keywordsCovered']), jenc($kw['keywordsMissing']), $newRow['id']]);
   }
+  create_submission_notification($user, $newRow);
   if (!empty($newRow['flagged'])) $warn = 'Your submission was flagged for similarity review.';
   return ['submission' => sub_meta(n_sub($newRow)), 'assessment' => $kw, 'warning' => $warn];
 }
@@ -294,6 +295,7 @@ function flow_ensure_general($user) {
       $pdo->prepare('UPDATE certificates SET transcript_json=? WHERE id=?')->execute([$json, $ex['id']]);
       $ex['transcript_json'] = $json;
     }
+    create_completion_notification($user);
     return n_cert($ex);
   }
   $titles = [];
@@ -309,6 +311,7 @@ function flow_ensure_general($user) {
     'issued_at' => now_dt()];
   $pdo->prepare('INSERT INTO certificates (id,type,code,user_id,tenant_id,module_id,title,books_json,transcript_json,best_book_id,best_book,performance,objective_score,user_name,tenant_name,issued_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute(
     [$row['id'],$row['type'],$row['code'],$row['user_id'],$row['tenant_id'],$row['module_id'],$row['title'],$row['books_json'],$row['transcript_json'],$row['best_book_id'],$row['best_book'],$row['performance'],$row['objective_score'],$row['user_name'],$row['tenant_name'],$row['issued_at']]);
+  create_completion_notification($user);
   return n_cert($row);
 }
 function r_cert_issue($user, $body, $params, $token, $query) {

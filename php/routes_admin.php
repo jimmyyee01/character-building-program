@@ -93,6 +93,60 @@ function sup_names_for(array $users): array {
     foreach ($st->fetchAll() as $r) $m[$r['id']] = $r['full_name'];
     return $m;
 }
+function is_learner_role(string $role): bool { return in_array($role, ['student','member'], true); }
+function assign_waitlisted_learners(string $tenantId): void {
+    $pdo = db();
+    $pdo->prepare("UPDATE users SET supervisor_waitlisted=0
+        WHERE tenant_id=? AND role IN ('student','member')
+          AND supervisor_id IS NOT NULL AND supervisor_waitlisted<>0")
+        ->execute([$tenantId]);
+    $pdo->prepare("UPDATE users SET supervisor_waitlisted=1
+        WHERE tenant_id=? AND role IN ('student','member') AND supervisor_id IS NULL")
+        ->execute([$tenantId]);
+    $st = $pdo->prepare("SELECT id FROM users
+        WHERE tenant_id=? AND role IN ('student','member')
+          AND supervisor_id IS NULL AND supervisor_waitlisted=1
+        ORDER BY created_at ASC,id ASC");
+    $st->execute([$tenantId]); $queue = $st->fetchAll(PDO::FETCH_COLUMN);
+    $st = $pdo->prepare("SELECT s.id,COUNT(l.id) AS learners
+        FROM users s LEFT JOIN users l ON l.supervisor_id=s.id AND l.role IN ('student','member')
+        WHERE s.tenant_id=? AND s.role='supervisor' AND s.suspended=0
+        GROUP BY s.id,s.created_at ORDER BY s.created_at ASC,s.id ASC");
+    $st->execute([$tenantId]);
+    $counts = [];
+    foreach ($st->fetchAll() as $row) $counts[$row['id']] = (int)$row['learners'];
+    foreach ($queue as $learnerId) {
+        $selected = null; $selectedCount = 100;
+        foreach ($counts as $id => $count) {
+            if ($count < $selectedCount) { $selected = $id; $selectedCount = $count; }
+        }
+        if ($selected === null) break;
+        $update = $pdo->prepare('UPDATE users SET supervisor_id=?,supervisor_waitlisted=0 WHERE id=? AND supervisor_id IS NULL');
+        $update->execute([$selected, $learnerId]);
+        if ($update->rowCount() > 0) $counts[$selected] = $selectedCount + 1;
+    }
+}
+function refresh_waitlisted_learners(string $tenantId): void {
+    $pdo = db(); $pdo->beginTransaction();
+    try {
+        $pdo->prepare('SELECT id FROM tenants WHERE id=? FOR UPDATE')->execute([$tenantId]);
+        assign_waitlisted_learners($tenantId);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+}
+function supervisor_learner_counts(string $tenantId, bool $activeOnly = false): array {
+    $activeFilter = $activeOnly ? ' AND s.suspended=0' : '';
+    $st = db()->prepare("SELECT s.id,COUNT(l.id) AS learners
+        FROM users s LEFT JOIN users l ON l.supervisor_id=s.id AND l.role IN ('student','member')
+        WHERE s.tenant_id=? AND s.role='supervisor'{$activeFilter}
+        GROUP BY s.id,s.created_at ORDER BY s.created_at ASC,s.id ASC");
+    $st->execute([$tenantId]); $counts = [];
+    foreach ($st->fetchAll() as $row) $counts[$row['id']] = (int)$row['learners'];
+    return $counts;
+}
 function scoped_user_rows(array $user, array $query): array {
     $role = $user['role'] ?? '';
     if ($role === 'super') {
@@ -364,6 +418,10 @@ function r_super_submissions(array $user, array $body, array $params, ?string $t
 }
 function r_super_users(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super']);
+    $tenantIds = isset($query['tenantId']) && $query['tenantId'] !== ''
+        ? [(string)$query['tenantId']]
+        : array_column(db()->query("SELECT DISTINCT tenant_id FROM users WHERE tenant_id IS NOT NULL")->fetchAll(), 'tenant_id');
+    foreach ($tenantIds as $tenantId) refresh_waitlisted_learners((string)$tenantId);
     $rows = scoped_user_rows($user, $query);
     $names = sup_names_for($rows);
     return ['users' => array_map(fn($u)=>admin_user_map($u, $names), $rows)];
@@ -803,6 +861,230 @@ function r_admin_analytics(array $user, array $body, array $params, ?string $tok
 
 /* Progress report: how each learner uses the system, their level, ranked by
    how much of the programme they have covered (super/tenant admin/supervisor). */
+function create_notification(string $userId, array $data): void {
+    $pdo = db();
+    $pdo->prepare('INSERT INTO notifications (id,user_id,type,title,body,conversation_id,student_id,submission_id,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+        ->execute([uid('ntf'), $userId, $data['type'], $data['title'], $data['body'],
+            $data['conversationId'] ?? null, $data['studentId'] ?? null,
+            $data['submissionId'] ?? null, now_dt()]);
+}
+function create_submission_notification(array $user, array $submission): void {
+    if (!in_array($user['role'] ?? '', ['student','member'], true) || empty($user['supervisor_id'])) return;
+    $st = db()->prepare("SELECT id FROM users WHERE id=? AND role='supervisor' AND tenant_id=? LIMIT 1");
+    $st->execute([$user['supervisor_id'], $user['tenant_id']]);
+    $supervisorId = $st->fetchColumn();
+    if (!$supervisorId) return;
+    create_notification((string)$supervisorId, [
+        'type'=>'submission', 'title'=>'New student submission',
+        'body'=>$user['full_name'] . ' submitted ' . str_replace('_', ' ', (string)$submission['type']),
+        'studentId'=>$user['id'], 'submissionId'=>$submission['id'],
+    ]);
+}
+function create_completion_notification(array $user): void {
+    if (!in_array($user['role'] ?? '', ['student','member'], true) || empty($user['supervisor_id'])) return;
+    $pdo = db();
+    $st = $pdo->prepare("SELECT id FROM users WHERE id=? AND role='supervisor' AND tenant_id=? LIMIT 1");
+    $st->execute([$user['supervisor_id'], $user['tenant_id']]);
+    $supervisorId = $st->fetchColumn();
+    if (!$supervisorId) return;
+    $st = $pdo->prepare("SELECT 1 FROM notifications WHERE user_id=? AND type='completion' AND student_id=? LIMIT 1");
+    $st->execute([$supervisorId, $user['id']]);
+    if ($st->fetchColumn()) return;
+    create_notification((string)$supervisorId, [
+        'type'=>'completion', 'title'=>'Student completed the programme',
+        'body'=>$user['full_name'] . ' has completed every module and earned the general certificate.',
+        'studentId'=>$user['id'],
+    ]);
+}
+
+function can_message_user(array $sender, ?array $recipient): bool {
+    if (!$recipient || $recipient['id'] === $sender['id'] ||
+        (string)($recipient['tenant_id'] ?? '') !== (string)($sender['tenant_id'] ?? '') ||
+        (int)($recipient['suspended'] ?? 0) === 1) return false;
+    $role = (string)$sender['role'];
+    $toRole = (string)$recipient['role'];
+    if ($role === 'tenant_admin') return in_array($toRole, ['student','member','teacher','supervisor'], true);
+    if ($role === 'supervisor') return $toRole === 'tenant_admin' ||
+        (in_array($toRole, ['student','member','teacher'], true) &&
+            (string)($recipient['supervisor_id'] ?? '') === (string)$sender['id']);
+    if (in_array($role, ['student','member','teacher'], true)) return $toRole === 'tenant_admin' ||
+        ($toRole === 'supervisor' && (string)$recipient['id'] === (string)($sender['supervisor_id'] ?? ''));
+    return false;
+}
+function message_recipients(array $user): array {
+    $pdo = db();
+    if ($user['role'] === 'tenant_admin') {
+        $st = $pdo->prepare("SELECT id,full_name,role FROM users WHERE tenant_id=? AND id<>? AND suspended=0 AND role IN ('student','member','teacher','supervisor') ORDER BY full_name");
+        $st->execute([$user['tenant_id'], $user['id']]);
+    } elseif ($user['role'] === 'supervisor') {
+        $st = $pdo->prepare("SELECT id,full_name,role FROM users WHERE tenant_id=? AND id<>? AND suspended=0 AND (role='tenant_admin' OR (role IN ('student','member','teacher') AND supervisor_id=?)) ORDER BY full_name");
+        $st->execute([$user['tenant_id'], $user['id'], $user['id']]);
+    } else {
+        $st = $pdo->prepare("SELECT id,full_name,role FROM users WHERE tenant_id=? AND id<>? AND suspended=0 AND (role='tenant_admin' OR (role='supervisor' AND id=?)) ORDER BY full_name");
+        $st->execute([$user['tenant_id'], $user['id'], $user['supervisor_id'] ?? '']);
+    }
+    return array_map(fn($u) => ['id'=>$u['id'], 'fullName'=>$u['full_name'], 'role'=>$u['role']], $st->fetchAll());
+}
+function message_notification(string $recipientId, array $sender, string $conversationId, string $body): void {
+    create_notification($recipientId, [
+        'type'=>'message', 'title'=>'New message from ' . $sender['full_name'],
+        'body'=>mb_strlen($body) > 160 ? mb_substr($body, 0, 157) . '…' : $body,
+        'conversationId'=>$conversationId,
+    ]);
+}
+function conversation_for_users(array $user, array $recipient): array {
+    $participants = [(string)$user['id'], (string)$recipient['id']];
+    sort($participants, SORT_STRING);
+    $json = jenc($participants);
+    $key = hash('sha256', implode('|', $participants));
+    $st = db()->prepare('SELECT * FROM conversations WHERE tenant_id=? AND participant_key=? LIMIT 1');
+    $st->execute([$user['tenant_id'], $key]);
+    $conversation = $st->fetch();
+    if ($conversation) return $conversation;
+    $id = uid('cnv');
+    $now = now_dt();
+    db()->prepare('INSERT IGNORE INTO conversations (id,tenant_id,participant_key,participant_ids_json,created_at,updated_at) VALUES (?,?,?,?,?,?)')
+        ->execute([$id, $user['tenant_id'], $key, $json, $now, $now]);
+    $st->execute([$user['tenant_id'], $key]);
+    $conversation = $st->fetch();
+    need((bool)$conversation, 'Could not create conversation', 500);
+    return $conversation;
+}
+function require_conversation(array $user, string $id): array {
+    $st = db()->prepare('SELECT * FROM conversations WHERE id=? AND tenant_id=? LIMIT 1');
+    $st->execute([$id, $user['tenant_id']]);
+    $conversation = $st->fetch();
+    $participants = $conversation ? jdec($conversation['participant_ids_json'], []) : [];
+    need($conversation && in_array((string)$user['id'], $participants, true), 'Conversation not found', 404);
+    return $conversation;
+}
+
+function r_messages_list(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['tenant_admin','supervisor','student','member','teacher']);
+    $pdo = db();
+    $st = $pdo->prepare('SELECT * FROM conversations WHERE tenant_id=? ORDER BY updated_at DESC');
+    $st->execute([$user['tenant_id']]);
+    $conversations = [];
+    foreach ($st->fetchAll() as $conversation) {
+        $participants = jdec($conversation['participant_ids_json'], []);
+        if (!in_array((string)$user['id'], $participants, true)) continue;
+        $peerId = (string)array_values(array_filter($participants, fn($id) => (string)$id !== (string)$user['id']))[0];
+        $peerSt = $pdo->prepare('SELECT id,full_name,role FROM users WHERE id=? LIMIT 1');
+        $peerSt->execute([$peerId]);
+        $peer = $peerSt->fetch();
+        if (!$peer) continue;
+        $msgSt = $pdo->prepare('SELECT id,sender_id,body,created_at,read_at FROM conversation_messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT 1');
+        $msgSt->execute([$conversation['id']]);
+        $latest = $msgSt->fetch();
+        $countSt = $pdo->prepare('SELECT COUNT(*) FROM conversation_messages WHERE conversation_id=? AND sender_id<>? AND read_at IS NULL');
+        $countSt->execute([$conversation['id'], $user['id']]);
+        $conversations[] = [
+            'id'=>$conversation['id'], 'participant'=>['id'=>$peer['id'], 'fullName'=>$peer['full_name'], 'role'=>$peer['role']],
+            'latestMessage'=>$latest ? ['body'=>$latest['body'], 'createdAt'=>iso($latest['created_at']), 'senderId'=>$latest['sender_id']] : null,
+            'unread'=>(int)$countSt->fetchColumn(), 'updatedAt'=>iso($conversation['updated_at']),
+        ];
+    }
+    return ['conversations'=>$conversations, 'recipients'=>message_recipients($user)];
+}
+function r_messages_send(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['tenant_admin','supervisor','student','member','teacher']);
+    $text = trim((string)($body['body'] ?? ''));
+    need($text !== '' && mb_strlen($text) <= 5000, 'Message must be between 1 and 5000 characters');
+    $ids = $body['recipientIds'] ?? [];
+    need(is_array($ids), 'Choose one or more recipients');
+    $ids = array_values(array_unique(array_map('strval', $ids)));
+    need(count($ids) >= 1 && count($ids) <= 500, 'Choose between 1 and 500 recipients');
+    $pdo = db();
+    $recipients = [];
+    $st = $pdo->prepare('SELECT * FROM users WHERE id=? LIMIT 1');
+    foreach ($ids as $id) {
+        $st->execute([$id]);
+        $recipient = $st->fetch();
+        need(can_message_user($user, $recipient), 'One or more recipients are not permitted', 403);
+        $recipients[] = $recipient;
+    }
+    $pdo->beginTransaction();
+    try {
+        foreach ($recipients as $recipient) {
+            $conversation = conversation_for_users($user, $recipient);
+            $messageId = uid('msg');
+            $now = now_dt();
+            $pdo->prepare('INSERT INTO conversation_messages (id,conversation_id,sender_id,body,created_at) VALUES (?,?,?,?,?)')
+                ->execute([$messageId, $conversation['id'], $user['id'], $text, $now]);
+            $pdo->prepare('UPDATE conversations SET updated_at=? WHERE id=?')->execute([$now, $conversation['id']]);
+            message_notification((string)$recipient['id'], $user, (string)$conversation['id'], $text);
+        }
+        $pdo->commit();
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        throw $e;
+    }
+    return ['sent'=>count($recipients)];
+}
+function r_messages_thread_get(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['tenant_admin','supervisor','student','member','teacher']);
+    $conversation = require_conversation($user, (string)$params['id']);
+    $pdo = db();
+    $now = now_dt();
+    $pdo->prepare('UPDATE conversation_messages SET read_at=? WHERE conversation_id=? AND sender_id<>? AND read_at IS NULL')
+        ->execute([$now, $conversation['id'], $user['id']]);
+    $pdo->prepare('UPDATE notifications SET read_at=? WHERE user_id=? AND conversation_id=? AND read_at IS NULL')
+        ->execute([$now, $user['id'], $conversation['id']]);
+    $participants = jdec($conversation['participant_ids_json'], []);
+    $people = [];
+    $st = $pdo->prepare('SELECT id,full_name,role FROM users WHERE id=? LIMIT 1');
+    foreach ($participants as $id) {
+        $st->execute([$id]);
+        $person = $st->fetch();
+        if ($person) $people[] = ['id'=>$person['id'], 'fullName'=>$person['full_name'], 'role'=>$person['role']];
+    }
+    $st = $pdo->prepare('SELECT id,sender_id,body,created_at,read_at FROM conversation_messages WHERE conversation_id=? ORDER BY created_at ASC');
+    $st->execute([$conversation['id']]);
+    $messages = array_map(fn($m) => ['id'=>$m['id'], 'senderId'=>$m['sender_id'], 'body'=>$m['body'],
+        'createdAt'=>iso($m['created_at']), 'readAt'=>iso($m['read_at'])], $st->fetchAll());
+    return ['conversation'=>['id'=>$conversation['id'], 'participants'=>$people], 'messages'=>$messages];
+}
+function r_messages_reply(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['tenant_admin','supervisor','student','member','teacher']);
+    $conversation = require_conversation($user, (string)$params['id']);
+    $participants = jdec($conversation['participant_ids_json'], []);
+    $peerId = (string)array_values(array_filter($participants, fn($id) => (string)$id !== (string)$user['id']))[0];
+    $st = db()->prepare('SELECT * FROM users WHERE id=? LIMIT 1');
+    $st->execute([$peerId]);
+    need(can_message_user($user, $st->fetch()), 'Not permitted to reply in this conversation', 403);
+    $text = trim((string)($body['body'] ?? ''));
+    need($text !== '' && mb_strlen($text) <= 5000, 'Message must be between 1 and 5000 characters');
+    $pdo = db();
+    $now = now_dt();
+    $id = uid('msg');
+    $pdo->prepare('INSERT INTO conversation_messages (id,conversation_id,sender_id,body,created_at) VALUES (?,?,?,?,?)')
+        ->execute([$id, $conversation['id'], $user['id'], $text, $now]);
+    $pdo->prepare('UPDATE conversations SET updated_at=? WHERE id=?')->execute([$now, $conversation['id']]);
+    message_notification($peerId, $user, (string)$conversation['id'], $text);
+    return ['message'=>['id'=>$id, 'senderId'=>$user['id'], 'body'=>$text, 'createdAt'=>iso($now), 'readAt'=>null]];
+}
+function r_notifications_list(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['tenant_admin','supervisor','student','member','teacher']);
+    $st = db()->prepare('SELECT id,type,title,body,conversation_id,student_id,submission_id,read_at,created_at FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 100');
+    $st->execute([$user['id']]);
+    $notifications = array_map(fn($n) => [
+        'id'=>$n['id'], 'type'=>$n['type'], 'title'=>$n['title'], 'body'=>$n['body'],
+        'conversationId'=>$n['conversation_id'], 'studentId'=>$n['student_id'],
+        'submissionId'=>$n['submission_id'], 'readAt'=>iso($n['read_at']), 'createdAt'=>iso($n['created_at']),
+    ], $st->fetchAll());
+    return ['notifications'=>$notifications, 'unread'=>count(array_filter($notifications, fn($n) => !$n['readAt']))];
+}
+function r_notification_read(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['tenant_admin','supervisor','student','member','teacher']);
+    $pdo = db();
+    $st = $pdo->prepare('SELECT id FROM notifications WHERE id=? AND user_id=? LIMIT 1');
+    $st->execute([$params['id'], $user['id']]);
+    need((bool)$st->fetchColumn(), 'Notification not found', 404);
+    $pdo->prepare('UPDATE notifications SET read_at=COALESCE(read_at,?) WHERE id=? AND user_id=?')
+        ->execute([now_dt(), $params['id'], $user['id']]);
+    return [];
+}
+
 function r_reports_students(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin','supervisor']);
     $rows = scoped_user_rows($user, $query);
@@ -899,6 +1181,88 @@ function r_reports_students(array $user, array $body, array $params, ?string $to
         'finished'=>count(array_filter($students, fn($s)=>$s['moduleCount'] > 0 && $s['modulesCompleted'] === $s['moduleCount'])),
         'started'=>count(array_filter($students, fn($s)=>$s['submissions'] > 0)),
         'notStarted'=>count(array_filter($students, fn($s)=>$s['submissions'] === 0))];
+}
+function r_reports_student_roster(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super','tenant_admin','supervisor']);
+    $role = $user['role'] ?? '';
+    $tenantId = trim((string)($query['tenantId'] ?? ''));
+    $supervisorId = trim((string)($query['supervisorId'] ?? ''));
+    $supervisors = [];
+    if ($role === 'supervisor') {
+        need($supervisorId === '' || $supervisorId === (string)$user['id'], 'Not permitted', 403);
+        $st = db()->prepare("SELECT id, full_name, tenant_id FROM users WHERE role='supervisor' AND id=?");
+        $st->execute([$user['id']]);
+    } elseif ($role === 'tenant_admin') {
+        $st = db()->prepare("SELECT id, full_name, tenant_id FROM users WHERE role='supervisor' AND tenant_id=?");
+        $st->execute([$user['tenant_id']]);
+    } elseif ($tenantId !== '') {
+        $st = db()->prepare("SELECT id, full_name, tenant_id FROM users WHERE role='supervisor' AND tenant_id=?");
+        $st->execute([$tenantId]);
+    } else {
+        $st = db()->query("SELECT id, full_name, tenant_id FROM users WHERE role='supervisor'");
+    }
+    $supervisors = $st->fetchAll();
+    $supervisorById = [];
+    foreach ($supervisors as $s) $supervisorById[(string)$s['id']] = $s;
+    if ($supervisorId !== '') need(isset($supervisorById[$supervisorId]), 'Supervisor not found in this account', 404);
+
+    $rows = array_values(array_filter(scoped_user_rows($user, $query), function ($u) use ($supervisorId) {
+        return in_array($u['role'], ['student','member'], true) &&
+            ($supervisorId === '' || (string)($u['supervisor_id'] ?? '') === $supervisorId);
+    }));
+    $tenantNames = [];
+    foreach (db()->query('SELECT id, name FROM tenants')->fetchAll() as $t) $tenantNames[(string)$t['id']] = $t['name'];
+    $counts = [];
+    foreach ($supervisors as $s) $counts[(string)$s['id']] = 0;
+    foreach (scoped_user_rows($user, $query) as $u) {
+        if (in_array($u['role'], ['student','member'], true) && isset($counts[(string)($u['supervisor_id'] ?? '')])) {
+            $counts[(string)$u['supervisor_id']]++;
+        }
+    }
+    usort($rows, fn($a, $b) => strcasecmp((string)$a['full_name'], (string)$b['full_name']) ?: strcmp((string)$a['id'], (string)$b['id']));
+    $students = array_map(function ($u) use ($supervisorById, $tenantNames) {
+        $sid = (string)($u['supervisor_id'] ?? '');
+        $sup = $supervisorById[$sid] ?? null;
+        return ['id'=>$u['id'], 'fullName'=>$u['full_name'], 'studentNumber'=>$u['student_number'] ?: null,
+            'className'=>$u['class_name'] ?: null, 'tenantId'=>$u['tenant_id'] ?: null,
+            'tenantName'=>$tenantNames[(string)$u['tenant_id']] ?? null,
+            'supervisorId'=>$u['supervisor_id'] ?: null, 'supervisorName'=>$sup['full_name'] ?? null,
+            'supervisorWaitlisted'=>(bool)($u['supervisor_waitlisted'] ?? false), 'suspended'=>(bool)$u['suspended']];
+    }, $rows);
+    usort($supervisors, fn($a, $b) => strcasecmp((string)$a['full_name'], (string)$b['full_name']) ?: strcmp((string)$a['id'], (string)$b['id']));
+    return ['students'=>$students, 'count'=>count($students), 'supervisors'=>array_map(function ($s) use ($tenantNames, $counts) {
+        return ['id'=>$s['id'], 'fullName'=>$s['full_name'], 'tenantId'=>$s['tenant_id'] ?: null,
+            'tenantName'=>$tenantNames[(string)$s['tenant_id']] ?? null, 'studentCount'=>$counts[(string)$s['id']] ?? 0];
+    }, $supervisors)];
+}
+function r_reports_student_detail(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super','tenant_admin','supervisor']);
+    $studentId = trim((string)($query['studentId'] ?? ''));
+    need($studentId !== '', 'studentId required');
+    $target = null;
+    foreach (scoped_user_rows($user, $query) as $row) {
+        if ((string)$row['id'] === $studentId &&
+            in_array($row['role'], ['student','teacher','member'], true)) {
+            $target = $row;
+            break;
+        }
+    }
+    need($target, 'Student not found', 404);
+    $st = db()->prepare('SELECT * FROM submissions WHERE user_id=? ORDER BY created_at DESC');
+    $st->execute([$studentId]);
+    $submissions = [];
+    foreach ($st->fetchAll() as $row) {
+        $sub = n_sub($row);
+        $detail = describe_sub($sub);
+        $submissions[] = ['id'=>$sub['id'], 'type'=>$sub['type'], 'createdAt'=>$sub['createdAt'],
+            'text'=>$sub['text'] ?? '', 'score'=>$sub['score'], 'total'=>$sub['total'],
+            'flagged'=>$sub['flagged'], 'similarity'=>$sub['similarity'],
+            'keywordScore'=>$sub['keywordScore'], 'keywordsUsed'=>$sub['keywordsUsed'],
+            'keywordsTotal'=>$sub['keywordsTotal'], 'keywordsMissing'=>$sub['keywordsMissing'],
+            'label'=>$sub['label'], 'chapter'=>$detail['chapter'], 'book'=>$detail['book'],
+            'module'=>$detail['module']];
+    }
+    return ['submissions'=>$submissions, 'count'=>count($submissions)];
 }
 function r_reports_module_performers(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin','supervisor']);
@@ -1037,16 +1401,17 @@ function r_admin_overview(array $user, array $body, array $params, ?string $toke
         $st = $pdo->prepare("SELECT * FROM users WHERE tenant_id=? AND role='supervisor' ORDER BY created_at DESC");
         $st->execute([$tid]);
         foreach ($st->fetchAll() as $s) {
-            $st2 = $pdo->prepare('SELECT COUNT(*) FROM users WHERE supervisor_id=?'); $st2->execute([$s['id']]);
+            $st2 = $pdo->prepare("SELECT COUNT(*) FROM users WHERE supervisor_id=? AND role IN ('student','member')"); $st2->execute([$s['id']]);
             $sups[] = ['id'=>$s['id'],'fullName'=>$s['full_name'],'email'=>$s['email'],
-                'code'=>$s['supervisor_code'],'users'=>(int)$st2->fetchColumn(),'limit'=>100];
+                'code'=>$s['supervisor_code'],'suspended'=>(bool)$s['suspended'],
+                'users'=>(int)$st2->fetchColumn(),'limit'=>100];
         }
     }
     /* the quota the console shows: an object for supervisors (max/used), nothing
        for a tenant admin — same shape the Node build and /users return */
     $used = 0;
     if ($user['role'] === 'supervisor') {
-        $st = $pdo->prepare('SELECT COUNT(*) FROM users WHERE supervisor_id=?'); $st->execute([$user['id']]);
+        $st = $pdo->prepare("SELECT COUNT(*) FROM users WHERE supervisor_id=? AND role IN ('student','member')"); $st->execute([$user['id']]);
         $used = (int)$st->fetchColumn();
     }
     return ['branding'=>tenant_branding($tenant),'portal'=>$por ? portal_public($por) : null,
@@ -1055,11 +1420,21 @@ function r_admin_overview(array $user, array $body, array $params, ?string $toke
 }
 function r_users_list(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin','supervisor']);
+    if ($user['role'] === 'tenant_admin') {
+        refresh_waitlisted_learners((string)$user['tenant_id']);
+    } elseif ($user['role'] === 'super') {
+        $tenantIds = isset($query['tenantId']) && $query['tenantId'] !== ''
+            ? [(string)$query['tenantId']]
+            : array_column(db()->query("SELECT DISTINCT tenant_id FROM users WHERE tenant_id IS NOT NULL")->fetchAll(), 'tenant_id');
+        foreach ($tenantIds as $tenantId) refresh_waitlisted_learners((string)$tenantId);
+    }
     $rows = scoped_user_rows($user, $query);
     $names = sup_names_for($rows);
     $out = array_map(fn($u)=>admin_user_map($u, $names), $rows);
     if ($user['role'] === 'supervisor') {
-        return ['users'=>$out,'limit'=>['max'=>100,'used'=>count($rows)]];
+        $st = db()->prepare("SELECT COUNT(*) FROM users WHERE supervisor_id=? AND role IN ('student','member')");
+        $st->execute([$user['id']]);
+        return ['users'=>$out,'limit'=>['max'=>100,'used'=>(int)$st->fetchColumn()]];
     }
     return ['users' => $out, 'limit' => null];
 }
@@ -1097,19 +1472,44 @@ function build_user_record(array $acting, array $body): array {
         $st = db()->prepare('SELECT COUNT(*) FROM users WHERE student_number=? AND tenant_id=?'); $st->execute([$sn, $tenantId]);
         need((int)$st->fetchColumn() === 0, 'Student number already exists', 409);
     }
-    $supId = $body['supervisorId'] ?? $body['supervisor_id'] ?? null;
-    if ($role === 'supervisor') {
-        $st = db()->prepare('SELECT COUNT(*) FROM users WHERE supervisor_id=?'); $st->execute([$acting['id']]);
-        need((int)$st->fetchColumn() < 100, 'Supervisor limit reached', 409);
-        $supId = $acting['id'];
-    }
     $pw = (string)($body['password'] ?? ''); need($pw !== '', 'password required');
-    $code = null;
-    if ($reqRole === 'supervisor') { $code = 'SUP-' . rand(1000, 9999); $supId = null; }
-    $id = uid('usr');
-    db()->prepare('INSERT INTO users (id,tenant_id,role,supervisor_id,supervisor_code,full_name,email,student_number,class_name,photo,password_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-        ->execute([$id, $tenantId, $reqRole, $supId, $code, $fn, $email ?: null, $sn ?: null,
-            $body['className'] ?? $body['class_name'] ?? null, $body['photo'] ?? null, hash_pw($pw), now_dt()]);
+    $supId = $body['supervisorId'] ?? $body['supervisor_id'] ?? null;
+    $waitlisted = 0; $code = null; $id = uid('usr'); $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('SELECT id FROM tenants WHERE id=? FOR UPDATE')->execute([$tenantId]);
+        assign_waitlisted_learners($tenantId);
+        if ($role === 'supervisor') {
+            $st = $pdo->prepare("SELECT COUNT(*) FROM users WHERE supervisor_id=? AND role IN ('student','member')");
+            $st->execute([$acting['id']]);
+            need((int)$st->fetchColumn() < 100, 'Supervisor limit reached', 409);
+            $supId = $acting['id'];
+        } elseif (is_learner_role($reqRole)) {
+            if ($supId) {
+                $st = $pdo->prepare("SELECT id FROM users WHERE id=? AND tenant_id=? AND role='supervisor' AND suspended=0");
+                $st->execute([$supId, $tenantId]);
+                need((bool)$st->fetchColumn(), 'Choose a supervisor from this account', 400);
+                $st = $pdo->prepare("SELECT COUNT(*) FROM users WHERE supervisor_id=? AND role IN ('student','member')");
+                $st->execute([$supId]);
+                need((int)$st->fetchColumn() < 100, 'That supervisor already has 100 students', 409);
+            } else {
+                $supId = null;
+                foreach (supervisor_learner_counts($tenantId, true) as $candidate => $count) {
+                    if ($count < 100) { $supId = $candidate; break; }
+                }
+                if ($supId === null) $waitlisted = 1;
+            }
+        }
+        if ($reqRole === 'supervisor') { $code = 'SUP-' . rand(1000, 9999); $supId = null; }
+        $pdo->prepare('INSERT INTO users (id,tenant_id,role,supervisor_id,supervisor_waitlisted,supervisor_code,full_name,email,student_number,class_name,photo,password_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+            ->execute([$id, $tenantId, $reqRole, $supId, $waitlisted, $code, $fn, $email ?: null, $sn ?: null,
+                $body['className'] ?? $body['class_name'] ?? null, $body['photo'] ?? null, hash_pw($pw), now_dt()]);
+        if ($reqRole === 'supervisor') assign_waitlisted_learners($tenantId);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
     $st = db()->prepare('SELECT * FROM users WHERE id=?'); $st->execute([$id]);
     return $st->fetch();
 }
@@ -1154,31 +1554,78 @@ function user_can_manage(array $user, array $row): bool {
 function r_users_update(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin','supervisor']);
     $id = $params['id'] ?? $body['id'] ?? null; need($id, 'id required');
-    $st = db()->prepare('SELECT * FROM users WHERE id=?'); $st->execute([$id]); $row = $st->fetch();
+    $pdo = db(); $st = $pdo->prepare('SELECT * FROM users WHERE id=?'); $st->execute([$id]); $row = $st->fetch();
     need($row, 'User not found', 404);
     if (($row['role'] ?? '') === 'super') { require_role($user, ['super']); }
     need(user_can_manage($user, $row), 'Not permitted', 403);
-    $set = []; $args = [];
-    if (isset($body['fullName']) || isset($body['full_name'])) { $set[] = 'full_name=?'; $args[] = $body['fullName'] ?? $body['full_name']; }
-    if (array_key_exists('className', $body) || array_key_exists('class_name', $body)) { $set[] = 'class_name=?'; $args[] = $body['className'] ?? $body['class_name']; }
-    if (array_key_exists('email', $body)) { $set[] = 'email=?'; $args[] = $body['email'] ?: null; }
-    if (array_key_exists('studentNumber', $body) || array_key_exists('student_number', $body)) { $set[] = 'student_number=?'; $args[] = $body['studentNumber'] ?? $body['student_number']; }
-    if (array_key_exists('photo', $body)) { $set[] = 'photo=?'; $args[] = $body['photo']; }
-    if (!empty($body['password'])) { $set[] = 'password_hash=?'; $args[] = hash_pw((string)$body['password']); }
-    if (isset($body['supervisorId']) || isset($body['supervisor_id'])) { $set[] = 'supervisor_id=?'; $args[] = $body['supervisorId'] ?? $body['supervisor_id']; }
-    $nr = $body['role'] ?? $body['newRole'] ?? null;
-    if ($nr !== null) {
-        need(in_array($user['role'], ['super','tenant_admin'], true), 'Not permitted', 403);
-        need($nr !== 'super', 'Cannot assign super', 403);
-        $set[] = 'role=?'; $args[] = $nr;
+    $tenantId = (string)($row['tenant_id'] ?? '');
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('SELECT id FROM tenants WHERE id=? FOR UPDATE')->execute([$tenantId]);
+        $st = $pdo->prepare('SELECT * FROM users WHERE id=? FOR UPDATE'); $st->execute([$id]); $row = $st->fetch();
+        $set = []; $args = [];
+        if (isset($body['fullName']) || isset($body['full_name'])) { $set[] = 'full_name=?'; $args[] = $body['fullName'] ?? $body['full_name']; }
+        if (array_key_exists('className', $body) || array_key_exists('class_name', $body)) { $set[] = 'class_name=?'; $args[] = $body['className'] ?? $body['class_name']; }
+        if (array_key_exists('email', $body)) { $set[] = 'email=?'; $args[] = $body['email'] ?: null; }
+        if (array_key_exists('studentNumber', $body) || array_key_exists('student_number', $body)) { $set[] = 'student_number=?'; $args[] = $body['studentNumber'] ?? $body['student_number']; }
+        if (array_key_exists('photo', $body)) { $set[] = 'photo=?'; $args[] = $body['photo']; }
+        if (!empty($body['password'])) { $set[] = 'password_hash=?'; $args[] = hash_pw((string)$body['password']); }
+        $nr = $body['role'] ?? $body['newRole'] ?? null;
+        if ($nr !== null) {
+            need(in_array($user['role'], ['super','tenant_admin'], true), 'Not permitted', 403);
+            need($nr !== 'super', 'Cannot assign super', 403);
+            $set[] = 'role=?'; $args[] = $nr;
+        }
+        $newRole = $nr ?? $row['role'];
+        $hasSupervisor = array_key_exists('supervisorId', $body) || array_key_exists('supervisor_id', $body);
+        $newSupervisorId = $hasSupervisor ? ($body['supervisorId'] ?? $body['supervisor_id'] ?? null) : $row['supervisor_id'];
+        $waitlisted = (int)($row['supervisor_waitlisted'] ?? 0);
+        if ($newRole === 'supervisor') {
+            $newSupervisorId = null;
+            $waitlisted = 0;
+            $set[] = 'supervisor_id=NULL';
+        } elseif ($hasSupervisor) {
+            need(in_array($user['role'], ['super','tenant_admin'], true), 'Not permitted', 403);
+            if (is_learner_role((string)$newRole) && $newSupervisorId) {
+                $st = $pdo->prepare("SELECT id FROM users WHERE id=? AND tenant_id=? AND role='supervisor' AND suspended=0");
+                $st->execute([$newSupervisorId, $tenantId]);
+                need((bool)$st->fetchColumn(), 'Choose a supervisor from this account', 400);
+                $counts = supervisor_learner_counts($tenantId);
+                $count = $counts[$newSupervisorId] ?? 0;
+                if ($newSupervisorId !== $row['supervisor_id'] || !is_learner_role((string)$row['role'])) {
+                    need($count < 100, 'That supervisor already has 100 students', 409);
+                }
+            }
+            $newSupervisorId = $newSupervisorId ?: null;
+            $waitlisted = is_learner_role((string)$newRole) && !$newSupervisorId ? 1 : 0;
+            $set[] = 'supervisor_id=?'; $args[] = $newSupervisorId;
+        } elseif (is_learner_role((string)$newRole)) {
+            $waitlisted = $newSupervisorId ? 0 : 1;
+            if ($newSupervisorId && !is_learner_role((string)$row['role'])) {
+                $counts = supervisor_learner_counts($tenantId);
+                if (($counts[$newSupervisorId] ?? 0) >= 100) {
+                    $newSupervisorId = null; $waitlisted = 1;
+                    $set[] = 'supervisor_id=NULL';
+                }
+            }
+        } else {
+            $waitlisted = 0;
+        }
+        $set[] = 'supervisor_waitlisted=?'; $args[] = $waitlisted;
+        $susp = $body['suspended'] ?? null;
+        if ($susp !== null) {
+            need($user['role'] !== 'supervisor', 'Not permitted', 403);
+            $set[] = 'suspended=?'; $args[] = (int)(bool)$susp;
+        }
+        $args[] = $id;
+        $pdo->prepare('UPDATE users SET ' . implode(',', $set) . ' WHERE id=?')->execute($args);
+        assign_waitlisted_learners($tenantId);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
     }
-    $susp = $body['suspended'] ?? null;
-    if ($susp !== null) {
-        need($user['role'] !== 'supervisor', 'Not permitted', 403);
-        $set[] = 'suspended=?'; $args[] = (int)(bool)$susp;
-    }
-    if (count($set)) { $args[] = $id; db()->prepare('UPDATE users SET ' . implode(',', $set) . ' WHERE id=?')->execute($args); }
-    $st = db()->prepare('SELECT * FROM users WHERE id=?'); $st->execute([$id]);
+    $st = $pdo->prepare('SELECT * FROM users WHERE id=?'); $st->execute([$id]);
     $r2 = $st->fetch(); return admin_user_map($r2, sup_names_for([$r2]));
 }
 function r_users_delete(array $user, array $body, array $params, ?string $token, array $query): array {
@@ -1189,8 +1636,20 @@ function r_users_delete(array $user, array $body, array $params, ?string $token,
     need($row, 'User not found', 404);
     need(($row['role'] ?? '') !== 'super', 'Cannot delete super', 403);
     need(user_can_manage($user, $row), 'Not permitted', 403);
-    db()->prepare('UPDATE users SET supervisor_id=NULL WHERE supervisor_id=?')->execute([$id]);
-    db()->prepare('DELETE FROM users WHERE id=?')->execute([$id]);
+    $pdo = db(); $tenantId = (string)($row['tenant_id'] ?? '');
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('SELECT id FROM tenants WHERE id=? FOR UPDATE')->execute([$tenantId]);
+        $pdo->prepare("UPDATE users SET supervisor_id=NULL,
+            supervisor_waitlisted=CASE WHEN role IN ('student','member') THEN 1 ELSE 0 END
+            WHERE supervisor_id=?")->execute([$id]);
+        $pdo->prepare('DELETE FROM users WHERE id=?')->execute([$id]);
+        assign_waitlisted_learners($tenantId);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
     return ['deleted' => true];
 }
 function r_admin_branding(array $user, array $body, array $params, ?string $token, array $query): array {

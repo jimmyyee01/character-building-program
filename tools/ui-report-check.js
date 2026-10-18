@@ -50,6 +50,9 @@ const unfinished = Object.assign({}, finished, {
 const html = vm.runInContext('progressTableHtml', ctx)([finished, unfinished]);
 const checks = [
   ['rank table built', html.indexOf('<table>') !== -1 && html.indexOf('</tbody></table>') !== -1],
+  ['all learners have a detail action and class/supervisor columns',
+    (html.match(/data-detail="/g) || []).length === 2 &&
+      html.indexOf('<th>Class</th>') !== -1 && html.indexOf('<th>Supervisor</th>') !== -1],
   ['ranked row 1 = finished learner', html.indexOf('<td><b>1</b></td>') !== -1],
   ['summary button only for finished learner',
     (html.match(/data-sum="/g) || []).length === 1 && html.indexOf('data-sum="usr_grad"') !== -1],
@@ -63,6 +66,16 @@ const checks = [
     html.indexOf('Recent work') !== -1 && html.indexOf('Book A') !== -1],
   ['summary shows supervisor/account/level meta', html.indexOf('Account: <b>Greenfield Academy</b>') !== -1]
 ];
+const detailHtml = vm.runInContext('progressStudentDetailHtml', ctx)(finished, [
+  { id: 'sub1', type: 'objectives', createdAt: new Date().toISOString(), score: 4, total: 5,
+    keywordScore: 80, keywordsMissing: ['integrity'], text: 'A considered answer.', flagged: false },
+  { id: 'sub2', type: 'chapter_summary', createdAt: new Date().toISOString(), score: null,
+    total: null, keywordScore: null, keywordsMissing: [], text: 'A summary.', flagged: true, similarity: 92 }
+]);
+checks.push(['student detail includes indices and complete submission content',
+  detailHtml.indexOf('Individual indices') !== -1 && detailHtml.indexOf('impact indices') !== -1 &&
+    detailHtml.indexOf('Submissions (2)') !== -1 && detailHtml.indexOf('A considered answer.') !== -1 &&
+    detailHtml.indexOf('Missing: integrity') !== -1 && detailHtml.indexOf('92% similarity') !== -1]);
 const charts = vm.runInContext(
   'JSON.stringify([typeof chartBars([]), typeof chartDonut([{label:"x",value:0}]), chartProgress([{label:"M1",percent:40}]).indexOf("<svg") === -1, chartWeekly([], 8).length > 50])', ctx);
 checks.push(['chart helpers survive empty data', JSON.parse(charts)[0] === 'string' && JSON.parse(charts)[3] === true]);

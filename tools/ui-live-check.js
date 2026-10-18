@@ -147,6 +147,28 @@ function cleanSlice(s) {
   /* ------------------------------------------- student progress report ---- */
   const rep = await api('/reports/students', admin);
   check('report payload shape', rep.ok && Array.isArray(rep.students) && rep.students.length > 0);
+  const adminUsers = await api('/users', admin);
+  const waitlistedExample = (adminUsers.users || []).find(u => u.supervisorWaitlisted) ||
+    { id: 'waitlist-render-check', role: 'student', fullName: 'Waitlist Render Check',
+      studentNumber: 'WAITLIST-UI', supervisorWaitlisted: true };
+  vm.runInContext('ROLE = "tenant_admin"; usersCache = ' +
+    JSON.stringify([waitlistedExample]) + ';', adminCtx);
+  const usersTable = run(adminCtx, 'usersTableHtml');
+  check('users table identifies learners waiting for supervisor capacity',
+    usersTable.indexOf('Waiting list') !== -1);
+  const previousAdminState = vm.runInContext('({ME: ME, ROLE: ROLE, supOverview: supOverview})', adminCtx);
+  vm.runInContext('ME = {portal: {type: "schools"}}; ROLE = "tenant_admin"; ' +
+    'supOverview = {supervisors: [{id: "sup-full", fullName: "Full Supervisor", users: 100, limit: 100}, ' +
+    '{id: "sup-suspended", fullName: "Suspended Supervisor", users: 3, limit: 100, suspended: true}]};',
+    adminCtx);
+  const userForm = run(adminCtx, 'userFormHtml', [null]);
+  check('registration form explains automatic assignment and waitlisting',
+    userForm.indexOf('assign automatically') !== -1 && userForm.indexOf('joins the waitlist') !== -1);
+  check('registration form disables supervisors at capacity', /value="sup-full" disabled/.test(userForm));
+  check('registration form disables suspended supervisors', /value="sup-suspended" disabled/.test(userForm));
+  vm.runInContext('ME = ' + JSON.stringify(previousAdminState.ME) + '; ROLE = ' +
+    JSON.stringify(previousAdminState.ROLE) + '; supOverview = ' +
+    JSON.stringify(previousAdminState.supOverview) + ';', adminCtx);
   const table = run(adminCtx, 'progressTableHtml', [rep.students]);
   dirty('progress table', table);
   check('report table: one row per learner + expander only when finished',

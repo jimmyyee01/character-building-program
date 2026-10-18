@@ -1,5 +1,6 @@
 /* Tenant admin / supervisor console — served at /admin. */
 let ME = null, ROLE = null, VIEW = 'dashboard';
+let progressStudentCache = [];
 let supOverview = null, newSupCode = null, usersCache = [], certsCache = [];
 const booksState = { modules: [], moduleId: null, books: [], openBookId: null };
 const submState = { flagged: false, type: '', search: '' };
@@ -266,9 +267,13 @@ function userFormHtml(limit) {
   if (isAdmin() && supOverview && supOverview.supervisors && supOverview.supervisors.length &&
       !(ME.portal && ME.portal.type === 'organization')) {
     supRow = '<div><label>Assign to supervisor (optional)</label><select id="ufSup">' +
-      '<option value="">— none —</option>';
+      '<option value="">— assign automatically —</option>';
     supOverview.supervisors.forEach(function (s) {
-      supRow += '<option value="' + esc(s.id) + '">' + esc(s.fullName) + '</option>';
+      const used = Number(s.users) || 0, max = Number(s.limit) || 100;
+      const unavailable = s.suspended || used >= max;
+      const reason = s.suspended ? ' — suspended' : (used >= max ? ' — full' : '');
+      supRow += '<option value="' + esc(s.id) + '"' + (unavailable ? ' disabled' : '') + '>' +
+        esc(s.fullName) + ' (' + used + '/' + max + ')' + reason + '</option>';
     });
     supRow += '</select></div>';
   }
@@ -284,7 +289,10 @@ function userFormHtml(limit) {
     '</div><div class="row">' + supRow +
     '<div><label>Password (min 6 characters)</label><input type="password" id="ufPw" required minlength="6"></div>' +
     '<div class="fixed"><button type="submit">Create user</button></div>' +
-    '</div></form></div>';
+    '</div></form>' +
+    (isAdmin() ? '<p class="muted small">Students without a selected supervisor are assigned automatically. ' +
+      'Each supervisor can have up to 100 students; if all are full, the student joins the waitlist.</p>' : '') +
+    '</div>';
 }
 let bulkRows = [];
 let bulkResult = null;
@@ -455,6 +463,9 @@ function usersTableHtml() {
       : bar(u.progress) + ' <span class="small">' + esc(u.progress) + '%</span>';
     const status = u.suspended ? '<span class="badge off">Suspended</span>'
       : '<span class="badge ok">Active</span>';
+    const supervisor = u.supervisorName || u.supervisorId ? esc(u.supervisorName || 'Assigned')
+      : u.supervisorWaitlisted ? '<span class="badge off" title="No supervisor capacity is currently available">Waiting list</span>'
+        : '—';
     let acts = '<button type="button" class="ghost small" data-act="reset" data-id="' +
       esc(u.id) + '">Password</button> ';
     if (isAdmin()) {
@@ -465,7 +476,7 @@ function usersTableHtml() {
       esc(u.id) + '">Delete</button>';
     h += '<tr data-search="' + esc(searchText(u)) + '"><td>' + av + '<b>' + esc(u.fullName) + '</b>' + code + '</td>' +
       '<td>' + roleBadge(u.role) + '</td><td>' + det + '</td>' +
-      '<td>' + esc(u.className || '—') + '</td><td>' + esc(u.supervisorName || '—') + '</td>' +
+      '<td>' + esc(u.className || '—') + '</td><td>' + supervisor + '</td>' +
       '<td>' + prog + '</td><td>' + status + '</td>' +
       '<td style="white-space:nowrap">' + acts + '</td></tr>';
   });
@@ -1574,6 +1585,7 @@ async function renderProgress() {
     return;
   }
   const list = d.students || [];
+  progressStudentCache = list;
   const finished = function (s) { return s.moduleCount > 0 && s.modulesCompleted === s.moduleCount; };
   const byLevel = {};
   list.forEach(function (s) {
@@ -1603,6 +1615,14 @@ async function renderProgress() {
   const yearOptions = rankingYears.map(function (year) {
     return '<option value="' + year + '">' + year + '</option>';
   }).join('');
+  const supervisorOptions = ROLE === 'tenant_admin'
+    ? '<option value="">All supervisors</option>' + Array.from(new Set(list.map(function (s) {
+      return s.supervisorName || '';
+    }))).sort().map(function (name) {
+      return '<option value="' + (name ? esc(name) : '__unassigned__') + '">' +
+        esc(name || 'Unassigned') + '</option>';
+    }).join('')
+    : '';
   el.innerHTML = '<h2><span class="motto">Be True</span>Student progress</h2>' +
     '<div class="grid cols-4">' +
       statCard(d.count, 'Learners', 'blue') +
@@ -1642,6 +1662,8 @@ async function renderProgress() {
     '<div class="card"><div class="row" style="align-items:flex-end">' +
       '<div style="min-width:200px"><label>Search learners</label>' +
         '<input type="text" id="pgSearch" placeholder="Name, level, class…"></div>' +
+      (ROLE === 'tenant_admin' ? '<div style="min-width:190px"><label for="pgSupervisor">Supervisor</label>' +
+        '<select id="pgSupervisor">' + supervisorOptions + '</select></div>' : '') +
       '<div class="fixed" style="padding-bottom:10px"><h3 style="margin:0">Ranking ' +
         '<span class="badge info">' + list.length + '</span> ' +
         '<span class="badge lock" id="pgCount">' + list.length + ' shown</span></h3></div>' +
@@ -1651,17 +1673,36 @@ async function renderProgress() {
       '<button type="button" class="ghost" data-export="pdf">PDF</button>' +
       '<button type="button" class="ghost" data-export="excel">Excel</button>' +
       '<button type="button" class="ghost" data-export="word">Word</button></div>' +
-    '<p class="muted small">Ranked by how much of the programme each learner has covered. ' +
-      'A full summary can be opened for learners who finished every module.</p>' +
+    '<p class="muted small">Ranked by programme coverage. Open any learner for detailed submissions and individual impact indices.</p>' +
     '<div id="progressArea">' + progressTableHtml(list) + '</div></div>';
 
   const search = document.getElementById('pgSearch');
+  const supervisorFilter = document.getElementById('pgSupervisor');
   const table = el.querySelector('#progressArea table');
-  if (search && table) {
-    search.addEventListener('input', function () {
-      applyTableSearch(table, search, document.getElementById('pgCount'));
+  function filterProgressRows() {
+    if (!table) return;
+    const query = search ? search.value.trim().toLowerCase() : '';
+    const supervisor = supervisorFilter ? supervisorFilter.value : '';
+    let shown = 0;
+    table.querySelectorAll('tbody tr[data-search]').forEach(function (row) {
+      const matches = (!query || row.dataset.search.toLowerCase().indexOf(query) !== -1) &&
+        (!supervisor || (supervisor === '__unassigned__'
+          ? !row.dataset.supervisor : row.dataset.supervisor === supervisor));
+      row.style.display = matches ? '' : 'none';
+      if (matches) shown++;
     });
-    applyTableSearch(table, search, document.getElementById('pgCount'));
+    const count = document.getElementById('pgCount');
+    if (count) count.textContent = shown + ' shown';
+  }
+  if (search) search.addEventListener('input', filterProgressRows);
+  if (supervisorFilter) supervisorFilter.addEventListener('change', filterProgressRows);
+  filterProgressRows();
+  const progressArea = document.getElementById('progressArea');
+  if (progressArea) {
+    progressArea.addEventListener('click', function (event) {
+      const button = event.target.closest('button[data-detail]');
+      if (button) showProgressStudentDetail(button.dataset.detail);
+    });
   }
   const rankingView = document.getElementById('accountRankingView');
   const rankingMarks = document.getElementById('accountRankingMarks');
@@ -1824,18 +1865,20 @@ function accountPeriodRankingHtml(report, metric) {
 function progressTableHtml(list) {
   if (!list.length) return '<p class="muted">No learners yet.</p>';
   let h = '<div class="table-wrap"><table><thead><tr>' +
-    '<th>#</th><th>Learner</th><th>Level (module)</th><th>Covered</th>' +
-    '<th>Submissions</th><th>Certificates</th><th>Flagged</th><th>Last active</th><th>Summary</th>' +
+    '<th>#</th><th>Learner</th><th>Class</th><th>Supervisor</th><th>Level (module)</th><th>Covered</th>' +
+    '<th>Submissions</th><th>Certificates</th><th>Flagged</th><th>Last active</th><th>Details</th><th>Summary</th>' +
     '</tr></thead><tbody>';
   list.forEach(function (s, i) {
     const done = s.moduleCount > 0 && s.modulesCompleted === s.moduleCount;
     const ident = [s.email, s.studentNumber].filter(Boolean).map(esc).join(' · ');
     const level = s.level || {};
-    h += '<tr data-search="' + esc(searchText(s)) + '">' +
+    h += '<tr data-search="' + esc(searchText(s)) + '" data-supervisor="' + esc(s.supervisorName || '') + '">' +
       '<td><b>' + (i + 1) + '</b></td>' +
       '<td><b>' + esc(s.fullName || '—') + '</b>' +
         (ident ? '<div class="small muted">' + ident + '</div>' : '') +
-        (s.className ? '<div class="small muted">' + esc(s.className) + '</div>' : '') + '</td>' +
+        '</td>' +
+      '<td>' + esc(s.className || '—') + '</td>' +
+      '<td>' + esc(s.supervisorName || '—') + '</td>' +
       '<td class="small"><b>' + esc(level.title || '—') + '</b>' +
         '<div class="muted">' + esc(level.state || '') +
         (s.moduleCount ? ' · ' + s.modulesCompleted + '/' + s.moduleCount + ' modules' : '') + '</div></td>' +
@@ -1844,12 +1887,107 @@ function progressTableHtml(list) {
       '<td>' + (s.certificates || 0) + '</td>' +
       '<td>' + (s.flagged ? '<span class="badge off">' + s.flagged + '</span>' : '<span class="badge ok">0</span>') + '</td>' +
       '<td class="small">' + (s.lastActiveAt ? fmtDate(s.lastActiveAt) : '<span class="muted">never</span>') + '</td>' +
+      '<td><button type="button" class="small" data-detail="' + esc(s.id) + '">View details</button></td>' +
       '<td>' + (done
         ? '<button type="button" class="small" data-sum="' + esc(s.id) + '">Summary</button>'
         : '<span class="muted small">Not finished yet</span>') + '</td></tr>';
     if (done) h += summaryRowHtml(s);
   });
   return h + '</tbody></table></div>';
+}
+
+async function showProgressStudentDetail(studentId) {
+  const modal = document.getElementById('studentDetailModal');
+  const student = progressStudentCache.find(function (s) { return s.id === studentId; });
+  if (!modal || !student) return;
+  modal.innerHTML = '<div class="student-detail-overlay"><div class="student-detail-card card"><p class="muted">Loading student details…</p></div></div>';
+  modal.classList.remove('hidden');
+  try {
+    const data = await API.get('/reports/student-detail?studentId=' + encodeURIComponent(studentId));
+    modal.innerHTML = progressStudentDetailHtml(student, data.submissions || []);
+  } catch (e) {
+    modal.innerHTML = '<div class="student-detail-overlay" onclick="if(event.target===this) closeProgressStudentDetail()">' +
+      '<div class="student-detail-card card"><button type="button" class="sd-close" onclick="closeProgressStudentDetail()">&times;</button>' +
+      '<h3>Could not load student details</h3><p class="muted small">' + esc(msg(e)) + '</p></div></div>';
+  }
+}
+
+function closeProgressStudentDetail() {
+  const modal = document.getElementById('studentDetailModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function progressStudentDetailHtml(student, submissions) {
+  const scored = submissions.filter(function (s) { return s.score != null && s.total > 0; });
+  const objectives = scored.filter(function (s) { return s.type === 'objectives'; });
+  const keywordScores = submissions.map(function (s) { return s.keywordScore; })
+    .filter(function (value) { return value != null; });
+  const mean = function (values) {
+    return values.length ? Math.round(values.reduce(function (total, value) {
+      return total + Number(value);
+    }, 0) / values.length) : null;
+  };
+  const lastActive = submissions.length ? Date.parse(submissions[0].createdAt || '') : NaN;
+  const active = Number.isFinite(lastActive) && lastActive >= Date.now() - 14 * 86400000;
+  const completed = student.moduleCount > 0 && student.modulesCompleted === student.moduleCount;
+  const indices = [
+    { label: 'Involvement', percent: submissions.length ? 100 : 0, color: '#6d3fd1' },
+    { label: 'Completion', percent: completed ? 100 : 0, color: '#1f7a44' },
+    { label: 'Active (14 days)', percent: active ? 100 : 0, color: '#2f6fd0' },
+    { label: 'Key words', percent: mean(keywordScores) || 0, color: '#b45309' },
+    { label: 'Objectives', percent: mean(objectives.map(function (s) {
+      return 100 * Number(s.score) / Number(s.total);
+    })) || 0, color: '#475569' },
+    { label: 'Original work', percent: submissions.length
+      ? Math.round(100 * submissions.filter(function (s) { return !s.flagged; }).length / submissions.length)
+      : 100, color: '#b8217a' }
+  ];
+  const rows = submissions.map(function (s) {
+    const where = [s.module, s.book, s.chapter].filter(Boolean).map(esc).join(' · ') ||
+      esc(s.label || '—');
+    const result = s.flagged ? '<span class="flag">Flagged · ' + esc(String(s.similarity || 0)) + '% similarity</span>'
+      : (s.total != null ? '<span class="badge ok">' + esc(String(s.score)) + '/' + esc(String(s.total)) + '</span>'
+        : '<span class="badge ok">Submitted</span>');
+    const response = s.text ? '<details><summary>Read response</summary><pre class="small" style="white-space:pre-wrap">' +
+      esc(s.text) + '</pre></details>' : '<span class="muted">No written response</span>';
+    const keywords = s.keywordScore == null ? '—' : esc(String(s.keywordScore)) + '%' +
+      (s.keywordsMissing && s.keywordsMissing.length
+        ? '<div class="muted small">Missing: ' + esc(s.keywordsMissing.join(', ')) + '</div>' : '');
+    return '<tr><td class="small">' + fmtDate(s.createdAt) + '</td><td>' + esc(s.type || '—') +
+      '</td><td class="small">' + where + '</td><td>' + result + '</td><td>' + keywords +
+      '</td><td class="small">' + response + '</td></tr>';
+  }).join('');
+  return '<div class="student-detail-overlay" onclick="if(event.target===this) closeProgressStudentDetail()">' +
+    '<div class="student-detail-card">' +
+      '<div class="sd-header"><button type="button" class="sd-close" onclick="closeProgressStudentDetail()">&times;</button>' +
+        '<div class="sd-info"><h2>' + esc(student.fullName || '—') + '</h2>' +
+        '<div class="sd-sub muted small">' + esc(student.className || 'No class') + ' · Supervisor: ' +
+          esc(student.supervisorName || 'Unassigned') + ' · ' + esc(student.email || student.studentNumber || '') + '</div>' +
+        '<div class="sd-sub"><span class="badge info">' + esc(student.level && student.level.title || '—') +
+          '</span><span class="badge ' + (completed ? 'ok' : 'lock') + '">' +
+          (completed ? 'All modules complete' : 'In progress') + '</span></div></div>' +
+        '<div class="sd-progress"><div class="sd-prog-label">Programme coverage</div>' +
+          '<div class="progress mt" style="height:14px"><i style="width:' + Math.max(0, Math.min(100, student.progress || 0)) + '%"></i></div>' +
+          '<div class="sd-prog-val"><b>' + (student.progress || 0) + '%</b> · ' +
+          student.modulesCompleted + '/' + student.moduleCount + ' modules</div></div></div>' +
+      '<div class="card"><h3>Performance &amp; impact indices</h3>' +
+        '<div class="grid cols-4">' +
+          statCard(student.submissions || 0, 'Submissions', 'blue') +
+          statCard(student.certificates || 0, 'Certificates', 'green') +
+          statCard(student.flagged || 0, 'Flagged submissions', 'red') +
+          statCard(mean(scored.map(function (s) { return 100 * Number(s.score) / Number(s.total); })) == null
+            ? '—' : mean(scored.map(function (s) { return 100 * Number(s.score) / Number(s.total); })) + '%',
+            'Average scored work', 'violet') +
+        '</div><div class="chart-box"><h4>Individual indices</h4>' + chartProgress(indices) + '</div>' +
+        '<div class="chart-box"><h4>Module progress</h4>' + chartProgress((student.modules || []).map(function (m) {
+          return { label: m.title, percent: m.percent,
+            color: m.status === 'completed' ? '#1f7a44' : (m.status === 'active' ? '#2f6fd0' : '#94a3b8') };
+        })) + '</div></div>' +
+      '<div class="card"><h3>Submissions (' + submissions.length + ')</h3>' +
+        (rows ? '<div class="table-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>Module / book / chapter</th>' +
+          '<th>Result</th><th>Key words</th><th>Submitted response</th></tr></thead><tbody>' + rows +
+          '</tbody></table></div>' : '<p class="muted">No submissions recorded.</p>') + '</div>' +
+    '</div></div>';
 }
 
 /* Expanded summary row — rendered only for learners who finished everything. */
@@ -1863,7 +2001,7 @@ function summaryRowHtml(s) {
     return '<tr><td class="small">' + fmtDate(r.createdAt) + '</td><td>' + typeBadge(r.type) + '</td>' +
       '<td class="small">' + where + '</td><td>' + status + '</td></tr>';
   }).join('');
-  return '<tr class="sum-row hidden" id="sum-' + esc(s.id) + '"><td colspan="9"><div class="sum-box">' +
+  return '<tr class="sum-row hidden" id="sum-' + esc(s.id) + '"><td colspan="12"><div class="sum-box">' +
     '<div class="chart-grid">' +
       '<div><h4>Programme coverage</h4>' +
         chartProgress((s.modules || []).map(function (m) {
@@ -2205,6 +2343,14 @@ async function boot() {
   if (!ME.portal) ME.portal = {};
   applyThemeColor(ME.branding.themeColor);
   API.setUser(me.user);
+  initCommunicationWidget();
+  window.addEventListener('cbp:open-student', async function (event) {
+    const studentId = event.detail && event.detail.studentId;
+    if (!studentId) return;
+    await renderProgress();
+    setView('progress');
+    await showProgressStudentDetail(studentId);
+  });
   /* the page is newer than the server? say so right away (see README) */
   warnIfStaleServer(ROLE === 'supervisor' ? 'admin.analytics' : 'admin.analytics', 'admin.analytics');
 
@@ -2235,7 +2381,3 @@ async function boot() {
 }
 
 boot();
-
-
-
-

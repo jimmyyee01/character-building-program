@@ -18,8 +18,10 @@ function need(cond, message, status) { if (!cond) throw new HttpError(message, s
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-const BUILD = '2026-10-18-period-marks';
-const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.students', 'reports.module-performers', 'keywords',
+const BUILD = '2026-10-18-messaging-alerts';
+const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.students', 'reports.student-roster',
+  'reports.student-detail', 'reports.module-performers', 'messaging', 'notifications',
+  'users.supervisor-auto-assignment', 'keywords',
   'reader.book', 'library.lock', 'certificates', 'chapter.pages', 'exports'];
 
 function send(res, code, obj) {
@@ -81,6 +83,7 @@ function publicUser(u) {
     id: u.id, tenantId: u.tenantId, role: u.role, fullName: u.fullName,
     email: u.email, studentNumber: u.studentNumber, className: u.className,
     photo: u.photo, supervisorId: u.supervisorId || null,
+    supervisorWaitlisted: !!u.supervisorWaitlisted,
     supervisorCode: u.supervisorCode || null,
     letterFeedbackAt: u.letterFeedbackAt || null,
     optionalVideoSeen: !!u.optionalVideoSeen,
@@ -697,6 +700,7 @@ route('POST', '/api/submissions', ({ user, body }) => {
     }
     dbm.collection('submissions').push(sub);
     dbm.save();
+    createSubmissionNotification(user, sub);
     if (copy.flagged) warning = 'Copy assessment: your work matches another submission by ' + copy.similarity + '%.';
   }
   function requireText() {
@@ -824,6 +828,7 @@ function ensureGeneralCertificate(user) {
       existing.transcript = transcript;
       dbm.save();
     }
+    createCompletionNotification(user);
     return existing;
   }
   const books = [];
@@ -839,6 +844,7 @@ function ensureGeneralCertificate(user) {
   };
   dbm.collection('certificates').push(gen);
   dbm.save();
+  createCompletionNotification(user);
   return gen;
 }
 
@@ -1840,6 +1846,50 @@ route('DELETE', '/api/objectives/([a-z0-9_-]+)', ({ user, params }) => {
 });
 
 /* ================================================ user management ======== */
+const SUPERVISOR_CAPACITY = 100;
+function isLearnerRole(role) {
+  return role === 'student' || role === 'member';
+}
+function supervisedLearnerCount(supervisorId) {
+  return dbm.db.users.filter(u => u.supervisorId === supervisorId && isLearnerRole(u.role)).length;
+}
+function assignWaitlistedLearners(tenantId) {
+  let changed = false;
+  const learners = dbm.db.users.filter(u => u.tenantId === tenantId && isLearnerRole(u.role));
+  learners.forEach(u => {
+    if (!u.supervisorId && !u.supervisorWaitlisted) {
+      u.supervisorWaitlisted = true;
+      changed = true;
+    } else if (u.supervisorId && u.supervisorWaitlisted) {
+      u.supervisorWaitlisted = false;
+      changed = true;
+    }
+  });
+  const queue = learners.filter(u => !u.supervisorId && u.supervisorWaitlisted)
+    .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')) ||
+      String(a.id).localeCompare(String(b.id)));
+  const supervisors = dbm.db.users.filter(u => u.tenantId === tenantId && u.role === 'supervisor' && !u.suspended)
+    .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')) ||
+      String(a.id).localeCompare(String(b.id)));
+  const counts = new Map(supervisors.map(s => [s.id, supervisedLearnerCount(s.id)]));
+  queue.forEach(learner => {
+    let selected = null;
+    let selectedCount = SUPERVISOR_CAPACITY;
+    supervisors.forEach(supervisor => {
+      const count = counts.get(supervisor.id);
+      if (count < selectedCount) {
+        selected = supervisor;
+        selectedCount = count;
+      }
+    });
+    if (!selected) return;
+    learner.supervisorId = selected.id;
+    learner.supervisorWaitlisted = false;
+    counts.set(selected.id, selectedCount + 1);
+    changed = true;
+  });
+  return changed;
+}
 function allowedRolesFor(portalType, creatorRole) {
   if (creatorRole === 'supervisor') return ['member'];
   if (portalType === 'schools') return ['student', 'teacher', 'supervisor'];
@@ -1854,8 +1904,11 @@ route('GET', '/api/users', ({ req, user }) => {
   let list;
   if (user.role === 'super') {
     const tid = qp(req, 'tenantId');
+    const tenantIds = tid ? [tid] : [...new Set(dbm.db.users.map(u => u.tenantId).filter(Boolean))];
+    tenantIds.forEach(id => { if (assignWaitlistedLearners(id)) dbm.save(); });
     list = tid ? dbm.db.users.filter(u => u.tenantId === tid) : dbm.db.users;
   } else if (user.role === 'tenant_admin') {
+    if (assignWaitlistedLearners(user.tenantId)) dbm.save();
     list = dbm.db.users.filter(u => u.tenantId === user.tenantId);
   } else if (user.role === 'supervisor') {
     list = dbm.db.users.filter(u => u.supervisorId === user.id);
@@ -1866,7 +1919,7 @@ route('GET', '/api/users', ({ req, user }) => {
     users: list.map(u => Object.assign(publicUser(u), {
       supervisorName: u.supervisorId ? ((dbm.byId('users', u.supervisorId) || {}).fullName || null) : null,
       progress: PARTICIPANTS.indexOf(u.role) !== -1 ? performance(u).overall : null })),
-    limit: user.role === 'supervisor' ? { max: 100, used: list.length } : null };
+    limit: user.role === 'supervisor' ? { max: SUPERVISOR_CAPACITY, used: supervisedLearnerCount(user.id) } : null };
 });
 
 function buildUserRecord(actingUser, body) {
@@ -1884,8 +1937,8 @@ function buildUserRecord(actingUser, body) {
 
   let role = body.role || 'member';
   if (actingUser.role === 'supervisor') {
-    const mine = dbm.db.users.filter(u => u.supervisorId === actingUser.id);
-    need(mine.length < 100, 'A supervisor can only add a maximum of 100 users', 403);
+    need(supervisedLearnerCount(actingUser.id) < SUPERVISOR_CAPACITY,
+      'A supervisor can only add a maximum of 100 students', 403);
     role = 'member';
     tenantId = actingUser.tenantId;
   } else {
@@ -1906,10 +1959,40 @@ function buildUserRecord(actingUser, body) {
     ((email && u.email === email) || (sn && u.studentNumber && u.studentNumber.toLowerCase() === sn.toLowerCase()))),
     'An account with those details already exists', 409);
 
+  const supervisorWasSpecified = !!body.supervisorId;
+  let supervisorId = actingUser.role === 'supervisor' ? actingUser.id
+    : (role === 'supervisor' ? null : (body.supervisorId || null));
+  let supervisorWaitlisted = false;
+  if (isLearnerRole(role) && actingUser.role !== 'supervisor') {
+    if (!supervisorWasSpecified) {
+      assignWaitlistedLearners(tenantId);
+      const supervisors = dbm.db.users.filter(s =>
+        s.tenantId === tenantId && s.role === 'supervisor' && !s.suspended)
+        .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')) ||
+          String(a.id).localeCompare(String(b.id)));
+      let selected = null;
+      let selectedCount = SUPERVISOR_CAPACITY;
+      supervisors.forEach(s => {
+        const count = supervisedLearnerCount(s.id);
+        if (count < selectedCount) {
+          selected = s;
+          selectedCount = count;
+        }
+      });
+      if (selected) supervisorId = selected.id;
+      else supervisorWaitlisted = true;
+    } else {
+      const selected = dbm.byId('users', supervisorId);
+      need(selected && selected.tenantId === tenantId && selected.role === 'supervisor' && !selected.suspended,
+        'Choose a supervisor from this account', 400);
+      need(supervisedLearnerCount(selected.id) < SUPERVISOR_CAPACITY,
+        'That supervisor already has 100 students', 409);
+    }
+  }
+
   const h = auth.hashPassword(String(body.password));
   const u = { id: dbm.uid('usr'), tenantId, role,
-    supervisorId: actingUser.role === 'supervisor' ? actingUser.id
-      : (role === 'supervisor' ? null : (body.supervisorId || null)),
+    supervisorId, supervisorWaitlisted,
     fullName: String(body.fullName).trim(), email, studentNumber: sn,
     className: body.className ? String(body.className).trim() : null,
     photo: body.photo || null, salt: h.salt, passwordHash: h.hash,
@@ -1925,6 +2008,7 @@ route('POST', '/api/users', ({ user, body }) => {
   need(user, 'Sign in required', 401);
   const u = buildUserRecord(user, body);
   dbm.collection('users').push(u);
+  if (u.role === 'supervisor') assignWaitlistedLearners(u.tenantId);
   dbm.save();
   return { ok: true, user: publicUser(u) };
 });
@@ -1945,6 +2029,7 @@ route('POST', '/api/users/bulk', ({ user, body }) => {
     try {
       const doc = buildUserRecord(user, row || {});
       dbm.collection('users').push(doc);
+      if (doc.role === 'supervisor') assignWaitlistedLearners(doc.tenantId);
       created.push(publicUser(doc));
     } catch (e) {
       errors.push({ index: i + 1,
@@ -1962,6 +2047,8 @@ route('POST', '/api/users/bulk', ({ user, body }) => {
 route('GET', '/api/super/users', ({ req, user }) => {
   requireRole(user, ['super']);
   const tid = qp(req, 'tenantId');
+  const tenantIds = tid ? [tid] : [...new Set(dbm.db.users.map(u => u.tenantId).filter(Boolean))];
+  tenantIds.forEach(id => { if (assignWaitlistedLearners(id)) dbm.save(); });
   const list = tid ? dbm.db.users.filter(u => u.tenantId === tid) : dbm.db.users;
   return { ok: true,
     users: list.map(u => Object.assign(publicUser(u), {
@@ -1975,6 +2062,7 @@ route('POST', '/api/super/users', ({ user, body }) => {
   need(user.role === 'super', 'Not permitted', 403);
   const u = buildUserRecord(user, body);
   dbm.collection('users').push(u);
+  if (u.role === 'supervisor') assignWaitlistedLearners(u.tenantId);
   dbm.save();
   return { ok: true, user: publicUser(u) };
 });
@@ -1994,18 +2082,46 @@ route('PUT', '/api/users/([a-z0-9_-]+)', ({ user, params, body }) => {
   if (body.email) t.email = String(body.email).trim().toLowerCase();
   if (body.studentNumber) t.studentNumber = String(body.studentNumber).trim();
   if (body.photo !== undefined) t.photo = body.photo;
+  if (body.supervisorId !== undefined) {
+    need(user.role === 'super' || user.role === 'tenant_admin', 'Not permitted', 403);
+    const supervisorId = body.supervisorId || null;
+    if (isLearnerRole(t.role) && supervisorId) {
+      const selected = dbm.byId('users', supervisorId);
+      need(selected && selected.tenantId === t.tenantId && selected.role === 'supervisor' && !selected.suspended,
+        'Choose a supervisor from this account', 400);
+      need(selected.id === t.supervisorId || supervisedLearnerCount(selected.id) < SUPERVISOR_CAPACITY,
+        'That supervisor already has 100 students', 409);
+    }
+    t.supervisorId = supervisorId;
+    t.supervisorWaitlisted = isLearnerRole(t.role) && !supervisorId;
+  }
   if (body.password) {
     need(String(body.password).length >= 6, 'Password must be at least 6 characters');
     const h = auth.hashPassword(String(body.password));
     t.salt = h.salt; t.passwordHash = h.hash;
   }
   if (body.role && (user.role === 'super' || user.role === 'tenant_admin') && t.role !== 'super') {
+    const wasLearner = isLearnerRole(t.role);
     t.role = body.role;
+    if (t.role === 'supervisor') {
+      t.supervisorId = null;
+      t.supervisorWaitlisted = false;
+    } else if (isLearnerRole(t.role)) {
+      if (!wasLearner && t.supervisorId &&
+          supervisedLearnerCount(t.supervisorId) >= SUPERVISOR_CAPACITY) {
+        t.supervisorId = null;
+      }
+      t.supervisorWaitlisted = !t.supervisorId;
+    } else {
+      t.supervisorWaitlisted = false;
+    }
   }
   if (body.suspended !== undefined && user.role !== 'supervisor') {
     t.suspended = !!body.suspended;
     if (t.suspended) dbm.db.sessions = dbm.db.sessions.filter(s => s.userId !== t.id);
   }
+  if (isLearnerRole(t.role) && !t.supervisorId) t.supervisorWaitlisted = true;
+  if (assignWaitlistedLearners(t.tenantId)) dbm.save();
   dbm.save();
   return { ok: true, user: publicUser(t) };
 });
@@ -2021,8 +2137,14 @@ route('DELETE', '/api/users/([a-z0-9_-]+)', ({ user, params }) => {
   need(t.id !== user.id, 'You cannot delete your own account', 403);
   need(t.role !== 'super', 'Not permitted', 403);
   dbm.db.sessions = dbm.db.sessions.filter(s => s.userId !== t.id);
-  dbm.db.users.forEach(x => { if (x.supervisorId === t.id) x.supervisorId = null; });
+  dbm.db.users.forEach(x => {
+    if (x.supervisorId === t.id) {
+      x.supervisorId = null;
+      x.supervisorWaitlisted = isLearnerRole(x.role);
+    }
+  });
   dbm.remove('users', t.id);
+  if (assignWaitlistedLearners(t.tenantId)) dbm.save();
   return { ok: true };
 });
 
@@ -2045,7 +2167,7 @@ route('PUT', '/api/admin/branding', ({ user, body }) => {
    how much of the programme they have covered. */
 route('GET', '/api/reports/students', ({ req, user }) => {
   requireRole(user, ADMINS.concat(['supervisor']));
-  let list = dbm.db.users.filter(u => PARTICIPANTS.indexOf(u.role) !== -1);
+  let list = dbm.db.users.filter(u => ['student', 'teacher', 'member'].includes(u.role));
   if (user.role === 'tenant_admin') list = list.filter(u => u.tenantId === user.tenantId);
   else if (user.role === 'supervisor') list = list.filter(u => u.supervisorId === user.id);
   else { const tid = qp(req, 'tenantId'); if (tid) list = list.filter(u => u.tenantId === tid); }
@@ -2083,6 +2205,7 @@ route('GET', '/api/reports/students', ({ req, user }) => {
     return {
       id: u.id, fullName: u.fullName, email: u.email, studentNumber: u.studentNumber,
       className: u.className, role: u.role, suspended: !!u.suspended,
+      supervisorId: u.supervisorId || null, supervisorWaitlisted: !!u.supervisorWaitlisted,
       tenantId: u.tenantId, tenantName: tenant ? tenant.name : null,
       supervisorName: u.supervisorId ? ((dbm.byId('users', u.supervisorId) || {}).fullName || null) : null,
       submissions: subs.length, lastActiveAt: last,
@@ -2113,6 +2236,83 @@ route('GET', '/api/reports/students', ({ req, user }) => {
     finished: students.filter(s => s.moduleCount > 0 && s.modulesCompleted === s.moduleCount).length,
     started: students.filter(s => s.submissions > 0).length,
     notStarted: students.filter(s => s.submissions === 0).length };
+});
+
+route('GET', '/api/reports/student-detail', ({ req, user }) => {
+  requireRole(user, ADMINS.concat(['supervisor']));
+  const studentId = qp(req, 'studentId');
+  need(studentId, 'studentId required');
+  const student = dbm.byId('users', studentId);
+  need(student && ['student', 'teacher', 'member'].includes(student.role), 'Student not found', 404);
+  if (user.role === 'tenant_admin') need(student.tenantId === user.tenantId, 'Not permitted', 403);
+  else if (user.role === 'supervisor') need(student.supervisorId === user.id, 'Not permitted', 403);
+  else {
+    const tenantId = qp(req, 'tenantId');
+    if (tenantId) need(student.tenantId === tenantId, 'Not permitted', 403);
+  }
+  const submissions = dbm.where('submissions', s => s.userId === studentId)
+    .slice().sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+    .map(s => {
+      const assessment = assessOf(s);
+      const chapter = s.chapterId ? dbm.byId('chapters', s.chapterId) : null;
+      const book = s.bookId ? dbm.byId('books', s.bookId) : null;
+      const module = s.moduleId ? dbm.byId('modules', s.moduleId) : null;
+      return {
+        id: s.id, type: s.type, createdAt: s.createdAt, text: s.text || '',
+        score: s.score == null ? null : s.score, total: s.total == null ? null : s.total,
+        flagged: !!s.flagged, similarity: s.similarity || 0,
+        keywordScore: assessment ? assessment.keywordScore : null,
+        keywordsUsed: assessment ? assessment.keywordsUsed : null,
+        keywordsTotal: assessment ? assessment.keywordsTotal : null,
+        keywordsMissing: assessment ? assessment.keywordsMissing : [],
+        label: s.label || null, chapter: chapter ? chapter.title : null,
+        book: book ? book.title : null, module: module ? module.title : null
+      };
+    });
+  return { ok: true, submissions: submissions, count: submissions.length };
+});
+
+route('GET', '/api/reports/student-roster', ({ req, user }) => {
+  requireRole(user, ADMINS.concat(['supervisor']));
+  const tenantId = qp(req, 'tenantId');
+  const supervisorId = qp(req, 'supervisorId');
+  let users = dbm.db.users.filter(u => ['student', 'member'].includes(u.role));
+  if (user.role === 'tenant_admin') users = users.filter(u => u.tenantId === user.tenantId);
+  else if (user.role === 'supervisor') {
+    need(!supervisorId || supervisorId === user.id, 'Not permitted', 403);
+    users = users.filter(u => u.supervisorId === user.id);
+  } else if (tenantId) users = users.filter(u => u.tenantId === tenantId);
+
+  let supervisors = dbm.db.users.filter(u => u.role === 'supervisor');
+  if (user.role === 'tenant_admin') supervisors = supervisors.filter(u => u.tenantId === user.tenantId);
+  else if (user.role === 'supervisor') supervisors = supervisors.filter(u => u.id === user.id);
+  else if (tenantId) supervisors = supervisors.filter(u => u.tenantId === tenantId);
+
+  if (supervisorId) {
+    const selected = supervisors.find(u => u.id === supervisorId);
+    need(selected, 'Supervisor not found in this account', 404);
+    users = users.filter(u => u.supervisorId === supervisorId);
+  }
+  const tenantName = new Map(dbm.db.tenants.map(t => [t.id, t.name]));
+  const counts = new Map(supervisors.map(s => [s.id, 0]));
+  users.forEach(u => { if (counts.has(u.supervisorId)) counts.set(u.supervisorId, counts.get(u.supervisorId) + 1); });
+  const students = users.slice().sort((a, b) =>
+    String(a.fullName || '').localeCompare(String(b.fullName || '')) || String(a.id).localeCompare(String(b.id)))
+    .map(u => {
+      const supervisor = u.supervisorId ? dbm.byId('users', u.supervisorId) : null;
+      return {
+        id: u.id, fullName: u.fullName, studentNumber: u.studentNumber || null,
+        className: u.className || null, tenantId: u.tenantId || null,
+        tenantName: tenantName.get(u.tenantId) || null,
+        supervisorId: u.supervisorId || null, supervisorName: supervisor ? supervisor.fullName : null,
+        supervisorWaitlisted: !!u.supervisorWaitlisted, suspended: !!u.suspended
+      };
+    });
+  return { ok: true, count: students.length, students,
+    supervisors: supervisors.slice().sort((a, b) =>
+      String(a.fullName || '').localeCompare(String(b.fullName || '')) || String(a.id).localeCompare(String(b.id)))
+      .map(s => ({ id: s.id, fullName: s.fullName, tenantId: s.tenantId || null,
+        tenantName: tenantName.get(s.tenantId) || null, studentCount: counts.get(s.id) || 0 })) };
 });
 
 route('GET', '/api/reports/module-performers', ({ req, user }) => {
@@ -2239,8 +2439,8 @@ route('GET', '/api/admin/overview', ({ user }) => {
   const subs = dbm.db.submissions.filter(s => ids.indexOf(s.userId) !== -1);
   const supervisors = user.role === 'tenant_admin'
     ? users.filter(u => u.role === 'supervisor').map(s => ({
-        id: s.id, fullName: s.fullName, email: s.email, code: s.supervisorCode,
-        users: users.filter(u => u.supervisorId === s.id).length, limit: 100 }))
+      id: s.id, fullName: s.fullName, email: s.email, code: s.supervisorCode, suspended: !!s.suspended,
+        users: supervisedLearnerCount(s.id), limit: SUPERVISOR_CAPACITY }))
     : [];
   return { ok: true,
     branding: tenantBranding(tenant),
@@ -2249,10 +2449,200 @@ route('GET', '/api/admin/overview', ({ user }) => {
       submissions: subs.length, flagged: subs.filter(s => s.flagged).length,
       certificates: dbm.db.certificates.filter(c => ids.indexOf(c.userId) !== -1).length },
     supervisors,
-    limit: user.role === 'supervisor' ? { max: 100, used: users.length } : null };
+    limit: user.role === 'supervisor'
+      ? { max: SUPERVISOR_CAPACITY, used: supervisedLearnerCount(user.id) } : null };
 });
 
 /* --------------------------------------------------- reporting views ----- */
+function notificationFor(userId, data) {
+  const notification = Object.assign({
+    id: dbm.uid('ntf'), userId, readAt: null, createdAt: dbm.nowISO()
+  }, data);
+  dbm.collection('notifications').push(notification);
+  dbm.save();
+  return notification;
+}
+
+function createSubmissionNotification(user, submission) {
+  if (!['student', 'member'].includes(user.role) || !user.supervisorId) return;
+  const supervisor = dbm.byId('users', user.supervisorId);
+  if (!supervisor || supervisor.role !== 'supervisor' || supervisor.tenantId !== user.tenantId) return;
+  notificationFor(supervisor.id, {
+    type: 'submission', title: 'New student submission',
+    body: user.fullName + ' submitted ' + String(submission.type || 'work').replace(/_/g, ' '),
+    studentId: user.id, submissionId: submission.id
+  });
+}
+
+function createCompletionNotification(user) {
+  if (!['student', 'member'].includes(user.role) || !user.supervisorId) return;
+  const supervisor = dbm.byId('users', user.supervisorId);
+  if (!supervisor || supervisor.role !== 'supervisor' || supervisor.tenantId !== user.tenantId) return;
+  const exists = dbm.collection('notifications').some(n =>
+    n.userId === supervisor.id && n.type === 'completion' && n.studentId === user.id);
+  if (exists) return;
+  notificationFor(supervisor.id, {
+    type: 'completion', title: 'Student completed the programme',
+    body: user.fullName + ' has completed every module and earned the general certificate.',
+    studentId: user.id
+  });
+}
+
+function messagingUsers(user) {
+  const people = dbm.collection('users').filter(candidate => {
+    if (candidate.id === user.id || candidate.suspended || candidate.tenantId !== user.tenantId) return false;
+    if (user.role === 'tenant_admin') return ['student', 'member', 'teacher', 'supervisor'].includes(candidate.role);
+    if (user.role === 'supervisor') return candidate.role === 'tenant_admin' ||
+      (['student', 'member', 'teacher'].includes(candidate.role) && candidate.supervisorId === user.id);
+    if (['student', 'member', 'teacher'].includes(user.role)) return candidate.role === 'tenant_admin' ||
+      (candidate.role === 'supervisor' && candidate.id === user.supervisorId);
+    return false;
+  });
+  return people.sort((a, b) => String(a.fullName || '').localeCompare(String(b.fullName || '')))
+    .map(candidate => ({ id: candidate.id, fullName: candidate.fullName, role: candidate.role }));
+}
+
+function canMessage(user, recipient) {
+  if (!recipient || recipient.id === user.id || recipient.tenantId !== user.tenantId || recipient.suspended) return false;
+  if (user.role === 'tenant_admin') return ['student', 'member', 'teacher', 'supervisor'].includes(recipient.role);
+  if (user.role === 'supervisor') return recipient.role === 'tenant_admin' ||
+    (['student', 'member', 'teacher'].includes(recipient.role) && recipient.supervisorId === user.id);
+  if (['student', 'member', 'teacher'].includes(user.role)) return recipient.role === 'tenant_admin' ||
+    (recipient.role === 'supervisor' && recipient.id === user.supervisorId);
+  return false;
+}
+
+function conversationFor(user, recipient) {
+  const participants = [user.id, recipient.id].sort();
+  let conversation = dbm.collection('conversations').find(c =>
+    c.tenantId === user.tenantId && Array.isArray(c.participantIds) &&
+    c.participantIds.length === 2 && c.participantIds.slice().sort().join('|') === participants.join('|'));
+  if (!conversation) {
+    conversation = { id: dbm.uid('cnv'), tenantId: user.tenantId,
+      participantIds: participants, createdAt: dbm.nowISO(), updatedAt: dbm.nowISO() };
+    dbm.collection('conversations').push(conversation);
+  }
+  return conversation;
+}
+
+function messageNotification(recipientId, sender, conversationId, body) {
+  notificationFor(recipientId, {
+    type: 'message', title: 'New message from ' + sender.fullName,
+    body: body.length > 160 ? body.slice(0, 157) + '…' : body,
+    conversationId
+  });
+}
+
+function conversationsFor(user) {
+  return dbm.collection('conversations').filter(c =>
+    c.tenantId === user.tenantId && Array.isArray(c.participantIds) && c.participantIds.includes(user.id))
+    .map(c => {
+      const messages = dbm.collection('messages').filter(m => m.conversationId === c.id)
+        .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+      const peerId = c.participantIds.find(id => id !== user.id);
+      const peer = dbm.byId('users', peerId);
+      const unread = messages.filter(m => m.senderId !== user.id && !m.readAt).length;
+      const latest = messages[messages.length - 1];
+      return {
+        id: c.id,
+        participant: peer ? { id: peer.id, fullName: peer.fullName, role: peer.role } : null,
+        latestMessage: latest ? { body: latest.body, createdAt: latest.createdAt, senderId: latest.senderId } : null,
+        unread,
+        updatedAt: c.updatedAt || (latest && latest.createdAt) || c.createdAt
+      };
+    })
+    .filter(c => c.participant)
+    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+}
+
+function conversationForUser(user, conversationId) {
+  const conversation = dbm.byId('conversations', conversationId);
+  need(conversation && conversation.tenantId === user.tenantId &&
+    Array.isArray(conversation.participantIds) && conversation.participantIds.includes(user.id),
+    'Conversation not found', 404);
+  return conversation;
+}
+
+route('GET', '/api/messages', ({ user }) => {
+  requireRole(user, ['tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
+  return { ok: true, conversations: conversationsFor(user), recipients: messagingUsers(user) };
+});
+
+route('POST', '/api/messages', ({ user, body }) => {
+  requireRole(user, ['tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
+  const text = String((body || {}).body || '').trim();
+  need(text.length > 0 && text.length <= 5000, 'Message must be between 1 and 5000 characters');
+  const recipientIds = Array.isArray(body.recipientIds) ? Array.from(new Set(body.recipientIds.map(String))) : [];
+  need(recipientIds.length > 0 && recipientIds.length <= 500, 'Choose between 1 and 500 recipients');
+  const recipients = recipientIds.map(id => dbm.byId('users', id));
+  need(recipients.every(recipient => canMessage(user, recipient)), 'One or more recipients are not permitted', 403);
+  const messageIds = [];
+  recipients.forEach(recipient => {
+    const conversation = conversationFor(user, recipient);
+    const message = { id: dbm.uid('msg'), conversationId: conversation.id,
+      senderId: user.id, body: text, createdAt: dbm.nowISO(), readAt: null };
+    dbm.collection('messages').push(message);
+    conversation.updatedAt = message.createdAt;
+    messageIds.push(message.id);
+    messageNotification(recipient.id, user, conversation.id, text);
+  });
+  dbm.save();
+  return { ok: true, sent: messageIds.length };
+});
+
+route('GET', '/api/messages/([a-z0-9_-]+)', ({ user, params }) => {
+  requireRole(user, ['tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
+  const conversation = conversationForUser(user, params[0]);
+  const now = dbm.nowISO();
+  const messages = dbm.collection('messages').filter(m => m.conversationId === conversation.id)
+    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  messages.forEach(message => {
+    if (message.senderId !== user.id && !message.readAt) message.readAt = now;
+  });
+  dbm.collection('notifications').forEach(n => {
+    if (n.userId === user.id && n.conversationId === conversation.id && !n.readAt) n.readAt = now;
+  });
+  dbm.save();
+  const participants = conversation.participantIds.map(id => {
+    const person = dbm.byId('users', id);
+    return person ? { id: person.id, fullName: person.fullName, role: person.role } : null;
+  }).filter(Boolean);
+  return { ok: true, conversation: { id: conversation.id, participants }, messages };
+});
+
+route('POST', '/api/messages/([a-z0-9_-]+)', ({ user, params, body }) => {
+  requireRole(user, ['tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
+  const conversation = conversationForUser(user, params[0]);
+  const peerId = conversation.participantIds.find(id => id !== user.id);
+  const recipient = dbm.byId('users', peerId);
+  need(canMessage(user, recipient), 'Not permitted to reply in this conversation', 403);
+  const text = String((body || {}).body || '').trim();
+  need(text.length > 0 && text.length <= 5000, 'Message must be between 1 and 5000 characters');
+  const message = { id: dbm.uid('msg'), conversationId: conversation.id,
+    senderId: user.id, body: text, createdAt: dbm.nowISO(), readAt: null };
+  dbm.collection('messages').push(message);
+  conversation.updatedAt = message.createdAt;
+  messageNotification(recipient.id, user, conversation.id, text);
+  dbm.save();
+  return { ok: true, message };
+});
+
+route('GET', '/api/notifications', ({ user }) => {
+  requireRole(user, ['tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
+  const notifications = dbm.collection('notifications').filter(n => n.userId === user.id)
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, 100);
+  return { ok: true, notifications, unread: notifications.filter(n => !n.readAt).length };
+});
+
+route('PUT', '/api/notifications/([a-z0-9_-]+)/read', ({ user, params }) => {
+  requireRole(user, ['tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
+  const notification = dbm.byId('notifications', params[0]);
+  need(notification && notification.userId === user.id, 'Notification not found', 404);
+  if (!notification.readAt) notification.readAt = dbm.nowISO();
+  dbm.save();
+  return { ok: true };
+});
+
 function adminSubmissions(user, req) {
   let list;
   if (user.role === 'super') list = dbm.db.submissions.slice();
@@ -2305,11 +2695,3 @@ route('GET', '/api/super/submissions', ({ req, user }) => {
 });
 
 module.exports = { handle };
-
-
-
-
-
-
-
-

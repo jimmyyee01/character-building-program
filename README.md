@@ -43,7 +43,7 @@ super admin — nothing about one school is visible to another.
 | Teacher (Greenfield) | `teacher@greenfield.edu` / `Teacher@123` |
 | Student (Greenfield) | `STU-001` / `Student@123` |
 | Student 2 (Greenfield) | `STU-002` / `Student@123` — used by the chapter-lock browser check |
-| **Demo graduate** (Greenfield) | `STU-100` / `Student@123` — has finished every module, so the dashboards, graphs and the expandable learner summary in *Student progress* all have data |
+| **Demo graduate** (Greenfield) | `STU-100` / `Student@123` — has finished every module, so the dashboards, graphs and learner details in *Student progress* all have data |
 | Supervisor (Horizon) | `supervisor@horizon.org` / `Super@123` (code `SUP-7788`) |
 | Member (under that supervisor) | `olive@horizon.org` / `Member@123` |
 
@@ -93,7 +93,7 @@ Handy npm shortcuts: `npm run check:routes`, `npm run check:ui`, `npm run check:
 `npm run check:browser`, `npm run check:chapter-lock`, `npm run check:analytics`.
 
 If you are updating an **existing PHP database**, run the migration once after
-pulling (it only adds what is missing — it never touches data):
+pulling (it adds missing fields and preserves existing records):
 
 ```bash
 php migrate.php
@@ -101,7 +101,9 @@ php migrate.php
 
 It adds the key-word columns used to assess typed answers and the transcript
 snapshot stored with the general graduation certificate. Existing graduates
-receive their transcript the next time their certificates are loaded.
+receive their transcript the next time their certificates are loaded. It also
+adds the supervisor waitlist flag and messaging, conversation, and notification
+tables, and marks existing unassigned learners for automatic placement.
 
 ### "Unknown endpoint: GET /api/..." — the server is running older code
 
@@ -224,7 +226,7 @@ Then confirm the running build (this needs no browser):
 
 ```bash
 curl -s http://127.0.0.1/api/health      # add -H 'Host: your-domain' if the vhost needs it
-curl -s https://your-site/api/health     # build 2026-10-18-period-marks, reports.module-performers, routes 69
+curl -s https://your-site/api/health     # build 2026-10-18-messaging-alerts and messaging/notifications
 curl -s https://your-site/build.json     # must show the same build
 ```
 
@@ -235,6 +237,23 @@ used to 500 the super dashboard), the ranked *Student progress* report (ordering
 level, recent work, period-based module top 10s and role scoping), reports,
 certificates and the participant flow. It prints a PASS/FAIL summary and exits
 non-zero if anything fails.
+Run `npm run check:supervisor-assignment` for isolated end-to-end checks of
+automatic assignment, the 100-learner cap, waitlist draining, and FIFO placement
+when capacity opens; this check uses a temporary database and leaves saved data
+untouched.
+
+In account consoles, *Student progress* lists the learners in the tenant; in a
+supervisor console it lists only that supervisor's learners. Account admins can
+filter the list by supervisor. Open **View details** on any learner to see their
+module progress, individual impact indices, scores and full submission responses.
+The detail API checks the same tenant/supervisor scope before returning submissions.
+
+The top-right **Messages** panel is available to learners, supervisors, and
+account admins. Supervisors can message assigned learners individually or in
+bulk and their account admin; learners can reply to their supervisor or account
+admin; account admins can message learners and supervisors in their account.
+Submission and programme-completion alerts go to the learner's supervisor.
+Alerts are in-app only and open the related conversation or student detail.
 
 Run the PHP build without Apache (useful for local testing — `php -S` does not
 read `.htaccess`, so the bundled router does the rewriting):
@@ -296,6 +315,10 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
 - Users (students, teachers, members), supervisors with **100-user limit**.
   **Self-registration is disabled** — only super admin, tenant admins and
   supervisors add users (single form or **bulk insert** up to 500 CSV rows).
+- Students and members without a chosen supervisor are assigned automatically
+  to the least-loaded supervisor in their account. A supervisor is capped at
+  100 learners; if all are full, the learner is waitlisted and automatically
+  assigned when capacity opens. The Users table shows waitlisted learners.
 - **Student progress → Top performers** — view the top 10 per module for a
   selected calendar year and custom date range, ranked by marks earned during
   that period. Admins can choose a combined percentage (objective-question

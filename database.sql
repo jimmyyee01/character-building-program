@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS users (
   tenant_id VARCHAR(64) NULL,
   role VARCHAR(30) NOT NULL DEFAULT 'member',
   supervisor_id VARCHAR(64) NULL,
+  supervisor_waitlisted TINYINT(1) NOT NULL DEFAULT 0,
   supervisor_code VARCHAR(20) NULL,
   username VARCHAR(100) NULL,
   full_name VARCHAR(255) NOT NULL,
@@ -193,3 +194,36 @@ CREATE TABLE IF NOT EXISTS thoughts (
   INDEX (user_id)
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS conversations (
+  id VARCHAR(64) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  participant_key CHAR(64) NOT NULL,
+  participant_ids_json LONGTEXT NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_conversations_participant (tenant_id, participant_key), INDEX (updated_at)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS conversation_messages (
+  id VARCHAR(64) PRIMARY KEY,
+  conversation_id VARCHAR(64) NOT NULL,
+  sender_id VARCHAR(64) NOT NULL,
+  body TEXT NOT NULL,
+  read_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX (conversation_id, created_at), INDEX (conversation_id, read_at)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id VARCHAR(64) PRIMARY KEY,
+  user_id VARCHAR(64) NOT NULL,
+  type VARCHAR(30) NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  body TEXT NOT NULL,
+  conversation_id VARCHAR(64) NULL,
+  student_id VARCHAR(64) NULL,
+  submission_id VARCHAR(64) NULL,
+  read_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX (user_id, created_at), INDEX (user_id, read_at), INDEX (conversation_id)
+) ENGINE=InnoDB;

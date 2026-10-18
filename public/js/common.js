@@ -1112,5 +1112,168 @@ function applyThemeColor(color) {
   return true;
 }
 
+function initCommunicationWidget() {
+  if (!API.token() || document.getElementById('cbpCommsToggle')) return;
+  const root = document.createElement('div');
+  root.id = 'cbpComms';
+  root.innerHTML = '<button type="button" id="cbpCommsToggle" class="cbp-comms-toggle" aria-expanded="false" aria-controls="cbpCommsPanel">' +
+      'Messages <span id="cbpCommsCount" class="cbp-comms-count hidden"></span></button>' +
+    '<section id="cbpCommsPanel" class="cbp-comms-panel hidden" aria-label="Messages and alerts"></section>';
+  document.body.appendChild(root);
+  const toggle = document.getElementById('cbpCommsToggle');
+  const panel = document.getElementById('cbpCommsPanel');
+  const count = document.getElementById('cbpCommsCount');
+  const state = { screen: 'alerts', conversations: [], recipients: [], notifications: [], activeId: null };
 
+  async function load() {
+    const result = await Promise.all([API.get('/messages'), API.get('/notifications')]);
+    state.conversations = result[0].conversations || [];
+    state.recipients = result[0].recipients || [];
+    state.notifications = result[1].notifications || [];
+    const unread = state.notifications.filter(function (n) {
+      return !n.readAt && n.type !== 'message';
+    }).length + state.conversations.reduce(function (n, c) { return n + Number(c.unread || 0); }, 0);
+    count.textContent = unread > 99 ? '99+' : String(unread);
+    count.classList.toggle('hidden', unread === 0);
+    return unread;
+  }
 
+  function header(title) {
+    return '<div class="cbp-comms-head"><b>' + esc(title) + '</b>' +
+      '<button type="button" class="ghost small" data-comms-close aria-label="Close messages">Close</button></div>';
+  }
+
+  function tabs() {
+    return '<nav class="cbp-comms-tabs">' +
+      '<button type="button" data-comms-screen="alerts">Alerts</button>' +
+      '<button type="button" data-comms-screen="inbox">Inbox</button>' +
+      '<button type="button" data-comms-screen="compose">New message</button></nav>';
+  }
+
+  function draw() {
+    const active = state.activeId && state.conversations.find(function (c) { return c.id === state.activeId; });
+    if (state.screen === 'thread' && active) {
+      panel.innerHTML = header(active.participant.fullName) +
+        '<div class="cbp-comms-toolbar"><button type="button" class="ghost small" data-comms-screen="inbox">Back to inbox</button></div>' +
+        '<div id="cbpCommsMessages" class="cbp-comms-messages"><p class="muted">Loading conversation…</p></div>' +
+        '<form id="cbpCommsReply" class="cbp-comms-form"><textarea name="body" maxlength="5000" required placeholder="Write a reply…"></textarea>' +
+        '<button type="submit">Send reply</button></form>';
+      loadThread(active.id);
+      return;
+    }
+    if (state.screen === 'compose') {
+      panel.innerHTML = header('New message') + tabs() +
+        '<form id="cbpCommsCompose" class="cbp-comms-form"><label for="cbpCommsRecipients">To (select more than one to send in bulk)</label>' +
+        '<select id="cbpCommsRecipients" name="recipientIds" multiple size="5" required>' +
+        state.recipients.map(function (r) {
+          return '<option value="' + esc(r.id) + '">' + esc(r.fullName) + ' (' + esc(r.role.replace(/_/g, ' ')) + ')</option>';
+        }).join('') + '</select><textarea name="body" maxlength="5000" required placeholder="Write a message…"></textarea>' +
+        '<button type="submit">Send message</button></form>';
+      return;
+    }
+    const isInbox = state.screen === 'inbox';
+    panel.innerHTML = header(isInbox ? 'Inbox' : 'Alerts') + tabs() +
+      (isInbox ? renderConversations() : renderNotifications());
+  }
+
+  function renderConversations() {
+    if (!state.conversations.length) return '<p class="muted cbp-comms-empty">No conversations yet.</p>';
+    return '<div class="cbp-comms-list">' + state.conversations.map(function (c) {
+      const latest = c.latestMessage;
+      return '<button type="button" class="cbp-comms-item" data-comms-thread="' + esc(c.id) + '">' +
+        '<b>' + esc(c.participant.fullName) + '</b><span>' + esc(latest ? latest.body : 'No messages yet') + '</span>' +
+        '<small>' + esc(latest ? fmtDate(latest.createdAt) : '') + '</small>' +
+        (c.unread ? '<i>' + esc(c.unread) + ' unread</i>' : '') + '</button>';
+    }).join('') + '</div>';
+  }
+
+  function renderNotifications() {
+    if (!state.notifications.length) return '<p class="muted cbp-comms-empty">No alerts yet.</p>';
+    return '<div class="cbp-comms-list">' + state.notifications.map(function (n) {
+      return '<button type="button" class="cbp-comms-item' + (n.readAt ? '' : ' unread') +
+        '" data-comms-notification="' + esc(n.id) + '">' +
+        '<b>' + esc(n.title) + '</b><span>' + esc(n.body) + '</span>' +
+        '<small>' + esc(fmtDate(n.createdAt)) + '</small></button>';
+    }).join('') + '</div>';
+  }
+
+  async function loadThread(id) {
+    try {
+      const result = await API.get('/messages/' + encodeURIComponent(id));
+      const box = document.getElementById('cbpCommsMessages');
+      if (!box || state.activeId !== id) return;
+      box.innerHTML = (result.messages || []).map(function (m) {
+        const mine = m.senderId === (API.user() || {}).id;
+        return '<div class="cbp-comms-message' + (mine ? ' mine' : '') + '">' +
+          '<p>' + esc(m.body) + '</p><small>' + esc(fmtDate(m.createdAt)) + '</small></div>';
+      }).join('') || '<p class="muted">No messages yet.</p>';
+      box.scrollTop = box.scrollHeight;
+      await load();
+    } catch (e) {
+      const box = document.getElementById('cbpCommsMessages');
+      if (box) box.innerHTML = '<p class="err-text">' + esc(e.message) + '</p>';
+    }
+  }
+
+  toggle.addEventListener('click', async function () {
+    const open = panel.classList.contains('hidden');
+    panel.classList.toggle('hidden', !open);
+    toggle.setAttribute('aria-expanded', String(open));
+    if (open) {
+      try { await load(); state.screen = 'alerts'; state.activeId = null; draw(); }
+      catch (e) { panel.innerHTML = header('Messages') + '<p class="err-text">' + esc(e.message) + '</p>'; }
+    }
+  });
+  panel.addEventListener('click', async function (event) {
+    const target = event.target.closest('button');
+    if (!target) return;
+    if (target.hasAttribute('data-comms-close')) {
+      panel.classList.add('hidden'); toggle.setAttribute('aria-expanded', 'false'); return;
+    }
+    if (target.dataset.commsScreen) {
+      state.screen = target.dataset.commsScreen; state.activeId = null; draw(); return;
+    }
+    if (target.dataset.commsThread) {
+      state.activeId = target.dataset.commsThread; state.screen = 'thread'; draw(); return;
+    }
+    if (target.dataset.commsNotification) {
+      const notification = state.notifications.find(function (n) { return n.id === target.dataset.commsNotification; });
+      if (!notification) return;
+      try {
+        await API.put('/notifications/' + encodeURIComponent(notification.id) + '/read');
+        if (notification.conversationId) {
+          await load();
+          state.activeId = notification.conversationId; state.screen = 'thread'; draw();
+        } else if (notification.studentId) {
+          panel.classList.add('hidden'); toggle.setAttribute('aria-expanded', 'false');
+          window.dispatchEvent(new CustomEvent('cbp:open-student', { detail: { studentId: notification.studentId } }));
+        } else {
+          await load(); draw();
+        }
+      } catch (e) { toast(e.message, 'err'); }
+    }
+  });
+  panel.addEventListener('submit', async function (event) {
+    event.preventDefault();
+    const form = event.target;
+    const text = String(new FormData(form).get('body') || '').trim();
+    if (!text) return;
+    try {
+      if (form.id === 'cbpCommsCompose') {
+        const select = form.querySelector('[name="recipientIds"]');
+        const recipientIds = Array.from(select.selectedOptions).map(function (option) { return option.value; });
+        await API.post('/messages', { recipientIds, body: text });
+        toast('Message sent.', 'ok');
+        state.screen = 'inbox'; state.activeId = null;
+      } else if (form.id === 'cbpCommsReply' && state.activeId) {
+        await API.post('/messages/' + encodeURIComponent(state.activeId), { body: text });
+      }
+      await load();
+      draw();
+    } catch (e) { toast(e.message, 'err'); }
+  });
+  load().catch(function (e) { console.error('[messages] Failed to load unread counts:', e); });
+  window.setInterval(function () {
+    if (!document.hidden) load().catch(function (e) { console.error('[messages] Failed to refresh unread counts:', e); });
+  }, 30000);
+}

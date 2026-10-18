@@ -9,7 +9,7 @@ const S = {
   users: [], usersTenant: '', usersSearch: '',
   editPortalId: null, editTenantId: null, editModuleId: null, editLibraryId: null,
   editChapterId: null,
-  rpFlagged: false, rpType: '', rpSearch: '',
+  rpFlagged: false, rpType: '', rpSearch: '', rpRosterSearch: '', rpSupervisorId: '',
   settings: {}
 };
 
@@ -2274,17 +2274,49 @@ async function renderReports() {
   const params = [];
   if (S.rpFlagged) params.push('flagged=1');
   if (S.rpType) params.push('type=' + encodeURIComponent(S.rpType));
-  let subs = [];
+  const rosterParams = [];
+  if (S.rpSupervisorId) rosterParams.push('supervisorId=' + encodeURIComponent(S.rpSupervisorId));
+  let subs = [], roster = { students: [], supervisors: [] };
   try {
-    const d = await API.get('/super/submissions' +
-      (params.length ? '?' + params.join('&') : ''));
+    const results = await Promise.all([
+      API.get('/super/submissions' + (params.length ? '?' + params.join('&') : '')),
+      API.get('/reports/student-roster' +
+        (rosterParams.length ? '?' + rosterParams.join('&') : ''))
+    ]);
+    const d = results[0];
     subs = d.submissions || [];
+    roster = results[1];
   } catch (e) { v.innerHTML = errBox(e); return; }
 
   const rows = subs.length ? subs.map(submissionRow).join('')
     : '<tr><td colspan="7" class="muted">No submissions match this filter.</td></tr>';
+  const studentRows = roster.students.length ? roster.students.map(function (s) {
+    const assignment = s.supervisorWaitlisted ? '<span class="badge warn">WAITLISTED</span>'
+      : s.supervisorName ? esc(s.supervisorName) : '<span class="badge off">NOT ASSIGNED</span>';
+    const status = s.suspended ? '<span class="badge off">SUSPENDED</span>' : '<span class="badge ok">ACTIVE</span>';
+    return '<tr data-search="' + esc([s.fullName, s.studentNumber, s.className, s.supervisorName, s.tenantName].join(' ').toLowerCase()) + '">' +
+      '<td><b>' + esc(s.fullName || '—') + '</b></td><td>' + esc(s.studentNumber || '—') + '</td>' +
+      '<td>' + esc(s.className || '—') + '</td><td>' + assignment + '</td>' +
+      '<td>' + esc(s.tenantName || '—') + '</td><td>' + status + '</td></tr>';
+  }).join('') : '<tr><td colspan="6" class="muted">No students match this supervisor.</td></tr>';
+  const supervisorOptions = '<option value="">All students</option>' +
+    roster.supervisors.map(function (s) {
+      const label = (s.fullName || 'Supervisor') + (s.tenantName ? ' — ' + s.tenantName : '') +
+        ' (' + s.studentCount + ')';
+      return selectOption(s.id, label, S.rpSupervisorId, false);
+    }).join('');
 
   v.innerHTML = '<h2>Reports</h2>' +
+    '<div class="card"><h3>Students list</h3><p class="muted">View learners with their class and assigned supervisor, across all accounts or for one supervisor.</p>' +
+      '<div class="row" style="align-items:flex-end"><div><label>Students</label><select id="rpSupervisor">' +
+        supervisorOptions + '</select></div><div><label>Search students</label>' +
+        '<input type="text" id="rpRosterSearch" placeholder="Name, student number, class, supervisor, account…" value="' +
+        esc(S.rpRosterSearch) + '"></div><div class="fixed" style="padding-bottom:10px">' +
+        '<span class="badge info">' + roster.count + ' students</span> ' +
+        '<span class="badge lock" id="rpRosterTableCount">' + roster.count + ' shown</span></div></div>' +
+      '<div class="table-wrap"><table id="rpRosterTable"><thead><tr>' +
+        '<th>Student</th><th>Student number</th><th>Class</th><th>Supervisor</th><th>Account</th><th>Status</th>' +
+      '</tr></thead><tbody>' + studentRows + '</tbody></table></div></div>' +
     '<div class="card"><div class="row" style="align-items:flex-end">' +
       '<div style="min-width:220px"><label>Search reports</label>' +
         '<input type="text" id="rpSearch" placeholder="Name, email, chapter, book, text…" value="' +
@@ -2313,7 +2345,12 @@ async function renderReports() {
     S.rpSearch = this.value;
     applyTableSearch('rpTable', 'rpSearch');
   });
+  $('rpRosterSearch').addEventListener('input', function () {
+    S.rpRosterSearch = this.value;
+    applyTableSearch('rpRosterTable', 'rpRosterSearch');
+  });
   applyTableSearch('rpTable', 'rpSearch');
+  applyTableSearch('rpRosterTable', 'rpRosterSearch');
 }
 /* ======================================================= settings ======== */
 function selectOption(value, label, current, extraSelected) {
@@ -2604,6 +2641,11 @@ function onChange(e) {
     renderReports();
     return;
   }
+  if (id === 'rpSupervisor') {
+    S.rpSupervisorId = e.target.value;
+    renderReports();
+    return;
+  }
   const previews = {
     tnLogo: 'tnLogoImg', tbLogo: 'tbLogoImg', stLogo: 'stLogoImg'
   };
@@ -2664,7 +2706,6 @@ $('superLoginForm').addEventListener('submit', async function (e) {
 $('logoutBtn').addEventListener('click', function () { API.logout(); });
 
 init();
-
 
 
 

@@ -35,9 +35,19 @@ async function main() {
     (r.data.features || []).indexOf('admin.analytics') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
   check('this deployment includes calendar-year period marks rankings',
-    r.ok && r.data.build === '2026-10-18-period-marks' &&
+    r.ok && r.data.build === '2026-10-18-messaging-alerts' &&
       (r.data.features || []).indexOf('reports.module-performers') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
+  check('this deployment includes scoped student details',
+    r.ok && (r.data.features || []).indexOf('reports.student-detail') !== -1,
+    'features ' + JSON.stringify(r.data.features || []));
+  check('this deployment includes capped automatic supervisor assignment',
+    r.ok && (r.data.features || []).indexOf('users.supervisor-auto-assignment') !== -1,
+    'features ' + JSON.stringify(r.data.features || []));
+  check('this deployment includes messaging and notifications',
+    r.ok && (r.data.features || []).indexOf('messaging') !== -1 &&
+      (r.data.features || []).indexOf('notifications') !== -1,
+    'features ' + JSON.stringify(r.data.features || []));
 
   r = await call('/public/tenant/greenfield-academy');
   check('GET /public/tenant/<slug>', r.ok && r.data.tenant && r.data.tenant.name, 'status ' + r.status);
@@ -92,7 +102,9 @@ async function part2(r, tok, check) {
   r = await call('/users', { method: 'POST', body: { role: 'teacher', fullName: 'API Teacher', email: 'api.teacher@greenfield.edu', password: 'Teacher@123' } }, tok.schools);
   check('schools admin creates teacher', r.ok, JSON.stringify(r.data).slice(0, 140));
   r = await call('/users', { method: 'POST', body: { role: 'student', fullName: 'API Student', studentNumber: 'STU-API', password: 'Student@123' } }, tok.schools);
-  check('schools admin creates student', r.ok, JSON.stringify(r.data).slice(0, 140));
+  check('schools admin creates student with supervisor assignment or waitlist',
+    r.ok && r.data.user && (r.data.user.supervisorId || r.data.user.supervisorWaitlisted),
+    JSON.stringify(r.data).slice(0, 180));
 
   r = await call('/users', { method: 'POST', body: { role: 'member', fullName: 'Nope', email: 'nope@horizon.org', password: 'Member@123' } }, tok.organization);
   check('org admin CANNOT create member (403)', r.status === 403, 'status ' + r.status);
@@ -121,6 +133,13 @@ async function part2(r, tok, check) {
     r = await call('/reports/students', null, st);
     check('GET /reports/students (supervisor sees own members)',
       r.ok && Array.isArray(r.data.students), 'status ' + r.status);
+    if (r.data.students && r.data.students.length) {
+      const member = r.data.students[0];
+      r = await call('/reports/student-detail?studentId=' + encodeURIComponent(member.id), null, st);
+      check('GET /reports/student-detail (supervisor sees own member submissions)',
+        r.ok && Array.isArray(r.data.submissions) && typeof r.data.count === 'number',
+        'status ' + r.status);
+    }
   }
 
   r = await call('/admin/overview', null, tok.schools);
@@ -143,6 +162,15 @@ async function part2(r, tok, check) {
     !r.data.students.length || r.data.students[0].modules.every(function (m) {
       return typeof m.id === 'string' && typeof m.percent === 'number';
     }));
+  const progressReport = r;
+  if (r.data.students && r.data.students.length) {
+    const learner = r.data.students[0];
+    r = await call('/reports/student-detail?studentId=' + encodeURIComponent(learner.id), null, tok.schools);
+    check('GET /reports/student-detail (tenant admin sees in-account submissions)',
+      r.ok && Array.isArray(r.data.submissions) && typeof r.data.count === 'number',
+      'status ' + r.status);
+  }
+  r = progressReport;
   check('progress report provides available calendar years for module activity',
     Array.isArray(r.data.activityYears) && r.data.activityYears.every(function (year) {
       return /^\d{4}$/.test(year);

@@ -15,7 +15,9 @@
     "check:routes": "node tools/routes-parity-check.js",
     "check:browser": "node tools/reader-browser-check.js http://127.0.0.1:3000",
     "check:chapter-lock": "node tools/chapter-lock-browser-check.js http://127.0.0.1:3000",
-    "check:analytics": "node tools/analytics-api-check.js http://127.0.0.1:3000"
+    "check:analytics": "node tools/analytics-api-check.js http://127.0.0.1:3000",
+    "check:supervisor-assignment": "node tools/supervisor-assignment-check.js",
+    "check:messaging": "node tools/messaging-api-check.js"
   },
   "engines": {
     "node": ">=16"
