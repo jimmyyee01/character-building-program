@@ -1563,8 +1563,11 @@ async function renderBranding() {
 async function renderProgress() {
   const el = sec('progress');
   el.innerHTML = '<div class="card"><p class="muted">Loading student progress…</p></div>';
-  let d;
-  try { d = await API.get('/reports/students'); }
+  let d, moduleData;
+  try {
+    d = await API.get('/reports/students');
+    moduleData = await API.get('/modules');
+  }
   catch (e) {
     el.innerHTML = '<div class="card"><p class="muted">' + esc(msg(e)) + '</p></div>';
     toast(msg(e), 'err');
@@ -1583,6 +1586,14 @@ async function renderProgress() {
     { label: '25 – 74%', value: list.filter(function (s) { return s.progress >= 25 && s.progress < 75; }).length, color: '#b45309' },
     { label: 'Under 25%', value: list.filter(function (s) { return s.progress < 25; }).length, color: '#c62828' }
   ];
+  const modules = (moduleData.modules || []).map(function (m) {
+    return { id: m.id, title: m.title };
+  });
+  const rankingOptions = '<option value="">Choose a ranking view</option>' +
+    modules.map(function (m) {
+      return '<option value="module:' + esc(String(m.id)) + '">Top 10 — ' + esc(m.title) + '</option>';
+    }).join('') +
+    '<option value="graduation">Top 10 — Graduation</option>';
   el.innerHTML = '<h2><span class="motto">Be True</span>Student progress</h2>' +
     '<div class="grid cols-4">' +
       statCard(d.count, 'Learners', 'blue') +
@@ -1602,6 +1613,12 @@ async function renderProgress() {
         chartBarsH(list.slice().sort(function (a, b) { return b.certificates - a.certificates; }).slice(0, 10)
           .map(function (s) { return { label: s.fullName, value: s.certificates, color: '#b8217a' }; })) + '</div>' +
     '</div></div>' +
+    '<div class="card"><h3>Top performers</h3>' +
+    '<p class="muted small">Rank learners in each module or see graduates who completed every module.</p>' +
+    '<label for="accountRankingView">Choose a view</label>' +
+    '<select id="accountRankingView">' + rankingOptions + '</select>' +
+    '<div id="accountTopPerformers" class="mt">' +
+      accountRankingHtml('', list, modules) + '</div></div>' +
     '<div class="card"><div class="row" style="align-items:flex-end">' +
       '<div style="min-width:200px"><label>Search learners</label>' +
         '<input type="text" id="pgSearch" placeholder="Name, level, class…"></div>' +
@@ -1626,6 +1643,11 @@ async function renderProgress() {
     });
     applyTableSearch(table, search, document.getElementById('pgCount'));
   }
+  const rankingView = document.getElementById('accountRankingView');
+  if (rankingView) rankingView.addEventListener('change', function () {
+    document.getElementById('accountTopPerformers').innerHTML =
+      accountRankingHtml(this.value, list, modules);
+  });
   el.onclick = function (e) {
     const b = e.target.closest('button[data-sum]');
     if (!b) return;
@@ -1634,6 +1656,58 @@ async function renderProgress() {
     const nowHidden = row.classList.toggle('hidden');
     b.textContent = nowHidden ? 'Summary' : 'Hide summary';
   };
+}
+
+function accountRankingHtml(view, students, modules) {
+  let title, rows;
+  if (view === 'graduation') {
+    title = 'Top performers at graduation';
+    rows = students.filter(function (s) {
+      return s.moduleCount > 0 && s.modulesCompleted === s.moduleCount;
+    }).sort(function (a, b) {
+      return b.certificates - a.certificates || b.submissions - a.submissions ||
+        String(a.fullName).localeCompare(String(b.fullName));
+    }).slice(0, 10);
+    if (!rows.length) return '<p class="muted">No learners have completed all modules yet.</p>';
+    return '<h4>' + title + '</h4><p class="muted small">Graduates are ranked by certificates earned, then submissions.</p>' +
+      '<div class="table-wrap"><table><thead><tr><th>Rank</th><th>Learner</th>' +
+      '<th>Certificates</th><th>Submissions</th><th>Overall progress</th></tr></thead><tbody>' +
+      rows.map(function (s, i) {
+        return '<tr><td><b>' + (i + 1) + '</b></td><td>' + esc(s.fullName || '—') +
+          (s.studentNumber ? '<div class="muted small">' + esc(s.studentNumber) + '</div>' : '') +
+          '</td><td>' + esc(String(s.certificates || 0)) + '</td><td>' +
+          esc(String(s.submissions || 0)) + '</td><td>' + esc(String(s.progress || 0)) + '%</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+  if (String(view).indexOf('module:') === 0) {
+    const id = String(view).slice(7);
+    const module = modules.filter(function (m) { return String(m.id) === id; })[0];
+    if (!module) return '<p class="muted">Choose a module or graduation view to see the top 10.</p>';
+    title = 'Top performers — ' + esc(module.title);
+    rows = students.map(function (s) {
+      const result = (s.modules || []).filter(function (m) { return String(m.id) === id; })[0];
+      return result ? { student: s, result: result } : null;
+    }).filter(function (entry) {
+      return entry && (Number(entry.result.percent) > 0 || entry.result.status === 'completed');
+    }).sort(function (a, b) {
+      return Number(b.result.percent) - Number(a.result.percent) ||
+        (b.result.status === 'completed' ? 1 : 0) - (a.result.status === 'completed' ? 1 : 0) ||
+        b.student.progress - a.student.progress || b.student.submissions - a.student.submissions ||
+        String(a.student.fullName).localeCompare(String(b.student.fullName));
+    }).slice(0, 10);
+    if (!rows.length) return '<h4>' + title + '</h4><p class="muted">No learners have started this module yet.</p>';
+    return '<h4>' + title + '</h4><div class="table-wrap"><table><thead><tr><th>Rank</th>' +
+      '<th>Learner</th><th>Module progress</th><th>Status</th><th>Overall progress</th>' +
+      '</tr></thead><tbody>' + rows.map(function (entry, i) {
+        return '<tr><td><b>' + (i + 1) + '</b></td><td>' + esc(entry.student.fullName || '—') +
+          (entry.student.studentNumber ? '<div class="muted small">' + esc(entry.student.studentNumber) + '</div>' : '') +
+          '</td><td>' + esc(String(entry.result.percent || 0)) + '%</td><td>' +
+          (entry.result.status === 'completed' ? '<span class="badge ok">COMPLETED</span>' :
+            '<span class="badge info">IN PROGRESS</span>') + '</td><td>' +
+          esc(String(entry.student.progress || 0)) + '%</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+  return '<p class="muted">Choose a module or graduation view to see the top 10 performers.</p>';
 }
 
 function progressTableHtml(list) {
@@ -2050,8 +2124,6 @@ async function boot() {
 }
 
 boot();
-
-
 
 
 

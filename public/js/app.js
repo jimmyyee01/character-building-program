@@ -759,8 +759,13 @@ async function issueCertificate(moduleId, videoId) {
     const r = await API.post('/certificates/issue', { moduleId: moduleId, videoId: videoId || undefined });
     if (videoId) loadVideos();
     await loadFlow();
-    toast('Certificate issued — well done!', 'ok');
-    showCertificate(r.certificate.id);
+    if (r.generalCertificate) {
+      toast('Congratulations — you graduated! Your general certificate and transcript are ready.', 'ok');
+      showCertificate(r.generalCertificate.id);
+    } else {
+      toast('Certificate issued — well done!', 'ok');
+      showCertificate(r.certificate.id);
+    }
     renderModules();
   } catch (e) { toast(e.message, 'err'); }
 }
@@ -784,15 +789,66 @@ function learnerCertSheet(c, b) {
     '<span>Issued: ' + fmtDate(c.issuedAt) + '</span></div>' +
   '</div>';
 }
+function learnerTranscriptSheet(c) {
+  const transcript = Array.isArray(c.transcript) ? c.transcript : [];
+  const rows = transcript.map(function (m, i) {
+    return '<tr><td>' + (i + 1) + '</td><td>' + esc(m.moduleTitle || '—') +
+      '</td><td>' + esc(m.status || 'Completed') + '</td><td>' +
+      esc(String(m.performance == null ? 0 : m.performance)) + '%</td><td>' +
+      (m.objectiveScore == null ? '—' : esc(String(m.objectiveScore)) + '%') + '</td></tr>';
+  }).join('');
+  return '<div class="transcript-sheet"><h2>Programme Transcript</h2>' +
+    '<p><b>Learner:</b> ' + esc(c.userName || '—') + '</p>' +
+    '<p><b>Account:</b> ' + esc(c.tenantName || '—') + '</p>' +
+    '<table><thead><tr><th>#</th><th>Module</th><th>Status</th>' +
+    '<th>Performance</th><th>Objectives</th></tr></thead><tbody>' +
+    (rows || '<tr><td colspan="5">No module results are recorded.</td></tr>') +
+    '</tbody></table><p><b>Overall programme performance:</b> ' +
+    esc(String(c.performance == null ? 0 : c.performance)) + '%</p>' +
+    '<p><b>Graduation certificate:</b> ' + esc(c.code || '—') +
+    ' — issued ' + fmtDate(c.issuedAt) + '</p></div>';
+}
 async function showCertificate(id) {
   try {
     const data = await API.get('/certificate/' + id);
-    modal(learnerCertSheet(data.certificate, data.branding) +
-      '<div class="mt center no-print">' +
-        '<div class="row export-buttons"><button type="button" class="ghost" data-export="cert-print">Print</button><button type="button" class="ghost" data-export="cert-pdf">PDF</button><button type="button" class="ghost" data-export="cert-word">Word</button></div>' +
-        '<button data-close class="ghost">Close</button></div>',
-      { wide: true });
+    const c = data.certificate;
+    const general = c.type === 'general';
+    const certificateTitle = general ? 'Graduation certificate' : c.title;
+    const output = '<div class="card"><div id="certificatePrint">' +
+      learnerCertSheet(c, data.branding) + '</div>' +
+      '<div class="mt center no-print"><div class="row export-buttons" data-target="#certificatePrint">' +
+      '<button type="button" class="ghost" data-record="certificatePrint" data-title="' + esc(certificateTitle) + '">Print certificate</button>' +
+      '<button type="button" class="ghost" data-record="certificatePrint" data-title="' + esc(certificateTitle) + '">Save certificate as PDF</button>' +
+      '</div></div></div>' +
+      (general ? '<div class="card"><div id="transcriptPrint">' + learnerTranscriptSheet(c) + '</div>' +
+        '<div class="mt center no-print"><div class="row export-buttons" data-target="#transcriptPrint">' +
+        '<button type="button" class="ghost" data-record="transcriptPrint" data-title="Programme transcript">Print transcript</button>' +
+        '<button type="button" class="ghost" data-record="transcriptPrint" data-title="Programme transcript">Save transcript as PDF</button>' +
+        '</div></div></div>' : '') +
+      '<div class="mt center no-print"><button data-close class="ghost">Close</button></div>';
+    const dialog = modal(output, { wide: true });
+    dialog.querySelectorAll('[data-record]').forEach(function (button) {
+      button.onclick = function () { printLearnerRecord(button.dataset.record, button.dataset.title); };
+    });
   } catch (e) { toast(e.message, 'err'); }
+}
+function printLearnerRecord(id, title) {
+  const source = $(id);
+  if (!source) return;
+  const win = window.open('', '_blank', 'scrollbars=yes,width=900,height=700');
+  if (!win) { toast('Allow pop-ups so you can print or save this record as PDF.', 'err'); return; }
+  const d = win.document;
+  d.open();
+  d.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + esc(title) +
+    '</title><style>body{font:14px Arial,sans-serif;color:#222;margin:30px}' +
+    'table{width:100%;border-collapse:collapse;margin:18px 0}th,td{border:1px solid #999;padding:8px;text-align:left}' +
+    '.cert-sheet{border:8px double #b99a48;padding:40px;text-align:center;min-height:480px}' +
+    '.cert-sheet h1{font:700 30px Georgia,serif}.cert-sheet .name{font:700 28px Georgia,serif;margin:20px}' +
+    '.cert-sheet .foot{display:flex;justify-content:space-between;margin-top:30px}</style></head><body>' +
+    source.innerHTML + '</body></html>');
+  d.close();
+  win.focus();
+  win.print();
 }
 /* Bulk download / print of every certificate the learner has earned. */
 async function exportAllCertificates(type) {
@@ -827,7 +883,9 @@ async function renderCertificates() {
             '<h4 class="mt">' + esc(c.title) + '</h4>' +
             '<div class="small muted">Code ' + esc(c.code) + ' — ' + fmtDate(c.issuedAt) + '</div>' +
             '<div class="small">Performance ' + esc(String(c.performance)) + '%</div>' +
-            '<div class="mt"><button data-cert="' + esc(c.id) + '">View certificate</button></div></div>';
+            '<div class="mt"><button data-cert="' + esc(c.id) + '">' +
+              (c.type === 'general' ? 'View certificate &amp; transcript' : 'View certificate') +
+              '</button></div></div>';
         }).join('') + '</div>'
       : '<div class="card"><p class="muted">No certificates yet — complete a module to earn one.</p></div>');
   $('view-certificates').querySelectorAll('[data-cert]').forEach(function (b) {
@@ -1073,8 +1131,6 @@ boot().catch(function (e) {
   console.error(e);
   toast(e.message || 'Failed to start', 'err');
 });
-
-
 
 
 

@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Character Building Program
 
 A complete multi-portal character-education system: **super admin console**, four
@@ -100,9 +99,9 @@ pulling (it only adds what is missing — it never touches data):
 php migrate.php
 ```
 
-It adds the key-word columns used to assess typed answers. Until it is run the
-app still works: key words are derived from the chapter text and answers are
-scored when they are read.
+It adds the key-word columns used to assess typed answers and the transcript
+snapshot stored with the general graduation certificate. Existing graduates
+receive their transcript the next time their certificates are loaded.
 
 ### "Unknown endpoint: GET /api/..." — the server is running older code
 
@@ -256,6 +255,8 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
   school logo and program logo; see everything about each account.
 - **Modules** — the three seeded modules (GAMMA/BETA/ALPHA) plus the ability to
   add more, set certificate names, summary prompts/colours and completion video.
+- **Top performers** — dropdown views for the top 10 learners in each module
+  and the top 10 graduates who completed the full programme.
 - **Library** — upload every book (PDF), letter and video; modules *pick* their
   content from this library. A PDF stays shut until it is clicked: listings and
   previews show a small cover card ("Open book"), and only then does the reader
@@ -336,6 +337,9 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
 6. **Module 3 — ALPHA (Communication, Sex & Applied Character in Leadership)**
    — 4 books, same objective + colour-summary flow (communication, sex,
    character) → **ALPHA CERTIFICATE**.
+   Completing the final module automatically graduates the learner and awards
+   the **GENERAL CERTIFICATE** plus a printable transcript with each module's
+   performance and objectives score.
 7. **Books** stay shut while a learner is working through the modules: clicking a
    chapter opens **only that chapter's pages** (with a Close button and no
    full-book control on the page), and the **whole book opens after every module
@@ -406,7 +410,3 @@ git push -u origin main
 
 Use a personal access token as the password, or configure SSH first.
 `data/` and `uploads/` are git-ignored, so no personal data is ever pushed.
-
-=======
-# character-building-program
->>>>>>> 4e064eb957b22ecf9cb2bcae455206b0653637ca

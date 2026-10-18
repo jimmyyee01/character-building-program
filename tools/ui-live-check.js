@@ -16,6 +16,9 @@ const realFetch = globalThis.fetch;   /* captured before any stub is installed *
 function makeEl(tag) {
   return {
     tagName: (tag || 'div').toUpperCase(), className: '', textContent: '', disabled: false,
+    /* a browser input always has a string value — code that reads .value.trim()
+       must not blow up in here either */
+    value: '', checked: false, selectedIndex: 0, files: [], options: [],
     dataset: {}, _attrs: {}, style: { setProperty() {}, removeProperty() {} },
     classList: { add() {}, remove() {}, toggle() { return true; }, contains() { return false; } },
     setAttribute(k, v) { this._attrs[k] = String(v); }, getAttribute(k) { return this._attrs[k] == null ? null : this._attrs[k]; },
@@ -348,7 +351,113 @@ function cleanSlice(s) {
     }
   }
 
-  /* ------------------------------------------ real PDF upload end-to-end -- */
+  /* --------------------------- every console view, with live data --------- */
+  /* Nothing so far rendered the consoles' other screens: a view that threw or
+     leaked undefined/NaN into its markup would only show up on the live site. */
+  {
+    const captureHtml = function (ctx) {
+      const els = {}, html = {}, real = ctx.document.getElementById;
+      ctx.document.getElementById = function (id) {
+        if (!els[id]) {
+          const el = makeEl('div');
+          let val = '';
+          Object.defineProperty(el, 'innerHTML', {
+            set(v) { val = String(v); html[id] = val; },
+            get() { return val; }
+          });
+          els[id] = el;
+        }
+        return els[id];
+      };
+      return { html: html, restore: function () { ctx.document.getElementById = real; } };
+    };
+    const renderEach = async function (ctx, expr, keys, label, token) {
+      /* sign the console in the way the page does: token + user in localStorage */
+      run(ctx, 'API.setToken', [token]);
+      const me = await api('/me', token);
+      if (me && me.user) {
+        run(ctx, 'API.setUser', [me.user]);
+        /* the consoles keep the whole /me payload in ME (ME.user, ME.branding) */
+        vm.runInContext('typeof ME !== "undefined" && (ME = ' + JSON.stringify(me) + ');' +
+          'typeof ROLE !== "undefined" && (ROLE = ' + JSON.stringify(me.user.role) + ');' +
+          'typeof S !== "undefined" && (S.me = ' + JSON.stringify(me) + ');', ctx);
+      }
+      const cap = captureHtml(ctx);
+      for (const key of keys) {
+        let err = '';
+        try { await run(ctx, expr.replace('%s', key)); }
+        catch (e) { err = (e && e.message) || String(e); }
+        const out = cap.html['view-' + key] || '';
+        check('view renders with live data: ' + label + ' - ' + key,
+          !err && out.length > 40, err ? 'threw: ' + err : 'html ' + out.length + ' chars');
+        if (label === 'super console' && key === 'modules') {
+          check('modules admin offers module and graduation ranking views',
+            out.indexOf('id="moduleRankingView"') !== -1 &&
+            out.indexOf('Top 10 — Graduation') !== -1);
+        }
+        if (label === 'admin console' && key === 'progress') {
+          check('account admins and supervisors get module and graduation ranking views',
+            out.indexOf('id="accountRankingView"') !== -1 &&
+            out.indexOf('Top 10 — Graduation') !== -1);
+        }
+        dirty(label + ' - ' + key, out);
+      }
+      cap.restore();
+    };
+    await renderEach(superCtx, 'RENDERERS["%s"]',
+      ['dashboard', 'portals', 'accounts', 'modules', 'library', 'books', 'users', 'reports',
+        'progress', 'analytics', 'settings'], 'super console', sup);
+    await renderEach(adminCtx, 'RENDER["%s"]',
+      ['dashboard', 'users', 'supervisors', 'library', 'books', 'submissions', 'certificates',
+        'progress', 'analytics', 'branding'], 'admin console', admin);
+
+    /* the learner's own screens, with the student's token */
+    run(appCtx, 'API.setToken', [stu]);
+    const stuMe = await api('/me', stu);
+    if (stuMe && stuMe.user) {
+      run(appCtx, 'API.setUser', [stuMe.user]);
+      vm.runInContext('S.me = ' + JSON.stringify(stuMe) + ';', appCtx);
+    }
+    const learnerCap = captureHtml(appCtx);
+    const LEARNER = [['renderHome', 'view-home'], ['renderModules', 'view-modules'],
+      ['renderLibrary', 'view-library'], ['renderCertificates', 'view-certificates'],
+      ['renderFinal', 'view-final'], ['renderThoughts', 'view-thoughts']];
+    for (const pair of LEARNER) {
+      let err = '';
+      try { await run(appCtx, pair[0]); } catch (e) { err = (e && e.message) || String(e); }
+      const html = learnerCap.html[pair[1]] || '';
+      check('learner view renders with live data: ' + pair[0].replace('render', ''),
+        !err && html.length > 40, err ? 'threw: ' + err : 'html ' + html.length + ' chars');
+      dirty('learner view - ' + pair[0], html);
+    }
+    learnerCap.restore();
+
+    const graduateToken = await login({ slug: 'greenfield-academy', identifier: 'STU-100',
+      password: 'Student@123' });
+    check('login: graduate for transcript rendering', !!graduateToken);
+    if (graduateToken) {
+      const certData = await api('/certificates', graduateToken);
+      const general = (certData.certificates || []).find(function (c) { return c.type === 'general'; });
+      const transcript = general ? run(appCtx, 'learnerTranscriptSheet', [general]) : '';
+      check('general transcript renders module grades and graduation code',
+        !!general && transcript.indexOf('Programme Transcript') !== -1 &&
+        transcript.indexOf('Module') !== -1 && transcript.indexOf(String(general.code)) !== -1,
+        transcript.slice(0, 160));
+      dirty('graduate transcript', transcript);
+    }
+
+    /* the same console as a SUPERVISOR: only the views that role is offered */
+    const supLogin = await login({ slug: 'horizon-alliance', identifier: 'supervisor@horizon.org',
+      password: 'Super@123' });
+    check('login: supervisor (for the restricted console)', !!supLogin);
+    if (supLogin) {
+      await renderEach(adminCtx, 'RENDER["%s"]',
+        ['dashboard', 'users', 'submissions', 'certificates', 'analytics', 'progress'],
+        'supervisor console', supLogin);
+    }
+  }
+
+  /* -------------------------------------------- real PDF upload end-to-end -- */
   const pdfText = '%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n' +
     '2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >> endobj\n' +
     '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj\n' +
@@ -481,4 +590,3 @@ function cleanSlice(s) {
   console.log(bad ? '\n' + bad + ' FAILED' : '\nLIVE RENDER OK');
   process.exit(bad ? 1 : 0);
 })().catch(function (e) { console.log('FATAL ' + e.message); process.exit(1); });
-

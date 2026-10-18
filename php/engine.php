@@ -68,6 +68,7 @@ function n_cert(array $r): array {
     return ['id' => $r['id'], 'type' => $r['type'], 'code' => $r['code'],
         'userId' => $r['user_id'], 'tenantId' => $r['tenant_id'], 'moduleId' => $r['module_id'],
         'title' => $r['title'], 'books' => jdec($r['books_json'] ?? null, []),
+        'transcript' => jdec($r['transcript_json'] ?? null, []),
         'bestBookId' => $r['best_book_id'], 'bestBook' => $r['best_book'],
         'performance' => (int)($r['performance'] ?? 0),
         'objectiveScore' => $r['objective_score'] !== null ? (int)$r['objective_score'] : null,
@@ -488,6 +489,5 @@ function shuffle_with_seed(array $arr, string $seed): array {
 function shuffled_for_login(array $user, ?string $token, array $list): array {
     return shuffle_with_seed($list, $user['id'] . '|' . ($token ?? '') . '|' . date('Y-m-d'));
 }
-
 
 

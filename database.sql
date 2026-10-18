@@ -173,6 +173,7 @@ CREATE TABLE IF NOT EXISTS certificates (
   module_id VARCHAR(64) NULL,
   title VARCHAR(255) NOT NULL,
   books_json LONGTEXT NULL,
+  transcript_json LONGTEXT NULL,
   best_book_id VARCHAR(64) NULL,
   best_book VARCHAR(255) NULL,
   performance INT NOT NULL DEFAULT 0,
@@ -191,5 +192,4 @@ CREATE TABLE IF NOT EXISTS thoughts (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX (user_id)
 ) ENGINE=InnoDB;
-
 

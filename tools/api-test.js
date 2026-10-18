@@ -135,6 +135,10 @@ async function part2(r, tok, check) {
       Array.isArray(r.data.students[0].recent) && typeof r.data.students[0].modulesCompleted === 'number' &&
       typeof r.data.students[0].submissions === 'number'),
     JSON.stringify(r.data.students[0] || {}).slice(0, 120));
+  check('progress report includes stable module ids for ranking views',
+    !r.data.students.length || r.data.students[0].modules.every(function (m) {
+      return typeof m.id === 'string' && typeof m.percent === 'number';
+    }));
   const supLogin = await call('/auth/super-login', { method: 'POST', body: { username: 'superadmin', password: 'SuperAdmin@123' } });
   r = await call('/reports/students', null, supLogin.data.token);
   check('GET /reports/students (super admin, all accounts)',
@@ -172,6 +176,16 @@ async function part2(r, tok, check) {
   const gradBook = await call('/book/book_gamma_1', null, grad.data.token);
   check('graduate book payload unlocks the full book', gradBook.data.pdfUnlocked === true,
     JSON.stringify(gradBook.data.pdfUnlocked));
+  const graduateCerts = await call('/certificates', null, grad.data.token);
+  const generalCert = (graduateCerts.data.certificates || []).find(function (c) { return c.type === 'general'; });
+  check('graduate automatically receives general certificate with a module transcript',
+    graduateCerts.ok && !!generalCert && Array.isArray(generalCert.transcript) &&
+      generalCert.transcript.length > 0 &&
+      generalCert.transcript.every(function (m) { return m.status === 'completed'; }),
+    JSON.stringify(generalCert || {}).slice(0, 180));
+  const graduateCertsAgain = await call('/certificates', null, grad.data.token);
+  check('general graduation certificate is issued only once',
+    (graduateCertsAgain.data.certificates || []).filter(function (c) { return c.type === 'general'; }).length === 1);
   await call('/library/' + lockId, { method: 'DELETE' }, supLogin.data.token);
 
   /* ---- super analytics: every level of the picture ---- */
@@ -305,4 +319,3 @@ async function part3(r, tok, check) {
     check('GET /certificate/:id (no certificate issued yet — skipped)', true);
   }
 }
-

@@ -280,10 +280,22 @@ function flow_ensure_general($user) {
   $pdo = db();
   $flow = flow_for($user);
   if (empty($flow['allDone'])) return null;
+  $transcript = array_map(function ($m) {
+    return ['moduleId' => $m['id'], 'moduleTitle' => $m['title'], 'status' => $m['status'],
+      'performance' => (int)($m['progress']['percent'] ?? 0),
+      'objectiveScore' => isset($m['progress']['objectiveScore']) ? (int)$m['progress']['objectiveScore'] : null];
+  }, module_statuses($user));
   $st = $pdo->prepare("SELECT * FROM certificates WHERE user_id=? AND type='general' LIMIT 1");
   $st->execute([$user['id']]);
   $ex = $st->fetch();
-  if ($ex) return n_cert($ex);
+  if ($ex) {
+    if (empty($ex['transcript_json']) && has_column('certificates', 'transcript_json')) {
+      $json = jenc($transcript);
+      $pdo->prepare('UPDATE certificates SET transcript_json=? WHERE id=?')->execute([$json, $ex['id']]);
+      $ex['transcript_json'] = $json;
+    }
+    return n_cert($ex);
+  }
   $titles = [];
   foreach (all_modules() as $m) foreach (visible_books($user['tenant_id'], $m['id']) as $b) $titles[] = $b['title'];
   $perf = performance($user);
@@ -291,11 +303,12 @@ function flow_ensure_general($user) {
   $row = ['id' => uid('cert'), 'type' => 'general', 'code' => 'GEN-' . strtoupper(bin2hex(random_bytes(4))),
     'user_id' => $user['id'], 'tenant_id' => $user['tenant_id'], 'module_id' => null,
     'title' => 'GENERAL CERTIFICATE — CHARACTER BUILDING PROGRAM', 'books_json' => jenc(array_values($titles)),
+    'transcript_json' => jenc($transcript),
     'best_book_id' => null, 'best_book' => null, 'performance' => (int)($perf['overall'] ?? 0),
     'objective_score' => null, 'user_name' => $user['full_name'], 'tenant_name' => $tenant ? $tenant['name'] : null,
     'issued_at' => now_dt()];
-  $pdo->prepare('INSERT INTO certificates (id,type,code,user_id,tenant_id,module_id,title,books_json,best_book_id,best_book,performance,objective_score,user_name,tenant_name,issued_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute(
-    [$row['id'],$row['type'],$row['code'],$row['user_id'],$row['tenant_id'],$row['module_id'],$row['title'],$row['books_json'],$row['best_book_id'],$row['best_book'],$row['performance'],$row['objective_score'],$row['user_name'],$row['tenant_name'],$row['issued_at']]);
+  $pdo->prepare('INSERT INTO certificates (id,type,code,user_id,tenant_id,module_id,title,books_json,transcript_json,best_book_id,best_book,performance,objective_score,user_name,tenant_name,issued_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute(
+    [$row['id'],$row['type'],$row['code'],$row['user_id'],$row['tenant_id'],$row['module_id'],$row['title'],$row['books_json'],$row['transcript_json'],$row['best_book_id'],$row['best_book'],$row['performance'],$row['objective_score'],$row['user_name'],$row['tenant_name'],$row['issued_at']]);
   return n_cert($row);
 }
 function r_cert_issue($user, $body, $params, $token, $query) {

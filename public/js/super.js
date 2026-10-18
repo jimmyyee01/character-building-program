@@ -5,6 +5,7 @@ const S = {
   view: 'dashboard',
   portals: null, tenants: null, modules: null, library: null, videos: null,
   books: [], bookModuleId: '',
+  moduleRankingView: '', moduleRankingRequest: 0,
   users: [], usersTenant: '', usersSearch: '',
   editPortalId: null, editTenantId: null, editModuleId: null, editLibraryId: null,
   editChapterId: null,
@@ -1339,6 +1340,81 @@ function promptRowHTML(label, color) {
     '<div class="fixed"><button type="button" class="small danger" data-act="m-prompt-del">Remove</button></div>' +
     '</div>';
 }
+function moduleRankingHTML(view, students, modules) {
+  let title, rows;
+  if (view === 'graduation') {
+    title = 'Top performers at graduation';
+    rows = students.filter(function (s) {
+      return s.moduleCount > 0 && s.modulesCompleted === s.moduleCount;
+    }).sort(function (a, b) {
+      return b.certificates - a.certificates || b.submissions - a.submissions ||
+        String(a.fullName).localeCompare(String(b.fullName));
+    }).slice(0, 10);
+  } else if (String(view).indexOf('module:') === 0) {
+    const id = String(view).slice(7);
+    const module = modules.find(function (m) { return String(m.id) === id; });
+    if (!module) return '<div class="muted">Choose a module ranking to view performers.</div>';
+    title = 'Top performers — ' + esc(module.title);
+    rows = students.map(function (s) {
+      const result = (s.modules || []).find(function (m) { return String(m.id) === id; });
+      return result ? { student: s, result: result } : null;
+    }).filter(function (entry) {
+      return entry && (Number(entry.result.percent) > 0 || entry.result.status === 'completed');
+    }).sort(function (a, b) {
+      return Number(b.result.percent) - Number(a.result.percent) ||
+        (b.result.status === 'completed' ? 1 : 0) - (a.result.status === 'completed' ? 1 : 0) ||
+        b.student.progress - a.student.progress ||
+        b.student.submissions - a.student.submissions ||
+        String(a.student.fullName).localeCompare(String(b.student.fullName));
+    }).slice(0, 10);
+  } else {
+    return '<div class="muted">Choose a module or graduation view to see the top 10 performers.</div>';
+  }
+
+  if (view === 'graduation') {
+    if (!rows.length) return '<h4>' + title + '</h4><p class="muted">No learners have completed all modules yet.</p>';
+    return '<h4>' + title + '</h4><p class="muted small">Graduates are ranked by certificates earned, then submissions.</p>' +
+      '<div class="table-wrap"><table><thead><tr><th>Rank</th><th>Learner</th><th>Account</th>' +
+      '<th>Certificates</th><th>Submissions</th></tr></thead><tbody>' +
+      rows.map(function (s, i) {
+        return '<tr><td><b>' + (i + 1) + '</b></td><td>' + esc(s.fullName || '—') +
+          (s.studentNumber ? '<div class="muted small">' + esc(s.studentNumber) + '</div>' : '') +
+          '</td><td>' + esc(s.tenantName || '—') + '</td><td>' + num(s.certificates) +
+          '</td><td>' + num(s.submissions) + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  if (!rows.length) return '<h4>' + title + '</h4><p class="muted">No learners have started this module yet.</p>';
+  return '<h4>' + title + '</h4><div class="table-wrap"><table><thead><tr><th>Rank</th>' +
+    '<th>Learner</th><th>Account</th><th>Module progress</th><th>Status</th><th>Overall progress</th>' +
+    '</tr></thead><tbody>' + rows.map(function (entry, i) {
+      return '<tr><td><b>' + (i + 1) + '</b></td><td>' + esc(entry.student.fullName || '—') +
+        (entry.student.studentNumber ? '<div class="muted small">' + esc(entry.student.studentNumber) + '</div>' : '') +
+        '</td><td>' + esc(entry.student.tenantName || '—') + '</td><td>' +
+        num(entry.result.percent) + '%</td><td>' +
+        (entry.result.status === 'completed'
+          ? '<span class="badge ok">COMPLETED</span>'
+          : '<span class="badge info">IN PROGRESS</span>') +
+        '</td><td>' + num(entry.student.progress) + '%</td></tr>';
+    }).join('') + '</tbody></table></div>';
+}
+async function loadModuleRanking(view) {
+  const target = $('moduleTopPerformers');
+  if (!target) return;
+  if (!view) {
+    target.innerHTML = moduleRankingHTML('', [], S.modules || []);
+    return;
+  }
+  const request = ++S.moduleRankingRequest;
+  target.innerHTML = loadMsg();
+  try {
+    const data = await API.get('/reports/students');
+    if (request !== S.moduleRankingRequest) return;
+    target.innerHTML = moduleRankingHTML(view, data.students || [], S.modules || []);
+  } catch (e) {
+    if (request === S.moduleRankingRequest) target.innerHTML = errBox(e);
+  }
+}
 async function renderModules() {
   const v = $('view-modules');
   v.innerHTML = loadMsg();
@@ -1380,6 +1456,18 @@ async function renderModules() {
           esc(String(m.id)) + '">Delete</button>' +
       '</td></tr>';
   }).join('') : '<tr><td colspan="7" class="muted">No modules yet.</td></tr>';
+  const rankingViewExists = S.moduleRankingView === 'graduation' ||
+    S.modules.some(function (m) { return S.moduleRankingView === 'module:' + String(m.id); });
+  if (!rankingViewExists) S.moduleRankingView = '';
+  const rankingOptions = '<option value="">Choose a ranking view</option>' +
+    S.modules.map(function (m) {
+      const value = 'module:' + String(m.id);
+      return '<option value="' + esc(value) + '"' +
+        (S.moduleRankingView === value ? ' selected' : '') + '>Top 10 — ' +
+        esc(m.title) + '</option>';
+    }).join('') +
+    '<option value="graduation"' + (S.moduleRankingView === 'graduation' ? ' selected' : '') +
+    '>Top 10 — Graduation</option>';
 
   v.innerHTML = '<h2>Modules</h2>' +
     '<div class="card"><h3>' +
@@ -1418,6 +1506,17 @@ async function renderModules() {
       '<th>Order</th><th>Key</th><th>Title</th><th>Mode</th><th>Certificate</th>' +
       '<th>Books</th><th>Actions</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  v.innerHTML += '<div class="card"><h3>Top performers</h3>' +
+    '<p class="muted small">View the top 10 learners for a module or the top 10 graduates who completed every module.</p>' +
+    '<label for="moduleRankingView">Choose a view</label>' +
+    '<select id="moduleRankingView">' + rankingOptions + '</select>' +
+    '<div id="moduleTopPerformers" class="mt">' +
+      moduleRankingHTML('', [], S.modules) + '</div></div>';
+  $('moduleRankingView').addEventListener('change', function () {
+    S.moduleRankingView = this.value;
+    loadModuleRanking(this.value);
+  });
+  if (S.moduleRankingView) loadModuleRanking(S.moduleRankingView);
 }
 async function saveModule(e) {
   e.preventDefault();
@@ -2565,8 +2664,6 @@ $('superLoginForm').addEventListener('submit', async function (e) {
 $('logoutBtn').addEventListener('click', function () { API.logout(); });
 
 init();
-
-
 
 
 

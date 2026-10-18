@@ -600,7 +600,7 @@ function analytics_payload(array $scope): array {
             'staff' => count(array_filter($staff, fn($u) => $u['tenant_id'] === $t['id'])),
             'participants' => count($us),
             'involved' => count(array_filter($us, fn($u) => !empty($subsByUser[$u['id']]))),
-            'submissions' => count($asubs), 'byType' => $byType, 'certificates' => count($acerts),
+            'submissions' => count($asubs), 'byType' => (object)$byType, 'certificates' => count($acerts),
             'flagged' => $aflag, 'flaggedRate' => a_pct($aflag, count($asubs)),
             'avgProgress' => a_mean(array_map(fn($u) => $perf[$u['id']]['progress'], $us)),
             'completionRate' => a_pct($afin, count($us)), 'finished' => $afin,
@@ -863,7 +863,8 @@ function r_reports_students(array $user, array $body, array $params, ?string $to
             'keywordScore'=>$scores ? (int)round(array_sum($scores) / count($scores)) : null,
             'typedAnswers'=>count($scores),
             'level'=>$level,
-            'modules'=>array_map(fn($m)=>['title'=>$m['title'], 'percent'=>(int)$m['percent'], 'status'=>$m['status']], $mods),
+            'modules'=>array_map(fn($m)=>['id'=>$m['id'], 'title'=>$m['title'],
+                'percent'=>(int)$m['percent'], 'status'=>$m['status']], $mods),
             'recent'=>$recent];
     }
     usort($students, function ($a, $b) {
@@ -904,9 +905,16 @@ function r_admin_overview(array $user, array $body, array $params, ?string $toke
                 'code'=>$s['supervisor_code'],'users'=>(int)$st2->fetchColumn(),'limit'=>100];
         }
     }
-    $st = $pdo->prepare('SELECT COUNT(*) FROM users WHERE supervisor_id=?'); $st->execute([$user['id']]);
+    /* the quota the console shows: an object for supervisors (max/used), nothing
+       for a tenant admin — same shape the Node build and /users return */
+    $used = 0;
+    if ($user['role'] === 'supervisor') {
+        $st = $pdo->prepare('SELECT COUNT(*) FROM users WHERE supervisor_id=?'); $st->execute([$user['id']]);
+        $used = (int)$st->fetchColumn();
+    }
     return ['branding'=>tenant_branding($tenant),'portal'=>$por ? portal_public($por) : null,
-        'counts'=>$counts,'supervisors'=>$sups,'limit'=>(int)$st->fetchColumn()];
+        'counts'=>$counts,'supervisors'=>$sups,
+        'limit' => $user['role'] === 'supervisor' ? ['max'=>100,'used'=>$used] : null];
 }
 function r_users_list(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin','supervisor']);

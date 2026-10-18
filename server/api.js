@@ -815,7 +815,17 @@ function ensureGeneralCertificate(user) {
   const allDone = statuses.length > 0 && statuses.every(s => s.status === 'completed');
   if (!allDone) return null;
   const existing = dbm.where('certificates', c => c.userId === user.id && c.type === 'general')[0];
-  if (existing) return existing;
+  const transcript = statuses.map(s => ({
+    moduleId: s.id, moduleTitle: s.title, status: s.status,
+    performance: s.progress.percent, objectiveScore: s.progress.objectiveScore
+  }));
+  if (existing) {
+    if (!Array.isArray(existing.transcript)) {
+      existing.transcript = transcript;
+      dbm.save();
+    }
+    return existing;
+  }
   const books = [];
   statuses.forEach(s => s.progress.books.forEach(b => { if (b.complete) books.push(b.book.title); }));
   const tenant = tenantOf(user);
@@ -824,7 +834,7 @@ function ensureGeneralCertificate(user) {
     code: 'GEN-' + crypto.randomBytes(4).toString('hex').toUpperCase(),
     userId: user.id, tenantId: user.tenantId, moduleId: null,
     title: 'GENERAL CERTIFICATE — CHARACTER BUILDING PROGRAM',
-    books, bestBook: null, performance: performance(user).overall, objectiveScore: null,
+    books, bestBook: null, performance: performance(user).overall, objectiveScore: null, transcript,
     userName: user.fullName, tenantName: tenant ? tenant.name : null, issuedAt: dbm.nowISO()
   };
   dbm.collection('certificates').push(gen);
@@ -2069,7 +2079,7 @@ route('GET', '/api/reports/students', ({ req, user }) => {
       progress: perf.overall, modulesCompleted: completed, moduleCount: mods.length, level: level,
       keywordScore: meanOf(subs.map(s => { const a = assessOf(s); return a ? a.keywordScore : null; })),
       typedAnswers: subs.filter(s => assessOf(s)).length,
-      modules: mods.map(m => ({ title: m.title, percent: m.percent, status: m.status })),
+      modules: mods.map(m => ({ id: m.id, title: m.title, percent: m.percent, status: m.status })),
       recent: subs.slice().sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).slice(0, 6)
         .map(s => ({ type: s.type, createdAt: s.createdAt, text: String(s.text || '').slice(0, 240),
           score: s.score == null ? null : s.score, total: s.total == null ? null : s.total,
@@ -2175,8 +2185,6 @@ route('GET', '/api/super/submissions', ({ req, user }) => {
 });
 
 module.exports = { handle };
-
-
 
 
 

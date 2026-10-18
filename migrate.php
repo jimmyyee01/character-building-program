@@ -24,6 +24,9 @@ $wanted = [
         'keywords_covered_json' => 'LONGTEXT NULL',
         'keywords_missing_json' => 'LONGTEXT NULL',
     ],
+    'certificates' => [
+        'transcript_json' => 'LONGTEXT NULL',
+    ],
 ];
 
 $done = 0; $skipped = 0;
