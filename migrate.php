@@ -19,6 +19,8 @@ $wanted = [
     ],
     'users' => [
         'supervisor_waitlisted' => 'TINYINT(1) NOT NULL DEFAULT 0',
+        'assessment_pre_json' => 'LONGTEXT NULL',
+        'assessment_post_json' => 'LONGTEXT NULL',
     ],
     'submissions' => [
         'keyword_score' => 'INT NULL',

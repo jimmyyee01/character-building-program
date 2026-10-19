@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS users (
   letter_feedback LONGTEXT NULL,
   optional_video_seen TINYINT(1) NOT NULL DEFAULT 0,
   watched_videos_json LONGTEXT NULL,
+  assessment_pre_json LONGTEXT NULL,
+  assessment_post_json LONGTEXT NULL,
   suspended TINYINT(1) NOT NULL DEFAULT 0,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX (tenant_id), INDEX (role), INDEX (email), INDEX (student_number)

@@ -32,6 +32,8 @@ function makeUser(o) {
     letterFeedbackAt: null,
     optionalVideoSeen: false,
     watchedVideos: [],
+    assessmentPre: null,
+    assessmentPost: null,
     suspended: false
   };
 }

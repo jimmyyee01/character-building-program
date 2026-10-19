@@ -469,6 +469,49 @@ function flow_for(array $user): array {
             'certificateName' => $m['certificateName'], 'status' => $m['status'],
             'percent' => $m['progress']['percent'], 'stage' => $m['progress']['stage']], $modules)];
 }
+/* ============================================ self-assessment (pre/post) === */
+/* One shared definition (assessment.json at the repo root) serves BOTH
+   backends, so the categories, statements and 1-5 scale can never drift apart.
+   Cached per request-process like other static programme content. */
+function assessment_def(): array {
+    static $def = null;
+    if ($def === null) {
+        $raw = @file_get_contents(__DIR__ . '/../assessment.json');
+        $def = $raw ? json_decode($raw, true) : ['scale' => [], 'categories' => []];
+        if (!is_array($def)) $def = ['scale' => [], 'categories' => []];
+    }
+    return $def;
+}
+function assessment_statement_ids(array $def): array {
+    $ids = [];
+    foreach (($def['categories'] ?? []) as $c)
+        foreach (($c['statements'] ?? []) as $s) $ids[] = (string)$s['id'];
+    return $ids;
+}
+/* Every statement must be rated with an integer 1-5 — anything else is
+   rejected before it can be stored, so a total always means something. */
+function assessment_answers($body, array $def): array {
+    $raw = is_array($body['answers'] ?? null) ? $body['answers'] : [];
+    $answers = [];
+    foreach (assessment_statement_ids($def) as $id) {
+        $v = is_numeric($raw[$id] ?? null) ? $raw[$id] : null;
+        need($v !== null && (string)(int)$v === (string)(float)$v
+            && (int)$v >= 1 && (int)$v <= 5, 'Please rate every statement from 1 to 5', 400);
+        $answers[$id] = (int)$v;
+    }
+    return $answers;
+}
+function assessment_totals(array $answers, array $def): array {
+    $total = 0; $byCategory = [];
+    foreach (($def['categories'] ?? []) as $c) {
+        $cat = 0;
+        foreach (($c['statements'] ?? []) as $s) $cat += (int)($answers[$s['id']] ?? 0);
+        $byCategory[(string)$c['id']] = ['total' => $cat, 'max' => count($c['statements'] ?? []) * 5];
+        $total += $cat;
+    }
+    return ['total' => $total, 'max' => count(assessment_statement_ids($def)) * 5,
+        'byCategory' => $byCategory];
+}
 /* Deterministic shuffle, seeded per user+session+day (shuffles each login). */
 function shuffle_with_seed(array $arr, string $seed): array {
     $h = 2166136261;

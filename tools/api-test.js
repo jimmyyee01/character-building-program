@@ -35,8 +35,9 @@ async function main() {
     (r.data.features || []).indexOf('admin.analytics') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
   check('this deployment includes calendar-year period marks rankings',
-    r.ok && r.data.build === '2026-10-18-messaging-alerts' &&
-      (r.data.features || []).indexOf('reports.module-performers') !== -1,
+    r.ok && r.data.build === '2026-10-19-self-assessment' &&
+      (r.data.features || []).indexOf('reports.module-performers') !== -1 &&
+      (r.data.features || []).indexOf('assessment') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
   check('this deployment includes scoped student details',
     r.ok && (r.data.features || []).indexOf('reports.student-detail') !== -1,

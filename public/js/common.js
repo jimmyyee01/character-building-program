@@ -369,21 +369,31 @@ if (typeof document !== 'undefined' && document.addEventListener) {
 }
 
 /* ================================================ book-style sheet fitting === */
-/* The sheet is fitted to the page's own shape AND to the space available, so the
-   whole page is visible — the page is scaled down (its print gets smaller) rather
-   than cropped. bookFitBox() is the maths on its own so it can be tested. */
+/* The SHEET is a viewport the size of the space it has; the PAGE LAYER inside
+   it is the whole page at the sheet's width (so the print is as large as the
+   width allows — the readability goal). A page taller than the sheet is not
+   cropped: the page layer scrolls inside the sheet (bookScrollTo), and the
+   next flick at its end turns the leaf. bookFitBox() is the maths on its own
+   so it can be tested: it reports the viewport (w, h) AND the full page
+   height (pageH) at that width. */
 function bookFitBox(availW, availH, ratio) {
-  /* Fit by WIDTH only so the PDF text is as large as possible (maximum zoom
-     for readability). The page height is determined by the aspect ratio — if
-     it is taller than the viewer, the iframe scrolls vertically so every line
-     is reachable without leaving the page. */
   const r = Number(ratio) > 0 ? Number(ratio) : 1 / 1.414;
   const maxW = Math.max(80, Number(availW) || 0);
   const maxH = Math.max(80, Number(availH) || 0);
-  let w = maxW;
-  let h = w / r;
-  if (h > maxH) { h = maxH; }   /* cap height, let iframe scroll vertically */
-  return { w: Math.round(w), h: Math.round(h) };
+  const w = maxW;                       /* fit by WIDTH: largest readable print */
+  const pageH = Math.round(w / r);      /* the whole page at that width */
+  const h = Math.min(pageH, maxH);      /* the viewport never exceeds the space */
+  return { w: Math.round(w), h: Math.round(h), pageH: pageH };
+}
+/* Move the page layer inside the sheet, clamped to the page's own ends. */
+function bookScrollTo(root, y) {
+  if (!root || !root.querySelector) return 0;
+  const max = Math.max(0, Number(root.dataset.bookScrollMax || 0) || 0);
+  const v = Math.max(0, Math.min(Number(y) || 0, max));
+  root.dataset.bookScroll = String(v);
+  const wrap = root.querySelector('.book-frame-wrap');
+  if (wrap && wrap.style) wrap.style.transform = v ? 'translateY(-' + v + 'px)' : '';
+  return v;
 }
 function bookFit(root) {
   if (!root || !root.querySelector || !root.dataset || !root.querySelectorAll) return false;
@@ -402,7 +412,6 @@ function bookFit(root) {
   const stageW = Number(stage.clientWidth || 0) || docW;
   /* use the reader's own bounding box when available so the page fits the
      actual space instead of guessing from the whole window */
-  const readerRect = root.getBoundingClientRect ? root.getBoundingClientRect() : null;
   const availH = full
     ? (Number(stage.clientHeight || 0) || Math.round(winH * 0.9))
     : Math.round(winH * 0.9);
@@ -410,6 +419,11 @@ function bookFit(root) {
   sheet.style.width = box.w + 'px';
   sheet.style.height = box.h + 'px';
   sheet.style.maxHeight = 'none';
+  /* the page layer is the WHOLE page: as wide as the sheet, its own tall shape */
+  const wrap = root.querySelector('.book-frame-wrap');
+  if (wrap && wrap.style) wrap.style.height = box.pageH + 'px';
+  root.dataset.bookScrollMax = String(Math.max(0, box.pageH - box.h));
+  bookScrollTo(root, Number(root.dataset.bookScroll || 0) || 0);
   root.dataset.bookFitted = '1';
   return true;
 }
@@ -435,17 +449,18 @@ function bookFitAll() {
    scroll and no viewer chrome. Prev/Next buttons (or the arrow keys, or the
    arrows either side of the page) flip from page to page. */
 function pdfSrc(url, page) {
-  /* zoom=page-width: the page is scaled to fit the viewer width, so the text
-     is as large as possible. If the page is taller than the viewer, the
-     iframe scrolls vertically so every line is readable. */
-  return url + '#page=' + page + '&view=FitH&zoom=page-width&toolbar=0&navpanes=0&pagemode=none';
+  /* The frame is the page's OWN shape and full height (bookFit sizes it from
+     the page ratio), so view=Fit + zoom=page-fit fills the frame with the WHOLE
+     page: the print is as large as the sheet's width allows and nothing is
+     cropped — the sheet scrolls a taller page instead of cutting it. */
+  return url + '#page=' + page + '&view=Fit&zoom=page-fit&toolbar=0&navpanes=0&pagemode=none';
 }
 /* One sheet of the book. A fresh element per page is what actually moves the
    browser's PDF viewer: changing only the #page= fragment of a frame that is
    already loaded is ignored, so every turn re-creates the frame. */
 function bookFrameHtml(url, page, title) {
   return '<iframe class="pdf-frame" src="' + esc(pdfSrc(url, page)) + '" title="' +
-    esc(title || 'Book') + '" loading="eager" scrolling="auto"></iframe>';
+    esc(title || 'Book') + '" loading="eager" scrolling="no"></iframe>';
 }
 /* The reader itself — only injected when a book is actually opened. */
 function bookReaderHtml(url, opts) {
@@ -454,7 +469,7 @@ function bookReaderHtml(url, opts) {
   const from = Math.max(1, Number(opts.from) || 1);
   const to = Number(opts.to) > from ? Number(opts.to) : 0;   /* 0 = no upper limit */
   const rangeNote = to ? 'Chapter pages ' + from + '–' + to + ' only'
-    : 'Turn the pages — the book never scrolls';
+    : 'Turn the pages — the sheet never scrolls; scroll to read a tall page';
   return '<div class="book-reader" data-book="' + esc(url) + '" data-page="' + from + '"' +
       ' data-book-title="' + esc(label) + '"' +
       (opts.back ? ' data-book-back="1"' : '') +
@@ -469,7 +484,7 @@ function bookReaderHtml(url, opts) {
            Its shape is fitted to the page itself (bookFit), so nothing is cut. */
         '<div class="book-frame-wrap">' + bookFrameHtml(url, from, label) + '</div>' +
         '<div class="book-shield" data-book-shield aria-hidden="true"' +
-          ' title="Scroll or swipe to turn the page"></div>' +
+          ' title="Scroll to read a tall page — flick at its end to turn"></div>' +
       '</div>' +
       '<button type="button" class="page-turn next" data-book-turn="1" aria-label="Next page"' +
         ' title="Next page">›</button>' +
@@ -481,6 +496,7 @@ function bookReaderHtml(url, opts) {
       '<button type="button" class="ghost small" data-book-turn="1">Next ›</button>' +
       '<span class="book-spacer"></span>' +
       '<span class="muted small book-hint">' + esc(rangeNote) + '</span>' +
+      (to ? '' : '<a class="ghost small" href="' + esc(url) + '" target="_blank" rel="noopener">Open ↗</a>') +
       '<button type="button" class="ghost small" data-book-full>Full page</button>' +
       '<button type="button" class="ghost small danger" data-book-close>Close</button>' +
     '</div></div>';
@@ -616,6 +632,7 @@ function bookGo(root, delta) {
      viewer: editing just the #page= fragment of a loaded frame is ignored. */
   if (String(root.dataset.bookRendered || '') !== String(page)) {
     root.dataset.bookRendered = String(page);
+    bookScrollTo(root, 0);                 /* every leaf opens at its head */
     const frame = bookFrameHtml(root.dataset.book, page, root.dataset.bookTitle);
     const wrap = root.querySelector('.book-frame-wrap');
     if (wrap && 'innerHTML' in wrap) {
@@ -748,17 +765,27 @@ if (typeof document !== 'undefined' && document.addEventListener) {
     if (!shield) return;
     const root = bookRootOf(shield);
     if (!root) return;
-    e.preventDefault();                      /* the book never scrolls */
+    e.preventDefault();                      /* the page never scrolls away */
+    const step = (e.deltaY || 0) + (e.deltaX || 0);
+    if (!step) return;
+    const max = Number(root.dataset.bookScrollMax || 0) || 0;
+    const here = Number(root.dataset.bookScroll || 0) || 0;
+    /* inside a tall page the wheel reads down (or back up) the page itself … */
+    if (max > 0 && ((step > 0 && here < max) || (step < 0 && here > 0))) {
+      wheelAcc = 0;                          /* reading the page, not turning */
+      bookScrollTo(root, here + step);
+      return;
+    }
+    /* … and only at the page's own end does a deliberate flick turn the leaf */
     const now = Date.now();
     const cool = Number(root.dataset.bookCooldown || 220);
     if (now - wheelLock < cool) return;
-    wheelAcc += (e.deltaY || 0) + (e.deltaX || 0);
+    wheelAcc += step;
     if (Math.abs(wheelAcc) > 40) {
-      const step = wheelAcc > 0 ? 1 : -1;
       wheelAcc = 0;
       wheelLock = now;
       bookActivate(root);
-      bookGo(root, step);
+      bookGo(root, step > 0 ? 1 : -1);
     }
   }, { passive: false });
   document.addEventListener('touchstart', function (e) {
@@ -774,7 +801,17 @@ if (typeof document !== 'undefined' && document.addEventListener) {
     const dx = t ? t.clientX - touchX : 0;
     const dy = t ? t.clientY - touchY : 0;
     touchX = null; touchY = null;
+    if (Math.abs(dy) >= 40 && Math.abs(dy) > Math.abs(dx)) {
+      /* a vertical drag reads down (or back up) a tall page … */
+      const rootV = bookRootOf(document.querySelector('[data-book-shield]'));
+      if (rootV) {
+        const max = Number(rootV.dataset.bookScrollMax || 0) || 0;
+        if (max > 0) bookScrollTo(rootV, (Number(rootV.dataset.bookScroll || 0) || 0) - dy);
+      }
+      return;
+    }
     if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy)) return;
+    /* … while a horizontal swipe turns the leaf */
     const root = bookRootOf(document.querySelector('[data-book-shield]'));
     if (!root) return;
     bookActivate(root);

@@ -150,8 +150,123 @@ async function boot() {
   await loadVideos();
   await loadFlow();
   await renderHome();
+  /* self-assessment (pre-score) first — it appears just before the Letter
+     from Christ; afterAssessment() continues with the letter / video flow */
+  await startAssessmentFlow();
+}
+
+/* -------------------------- self-assessment: pre-score at the start ------ */
+/* The SAME table appears twice: its pre-score just before the Letter from
+   Christ (pre column active, post column inactive) and its post-score at the
+   end, after the last module (pre inactive, post active). Only the active
+   column carries rating inputs; the other shows what is recorded (or an
+   em-dash). The server owns every total. */
+function assessMax(a) {
+  let n = 0;
+  (a.categories || []).forEach(function (c) { n += (c.statements || []).length; });
+  return n * 5;
+}
+function loadAssessment() {
+  return API.get('/assessment').then(function (data) { S.assessment = data; return data; })
+    .catch(function () { S.assessment = null; return null; });
+}
+function assessCellHtml(a, phase, col, stmtId) {
+  const rec = col === 'pre' ? a.pre : a.post;
+  if (rec && rec.answers && rec.answers[stmtId] != null) {
+    return '<span class="assess-val">' + rec.answers[stmtId] + '</span>';
+  }
+  if (phase !== col) return '<span class="assess-none">&mdash;</span>';
+  return '<span class="assess-opts">' + (a.scale || []).map(function (s) {
+    return '<label class="assess-opt" title="' + esc(s.label) + '">' +
+      '<input type="radio" name="as-' + esc(stmtId) + '" value="' + s.value + '">' +
+      '<span>' + s.value + '</span></label>';
+  }).join('') + '</span>';
+}
+function assessmentHtml(a, phase) {
+  const legend = '<div class="assess-legend">' + (a.scale || []).map(function (s) {
+    return '<b>' + s.value + '</b> ' + esc(s.label);
+  }).join(' &middot; ') + '</div>';
+  const live = (phase === 'pre' || phase === 'post')
+    ? '<div class="assess-live" id="assessLive">Current total: <b>0</b> / ' + assessMax(a) + '</div>' : '';
+  const cats = (a.categories || []).map(function (c) {
+    const preT = a.totals.pre && a.totals.pre.byCategory ? a.totals.pre.byCategory[c.id] : null;
+    const postT = a.totals.post && a.totals.post.byCategory ? a.totals.post.byCategory[c.id] : null;
+    return '<div class="assess-cat"><h4>' + esc(c.title) + '</h4>' +
+      '<table class="assess-table"><tr><th>Statement</th><th class="col-pre">Pre-score</th>' +
+      '<th class="col-post">Post-score</th></tr>' +
+      (c.statements || []).map(function (s) {
+        return '<tr><td>' + esc(s.text) + '</td>' +
+          '<td class="col-pre">' + assessCellHtml(a, phase, 'pre', s.id) + '</td>' +
+          '<td class="col-post">' + assessCellHtml(a, phase, 'post', s.id) + '</td></tr>';
+      }).join('') +
+      '<tr class="assess-cat-total"><td>Category total</td>' +
+      '<td class="col-pre">' + (preT ? preT.total + ' / ' + preT.max : '&mdash;') + '</td>' +
+      '<td class="col-post">' + (postT ? postT.total + ' / ' + postT.max : '&mdash;') + '</td>' +
+      '</tr></table></div>';
+  }).join('');
+  const preT = a.totals.pre, postT = a.totals.post;
+  let growth = '';
+  if (preT && postT) {
+    const g = postT.total - preT.total;
+    growth = '<span class="assess-growth">Growth: <b>' + (g >= 0 ? '+' : '') + g + '</b></span>';
+  }
+  const totals = '<div class="assess-totals">' +
+    '<span>Pre-score total: <b>' + (preT ? preT.total + ' / ' + preT.max : '&mdash;') + '</b></span>' +
+    '<span>Post-score total: <b>' + (postT ? postT.total + ' / ' + postT.max : '&mdash;') + '</b></span>' +
+    growth + '</div>';
+  return (a.note ? '<p class="muted small">' + esc(a.note) + '</p>' : '') + legend + live + cats + totals;
+}
+function collectAssessment() {
+  const a = S.assessment;
+  if (!a) return null;
+  const out = {};
+  let missing = 0;
+  (a.categories || []).forEach(function (c) {
+    (c.statements || []).forEach(function (s) {
+      const el = document.querySelector('input[name="as-' + s.id + '"]:checked');
+      if (el) out[s.id] = Number(el.value); else missing++;
+    });
+  });
+  return missing ? null : out;
+}
+function assessLiveTotal() {
+  const live = $('assessLive');
+  if (!live || !S.assessment) return;
+  let sum = 0;
+  document.querySelectorAll('.assess-opts input:checked').forEach(function (el) { sum += Number(el.value); });
+  live.innerHTML = 'Current total: <b>' + sum + '</b> / ' + assessMax(S.assessment);
+}
+function wireAssessment(root) {
+  root.querySelectorAll('.assess-opts input').forEach(function (i) { i.onchange = assessLiveTotal; });
+  assessLiveTotal();
+}
+function afterAssessment() {
   if (!S.flow.letterDone) startLetterFlow();
   else if (!S.me.optionalVideoSeen && S.me.letter && S.me.letter.feedbackAt) showOptionalVideo();
+}
+async function startAssessmentFlow() {
+  const a = await loadAssessment();
+  if (!a || a.pre) { afterAssessment(); return; }   /* already taken (or unavailable): carry on */
+  modal('<h3>Self-assessment — before we begin</h3>' +
+    '<p class="muted">Rate how much you agree with each statement, from 1 to 5. ' +
+    'This is your <b>pre-score</b>; the same table returns at the end of the programme ' +
+    'for your <b>post-score</b>, so your growth can be measured. The post-score column is ' +
+    'inactive until then.</p>' +
+    assessmentHtml(a, 'pre') +
+    '<div class="mt"><button id="assessSubmit">Save my pre-score &amp; continue</button></div>',
+    { sticky: true, noClose: true, wide: true });
+  wireAssessment(document);
+  document.getElementById('assessSubmit').onclick = async function () {
+    const answers = collectAssessment();
+    if (!answers) { toast('Please rate every statement (1-5) before continuing.', 'err'); return; }
+    try {
+      const r = await API.post('/assessment/pre', { answers: answers });
+      closeModal();
+      toast('Pre-score saved — your total is ' + r.total + ' / ' + r.max + '.', 'ok');
+      S.flow.assessmentPreDone = true;
+      afterAssessment();
+    } catch (e) { toast(e.message, 'err'); }
+  };
 }
 
 /* ------------------------------------- first login: letter + videos ----- */
@@ -973,6 +1088,7 @@ async function renderThoughts() {
 
 /* ------------------------------------------------------ final records --- */
 let FINAL_TAB = 'summaries';
+let FINAL_TAB_PICKED = false;   /* until the learner clicks a tab themselves */
 
 function finalSubHtml(s, colorBar) {
   const flag = s.flagged
@@ -1001,8 +1117,15 @@ async function renderFinal() {
   const tabs = [
     ['summaries', 'All summaries'], ['thoughts', 'Thoughts'], ['general', 'General summaries'],
     ['questions', 'Book questions'], ['library', 'Library'], ['other', 'Other books'],
+    ['assessment', 'Assessment'], ['summaries', 'All summaries'], ['thoughts', 'Thoughts'], ['general', 'General summaries'],
+    ['questions', 'Book questions'], ['library', 'Library'], ['other', 'Other books'],
     ['videos', 'All videos'], ['certificates', 'Certificates']
   ];
+  /* the self-assessment returns here at the very end: until the post-score
+     has been taken, open its tab first (once the learner picks a tab, their
+     choice is respected from then on) */
+  await loadAssessment();
+  if (!FINAL_TAB_PICKED) FINAL_TAB = (S.assessment && S.assessment.post) ? 'summaries' : 'assessment';
   $('view-final').innerHTML =
     '<h2>Final records</h2>' +
     '<p class="muted">Every module is complete — all modules are now closed and everything below is unlocked.</p>' +
@@ -1010,7 +1133,7 @@ async function renderFinal() {
       return '<button data-tab="' + t[0] + '" class="' + (FINAL_TAB === t[0] ? 'active' : '') + '">' + t[1] + '</button>';
     }).join('') + '</div><div id="finalBody"></div>';
   $('view-final').querySelectorAll('[data-tab]').forEach(function (b) {
-    b.onclick = function () { FINAL_TAB = b.dataset.tab; renderFinal(); };
+    b.onclick = function () { FINAL_TAB = b.dataset.tab; FINAL_TAB_PICKED = true; renderFinal(); };
   });
   renderFinalTab();
 }
@@ -1022,7 +1145,18 @@ function renderFinalTab() {
   let html = '';
   const sums = d.summaries;
 
-  if (FINAL_TAB === 'summaries') {
+  if (FINAL_TAB === 'assessment') {
+    const a = S.assessment || {};
+    html = '<div class="card"><h3>Self-assessment — post-score</h3>' +
+      '<p class="muted">Rate the same statements again — this is your <b>post-score</b>. ' +
+      'It appears here only after every module is complete, and your growth versus the pre-score ' +
+      'is shown below. Each statement may be rated once.</p>' +
+      '<div class="assess-legend">' + ((a.scale || []).map(function (s) {
+        return '<b>' + s.value + '</b> ' + esc(s.label);
+      }).join(' &middot; ')) + '</div>' +
+      assessmentHtml(a, phase) +
+      '<div class="mt"><button id="assessPostSubmit" class="fixed">Save my post-score</button></div></div>';
+  } else if (FINAL_TAB === 'summaries') {
     html = sectionBlock('Chapter summaries', sums.chapterSummaries) +
       sectionBlock('Letter summaries', sums.letterSummaries) +
       sectionBlock('Book summaries (coloured)', sums.bookSummaries, function (s) {
@@ -1121,6 +1255,19 @@ function renderFinalTab() {
       try {
         const r = await API.post('/submissions', { type: 'general_summary', text: $('genSum').value });
         toast(r.warning || 'General summary submitted.', r.warning ? 'err' : 'ok');
+        renderFinal();
+      } catch (e) { toast(e.message, 'err'); }
+    };
+  }
+  if (FINAL_TAB === 'assessment') {
+    wireAssessment(document);
+    const btn = $('assessPostSubmit');
+    if (btn) btn.onclick = async function () {
+      const answers = collectAssessment();
+      if (!answers) { toast('Please rate every statement (1-5) before continuing.', 'err'); return; }
+      try {
+        const r = await API.post('/assessment/post', { answers: answers });
+        toast('Post-score saved — your total is ' + r.total + ' / ' + r.max + (r.growth != null ? ', growth ' + (r.growth >= 0 ? '+' : '') + r.growth : '') + '.', 'ok');
         renderFinal();
       } catch (e) { toast(e.message, 'err'); }
     };

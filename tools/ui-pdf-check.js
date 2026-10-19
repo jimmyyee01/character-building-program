@@ -244,18 +244,20 @@ check('the page box is read from the PDF (MediaBox / CropBox / Rotate)',
       !!offset && offset.w === 200 && offset.h === 200 &&
       parsePdfPageSize('no page box here') === null;
   })());
-check('bookFitBox scales the page down until it fits the space (never past it)',
+check('bookFitBox fits by width (never past the space) and reports the full page height',
   (function () {
-    const tall = bookFitBox(1000, 800, 595 / 842);      /* portrait: height decides */
-    const wide = bookFitBox(1000, 800, 842 / 595);      /* landscape: width decides */
+    const tall = bookFitBox(1000, 800, 595 / 842);      /* portrait A4: width decides, page taller than space */
+    const wide = bookFitBox(1000, 800, 842 / 595);      /* landscape: page fits vertically */
     const square = bookFitBox(1000, 800, 1);
-    const tiny = bookFitBox(1000, 800, 1 / 3);          /* very tall: scaled right down */
-    return tall.h === 800 && tall.w < 1000 && Math.abs(tall.w / tall.h - 595 / 842) < 0.01 &&
-      wide.w === 1000 && wide.h < 800 && Math.abs(wide.w / wide.h - 842 / 595) < 0.01 &&
-      square.w === 800 && square.h === 800 &&
-      tiny.h === 800 && tiny.w > 0 && Math.abs(tiny.w / tiny.h - 1 / 3) < 0.01;
+    const tiny = bookFitBox(1000, 800, 1 / 3);          /* very tall page */
+    return tall.w === 1000 && tall.h === 800 && tall.pageH === Math.round(1000 / (595 / 842)) && tall.pageH > tall.h &&
+      wide.w === 1000 && wide.h === 707 && wide.pageH === wide.h &&   /* landscape page fits the space */
+      square.w === 1000 && square.h === 800 && square.pageH === 1000 &&
+      tiny.w === 1000 && tiny.h === 800 && tiny.pageH === 3000 &&
+      /* every viewport stays inside the space; the full page (pageH) is reachable by scroll */
+      [tall, wide, square, tiny].every(function (b) { return b.h <= 800 && b.pageH >= b.h; });
   })());
-check('bookFit() sizes the sheet to the page ratio inside the space it is given',
+check('bookFit() sizes the sheet by width inside the space; a taller page scrolls, never crops',
   (function () {
     const root = makeEl('div');
     root.classList.add('book-reader');
@@ -269,9 +271,9 @@ check('bookFit() sizes the sheet to the page ratio inside the space it is given'
     const ok = bookFit(fitRoot) === true;
     const w = Number(String(sheet.style.width).replace('px', ''));
     const h = Number(String(sheet.style.height).replace('px', ''));
-    /* a square page in a 900-wide space: capped by the height, still square */
-    return ok && w > 0 && h > 0 && Math.abs(w / h - 1) < 0.01 && w <= 900 &&
-      fitRoot.dataset.bookFitted === '1';
+    return ok && w > 0 && h > 0 && w === 896 && h === 720 &&   /* fit by width (900-4), capped by available height */
+      fitRoot.dataset.bookFitted === '1' &&
+      Number(fitRoot.dataset.bookScrollMax || 0) === 176;      /* full page (896) scrolls within the 720 sheet */
   })());
 
 /* -------------------------------------------------------- paging logic ---- */

@@ -1,0 +1,62 @@
+{
+  "scale": [
+    { "value": 1, "label": "Strongly Disagree" },
+    { "value": 2, "label": "Disagree" },
+    { "value": 3, "label": "Neutral" },
+    { "value": 4, "label": "Agree" },
+    { "value": 5, "label": "Strongly Agree" }
+  ],
+  "note": "Rate every statement 1-5. The pre-score is taken at the beginning (before the Letter from Christ); the post-score at the end, after the last module. The total score is the sum of all ratings.",
+  "categories": [
+    {
+      "id": "faith",
+      "title": "Faith & Spiritual Life",
+      "statements": [
+        { "id": "faith-1", "text": "I spend time in prayer and reflection each day." },
+        { "id": "faith-2", "text": "I read and meditate on God's Word regularly." },
+        { "id": "faith-3", "text": "I trust God's plan even when circumstances are hard." },
+        { "id": "faith-4", "text": "I give thanks in all circumstances." }
+      ]
+    },
+    {
+      "id": "integrity",
+      "title": "Character & Integrity",
+      "statements": [
+        { "id": "integrity-1", "text": "I tell the truth even when it costs me." },
+        { "id": "integrity-2", "text": "I keep my promises and commitments." },
+        { "id": "integrity-3", "text": "I take responsibility for my mistakes." },
+        { "id": "integrity-4", "text": "I choose what is right over what is easy." }
+      ]
+    },
+    {
+      "id": "relationships",
+      "title": "Relationships & Love",
+      "statements": [
+        { "id": "relationships-1", "text": "I treat others with kindness and respect." },
+        { "id": "relationships-2", "text": "I forgive those who wrong me." },
+        { "id": "relationships-3", "text": "I listen patiently before responding." },
+        { "id": "relationships-4", "text": "I look for ways to serve the people around me." }
+      ]
+    },
+    {
+      "id": "discipline",
+      "title": "Purpose & Discipline",
+      "statements": [
+        { "id": "discipline-1", "text": "I set goals and work steadily toward them." },
+        { "id": "discipline-2", "text": "I manage my time and avoid what harms me." },
+        { "id": "discipline-3", "text": "I stay committed even when I feel like quitting." },
+        { "id": "discipline-4", "text": "I use my gifts and talents to their full extent." }
+      ]
+    },
+    {
+      "id": "witness",
+      "title": "Courage & Witness",
+      "statements": [
+        { "id": "witness-1", "text": "I stand for my beliefs even under pressure." },
+        { "id": "witness-2", "text": "I speak about my faith with confidence." },
+        { "id": "witness-3", "text": "I face my fears instead of avoiding them." },
+        { "id": "witness-4", "text": "I encourage others to do what is right." }
+      ]
+    }
+  ]
+}

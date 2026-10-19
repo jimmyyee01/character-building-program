@@ -28,6 +28,52 @@ function r_flow_optional_seen($user, $body, $params, $token, $query) {
   db()->prepare('UPDATE users SET optional_video_seen=1 WHERE id=?')->execute([$user['id']]);
   return [];
 }
+/* ============================================ self-assessment (pre/post) === */
+function r_assessment_get($user, $body, $params, $token, $query) {
+  global $PARTICIPANTS;
+  require_role($user, $PARTICIPANTS);
+  $def = assessment_def();
+  $pre = $user['assessment_pre'] ?? null;
+  $post = $user['assessment_post'] ?? null;
+  return [
+    'scale' => $def['scale'] ?? [], 'categories' => $def['categories'] ?? [],
+    'note' => $def['note'] ?? '',
+    'pre' => is_array($pre) ? $pre : null,
+    'post' => is_array($post) ? $post : null,
+    'totals' => [
+      'pre' => is_array($pre) ? assessment_totals($pre['answers'] ?? [], $def) : null,
+      'post' => is_array($post) ? assessment_totals($post['answers'] ?? [], $def) : null,
+    ],
+    'allDone' => flow_for($user)['allDone'],
+  ];
+}
+function r_assessment_pre($user, $body, $params, $token, $query) {
+  global $PARTICIPANTS;
+  require_role($user, $PARTICIPANTS);
+  need(empty($user['assessment_pre']), 'Your pre-score has already been submitted', 400);
+  $def = assessment_def();
+  $answers = assessment_answers($body, $def);
+  $t = assessment_totals($answers, $def);
+  $record = ['answers' => $answers, 'total' => $t['total'], 'max' => $t['max'], 'at' => iso(now_dt())];
+  db()->prepare('UPDATE users SET assessment_pre_json=? WHERE id=?')
+      ->execute([json_encode($record, JSON_UNESCAPED_UNICODE), $user['id']]);
+  return ['pre' => $record, 'total' => $t['total'], 'max' => $t['max']];
+}
+function r_assessment_post($user, $body, $params, $token, $query) {
+  global $PARTICIPANTS;
+  require_role($user, $PARTICIPANTS);
+  need(flow_for($user)['allDone'], 'The post-score opens after the last module is complete', 400);
+  need(empty($user['assessment_post']), 'Your post-score has already been submitted', 400);
+  $def = assessment_def();
+  $answers = assessment_answers($body, $def);
+  $t = assessment_totals($answers, $def);
+  $record = ['answers' => $answers, 'total' => $t['total'], 'max' => $t['max'], 'at' => iso(now_dt())];
+  db()->prepare('UPDATE users SET assessment_post_json=? WHERE id=?')
+      ->execute([json_encode($record, JSON_UNESCAPED_UNICODE), $user['id']]);
+  $pre = $user['assessment_pre'] ?? null;
+  $growth = is_array($pre) ? $t['total'] - (int)($pre['total'] ?? 0) : null;
+  return ['post' => $record, 'total' => $t['total'], 'max' => $t['max'], 'growth' => $growth];
+}
 function r_modules($user, $body, $params, $token, $query) {
   global $PARTICIPANTS, $ADMINS;
   require_role($user, array_merge($PARTICIPANTS, $ADMINS));

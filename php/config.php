@@ -136,6 +136,8 @@ function normalize_user(array $u): array {
     $u['letter_feedback_at'] = $u['letter_feedback_at'] ?? null;
     $u['optional_video_seen'] = (int)($u['optional_video_seen'] ?? 0);
     $u['watched_videos'] = jdec($u['watched_videos_json'] ?? null, []);
+    $u['assessment_pre'] = jdec($u['assessment_pre_json'] ?? null, null);
+    $u['assessment_post'] = jdec($u['assessment_post_json'] ?? null, null);
     return $u;
 }
 function save_watched(array $user, array $watched): void {

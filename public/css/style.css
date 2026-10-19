@@ -439,8 +439,13 @@ tr:hover td { background: #f8faff; }
 /* The page is fit by width so text stays readable. If the page is taller than
    the available space, the iframe scrolls vertically so every line is reachable. */
 .book-page { position: relative; aspect-ratio: 1 / 1.414; }
-.book-frame-wrap { position: absolute; inset: 0; overflow: hidden; background: #fff; }
-.book-frame-wrap .pdf-frame { width: 100%; height: 100%; overflow: auto; }
+/* The page layer is the WHOLE page: as wide as the sheet and as tall as the
+   page itself, so the print is at maximum readable width. The sheet clips it
+   (overflow hidden above) and the layer slides inside it (bookScrollTo) —
+   a taller page is read by scrolling, never cropped, and the flick at its
+   end turns the leaf. */
+.book-frame-wrap { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; background: #fff; will-change: transform; transition: transform .08s linear; }
+.book-frame-wrap .pdf-frame { width: 100%; height: 100%; }
 .book-reader { overflow-y: visible; }
 .book-shield { position: absolute; inset: 0; z-index: 3; cursor: ew-resize; }
 .book-page.turning { animation: bookTurn .2s ease; }
@@ -713,6 +718,25 @@ tr:hover td { background: #f8faff; }
   opacity: .7;
 }
 
+/* ============================================ self-assessment table ==== */
+.assess-legend { margin-bottom: 10px; }
+.assess-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.assess-table th, .assess-table td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+.assess-table th { text-transform: uppercase; font-size: 11px; color: #64748b; }
+.assess-table td:first-child { max-width: 520px; }
+.col-pre, .col-post { width: 150px; text-align: center; }
+.col-pre .assess-opt, .col-post .assess-opt { display: inline-block; width: 100%; text-align: left; padding: 2px 4px; }
+.col-pre input, .col-post input { margin-right: 6px; cursor: pointer; }
+.assess-val { font-weight: 700; color: var(--brand); }
+.assess-none { color: #94a3b8; }
+.assess-cat { margin: 14px 0; }
+.assess-cat h4 { margin: 0 0 6px; color: var(--brand-dark); }
+.assess-cat-total td { border-top: 2px solid var(--brand); font-weight: 700; background: #f1f5f9; }
+.assess-live { margin: 10px 0; font-size: 13px; color: #475569; }
+.assess-totals { margin-top: 14px; padding: 10px 14px; background: #f8fafc; border-radius: 10px; font-size: 13px; display: flex; gap: 24px; flex-wrap: wrap; }
+.assess-growth { color: #15803d; font-weight: 700; }
+.assess-totals span { white-space: nowrap; }
+.assess-table tbody tr:hover { background: #f8fafc; }
 /* User photo styling */
 .user-photo-sm {
   width: 32px; height: 32px; border-radius: 50%;

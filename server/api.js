@@ -18,11 +18,11 @@ function need(cond, message, status) { if (!cond) throw new HttpError(message, s
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-const BUILD = '2026-10-18-messaging-alerts';
+const BUILD = '2026-10-19-self-assessment';
 const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.students', 'reports.student-roster',
   'reports.student-detail', 'reports.module-performers', 'messaging', 'notifications',
   'users.supervisor-auto-assignment', 'keywords',
-  'reader.book', 'library.lock', 'certificates', 'chapter.pages', 'exports'];
+  'reader.book', 'library.lock', 'certificates', 'chapter.pages', 'exports', 'assessment'];
 
 function send(res, code, obj) {
   const body = JSON.stringify(obj);
@@ -592,6 +592,87 @@ route('POST', '/api/flow/optional-video-seen', ({ user }) => {
   user.optionalVideoSeen = true;
   dbm.save();
   return { ok: true };
+});
+
+/* ============================================ self-assessment (pre/post) === */
+/* One shared definition (assessment.json at the repo root) serves BOTH
+   backends, so the categories, statements and 1-5 scale can never drift apart.
+   The learner rates it once at the beginning (pre-score, right before the
+   Letter from Christ) and once at the end (post-score, after the last
+   module); each response carries its own total score. */
+let assessmentDefCache = null;
+function assessmentDef() {
+  if (!assessmentDefCache) {
+    const file = path.join(__dirname, '..', 'assessment.json');
+    assessmentDefCache = JSON.parse(fs.readFileSync(file, 'utf8'));
+  }
+  return assessmentDefCache;
+}
+function assessmentStatementIds(def) {
+  const ids = [];
+  (def.categories || []).forEach(c => (c.statements || []).forEach(s => ids.push(s.id)));
+  return ids;
+}
+/* Every statement must be rated with an integer 1-5 — anything else is
+   rejected before it can be stored, so a total always means something. */
+function assessmentAnswers(body, def) {
+  const raw = (body && typeof body.answers === 'object' && body.answers) || {};
+  const ids = assessmentStatementIds(def);
+  const answers = {};
+  ids.forEach(id => {
+    const v = Number(raw[id]);
+    need(Number.isInteger(v) && v >= 1 && v <= 5, 'Please rate every statement from 1 to 5');
+    answers[id] = v;
+  });
+  return answers;
+}
+function assessmentTotals(answers, def) {
+  let total = 0;
+  const byCategory = {};
+  (def.categories || []).forEach(c => {
+    let cat = 0;
+    (c.statements || []).forEach(s => { cat += Number(answers[s.id]) || 0; });
+    byCategory[c.id] = { total: cat, max: (c.statements || []).length * 5 };
+    total += cat;
+  });
+  const statements = assessmentStatementIds(def).length;
+  return { total, max: statements * 5, byCategory };
+}
+route('GET', '/api/assessment', ({ user }) => {
+  requireRole(user, PARTICIPANTS);
+  const def = assessmentDef();
+  const allDone = flowFor(user).allDone;
+  return {
+    ok: true, scale: def.scale, categories: def.categories, note: def.note || '',
+    pre: user.assessmentPre || null, post: user.assessmentPost || null,
+    totals: {
+      pre: user.assessmentPre ? assessmentTotals(user.assessmentPre.answers, def) : null,
+      post: user.assessmentPost ? assessmentTotals(user.assessmentPost.answers, def) : null
+    },
+    allDone
+  };
+});
+route('POST', '/api/assessment/pre', ({ user, body }) => {
+  requireRole(user, PARTICIPANTS);
+  need(!user.assessmentPre, 'Your pre-score has already been submitted');
+  const def = assessmentDef();
+  const answers = assessmentAnswers(body, def);
+  const t = assessmentTotals(answers, def);
+  user.assessmentPre = { answers, total: t.total, max: t.max, at: dbm.nowISO() };
+  dbm.save();
+  return { ok: true, pre: user.assessmentPre, total: t.total, max: t.max };
+});
+route('POST', '/api/assessment/post', ({ user, body }) => {
+  requireRole(user, PARTICIPANTS);
+  need(flowFor(user).allDone, 'The post-score opens after the last module is complete');
+  need(!user.assessmentPost, 'Your post-score has already been submitted');
+  const def = assessmentDef();
+  const answers = assessmentAnswers(body, def);
+  const t = assessmentTotals(answers, def);
+  user.assessmentPost = { answers, total: t.total, max: t.max, at: dbm.nowISO() };
+  dbm.save();
+  const growth = user.assessmentPre ? t.total - user.assessmentPre.total : null;
+  return { ok: true, post: user.assessmentPost, total: t.total, max: t.max, growth };
 });
 
 route('GET', '/api/modules', ({ user }) => {
