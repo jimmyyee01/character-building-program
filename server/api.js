@@ -2570,6 +2570,11 @@ function createCompletionNotification(user) {
 }
 
 function messagingUsers(user) {
+  if (user.role === 'super') {
+    return dbm.collection('users').filter(c => c.id !== user.id && !c.suspended)
+      .sort((a, b) => String(a.fullName || '').localeCompare(String(b.fullName || '')))
+      .map(c => ({ id: c.id, fullName: c.fullName, role: c.role, tenantId: c.tenantId }));
+  }
   const people = dbm.collection('users').filter(candidate => {
     if (candidate.id === user.id || candidate.suspended || candidate.tenantId !== user.tenantId) return false;
     if (user.role === 'tenant_admin') return ['student', 'member', 'teacher', 'supervisor'].includes(candidate.role);
@@ -2584,6 +2589,7 @@ function messagingUsers(user) {
 }
 
 function canMessage(user, recipient) {
+  if (user.role === 'super') return true;
   if (!recipient || recipient.id === user.id || recipient.tenantId !== user.tenantId || recipient.suspended) return false;
   if (user.role === 'tenant_admin') return ['student', 'member', 'teacher', 'supervisor'].includes(recipient.role);
   if (user.role === 'supervisor') return recipient.role === 'tenant_admin' ||
@@ -2615,9 +2621,9 @@ function messageNotification(recipientId, sender, conversationId, body) {
 }
 
 function conversationsFor(user) {
-  return dbm.collection('conversations').filter(c =>
-    c.tenantId === user.tenantId && Array.isArray(c.participantIds) && c.participantIds.includes(user.id))
-    .map(c => {
+  let list = dbm.collection('conversations').filter(c =>
+    user.role === 'super' || (c.tenantId === user.tenantId && Array.isArray(c.participantIds) && c.participantIds.includes(user.id)));
+  return list.map(c => {
       const messages = dbm.collection('messages').filter(m => m.conversationId === c.id)
         .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
       const peerId = c.participantIds.find(id => id !== user.id);
@@ -2638,6 +2644,7 @@ function conversationsFor(user) {
 
 function conversationForUser(user, conversationId) {
   const conversation = dbm.byId('conversations', conversationId);
+  if (user.role === 'super') { need(conversation, 'Conversation not found', 404); return conversation; }
   need(conversation && conversation.tenantId === user.tenantId &&
     Array.isArray(conversation.participantIds) && conversation.participantIds.includes(user.id),
     'Conversation not found', 404);
@@ -2645,12 +2652,12 @@ function conversationForUser(user, conversationId) {
 }
 
 route('GET', '/api/messages', ({ user }) => {
-  requireRole(user, ['tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
+  requireRole(user, ['super', 'tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
   return { ok: true, conversations: conversationsFor(user), recipients: messagingUsers(user) };
 });
 
 route('POST', '/api/messages', ({ user, body }) => {
-  requireRole(user, ['tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
+  requireRole(user, ['super', 'tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
   const text = String((body || {}).body || '').trim();
   need(text.length > 0 && text.length <= 5000, 'Message must be between 1 and 5000 characters');
   const recipientIds = Array.isArray(body.recipientIds) ? Array.from(new Set(body.recipientIds.map(String))) : [];
@@ -2672,7 +2679,7 @@ route('POST', '/api/messages', ({ user, body }) => {
 });
 
 route('GET', '/api/messages/([a-z0-9_-]+)', ({ user, params }) => {
-  requireRole(user, ['tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
+  requireRole(user, ['super', 'tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
   const conversation = conversationForUser(user, params[0]);
   const now = dbm.nowISO();
   const messages = dbm.collection('messages').filter(m => m.conversationId === conversation.id)
@@ -2692,7 +2699,7 @@ route('GET', '/api/messages/([a-z0-9_-]+)', ({ user, params }) => {
 });
 
 route('POST', '/api/messages/([a-z0-9_-]+)', ({ user, params, body }) => {
-  requireRole(user, ['tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
+  requireRole(user, ['super', 'tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
   const conversation = conversationForUser(user, params[0]);
   const peerId = conversation.participantIds.find(id => id !== user.id);
   const recipient = dbm.byId('users', peerId);
@@ -2709,14 +2716,14 @@ route('POST', '/api/messages/([a-z0-9_-]+)', ({ user, params, body }) => {
 });
 
 route('GET', '/api/notifications', ({ user }) => {
-  requireRole(user, ['tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
+  requireRole(user, ['super', 'tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
   const notifications = dbm.collection('notifications').filter(n => n.userId === user.id)
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, 100);
   return { ok: true, notifications, unread: notifications.filter(n => !n.readAt).length };
 });
 
 route('PUT', '/api/notifications/([a-z0-9_-]+)/read', ({ user, params }) => {
-  requireRole(user, ['tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
+  requireRole(user, ['super', 'tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
   const notification = dbm.byId('notifications', params[0]);
   need(notification && notification.userId === user.id, 'Notification not found', 404);
   if (!notification.readAt) notification.readAt = dbm.nowISO();

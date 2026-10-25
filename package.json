@@ -23,5 +23,8 @@
     "node": ">=16"
   },
   "license": "MIT",
-  "private": true
+  "private": true,
+  "dependencies": {
+    "docx": "^9.12.0"
+  }
 }

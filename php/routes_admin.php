@@ -898,6 +898,7 @@ function create_completion_notification(array $user): void {
 }
 
 function can_message_user(array $sender, ?array $recipient): bool {
+    if ($sender['role'] === 'super') return true;
     if (!$recipient || $recipient['id'] === $sender['id'] ||
         (string)($recipient['tenant_id'] ?? '') !== (string)($sender['tenant_id'] ?? '') ||
         (int)($recipient['suspended'] ?? 0) === 1) return false;
@@ -913,6 +914,11 @@ function can_message_user(array $sender, ?array $recipient): bool {
 }
 function message_recipients(array $user): array {
     $pdo = db();
+    if ($user['role'] === 'super') {
+        $st = $pdo->prepare("SELECT id,full_name,role FROM users WHERE id<>? AND suspended=0 ORDER BY full_name");
+        $st->execute([$user['id']]);
+        return array_map(fn($u) => ['id'=>$u['id'], 'fullName'=>$u['full_name'], 'role'=>$u['role']], $st->fetchAll());
+    }
     if ($user['role'] === 'tenant_admin') {
         $st = $pdo->prepare("SELECT id,full_name,role FROM users WHERE tenant_id=? AND id<>? AND suspended=0 AND role IN ('student','member','teacher','supervisor') ORDER BY full_name");
         $st->execute([$user['tenant_id'], $user['id']]);
@@ -951,6 +957,13 @@ function conversation_for_users(array $user, array $recipient): array {
     return $conversation;
 }
 function require_conversation(array $user, string $id): array {
+    if ($user['role'] === 'super') {
+        $st = db()->prepare('SELECT * FROM conversations WHERE id=? LIMIT 1');
+        $st->execute([$id]);
+        $conversation = $st->fetch();
+        need((bool)$conversation, 'Conversation not found', 404);
+        return $conversation;
+    }
     $st = db()->prepare('SELECT * FROM conversations WHERE id=? AND tenant_id=? LIMIT 1');
     $st->execute([$id, $user['tenant_id']]);
     $conversation = $st->fetch();
@@ -960,14 +973,19 @@ function require_conversation(array $user, string $id): array {
 }
 
 function r_messages_list(array $user, array $body, array $params, ?string $token, array $query): array {
-    require_role($user, ['tenant_admin','supervisor','student','member','teacher']);
+    require_role($user, ['super','tenant_admin','supervisor','student','member','teacher']);
     $pdo = db();
-    $st = $pdo->prepare('SELECT * FROM conversations WHERE tenant_id=? ORDER BY updated_at DESC');
-    $st->execute([$user['tenant_id']]);
+    if ($user['role'] === 'super') {
+        $st = $pdo->prepare('SELECT * FROM conversations ORDER BY updated_at DESC');
+        $st->execute([]);
+    } else {
+        $st = $pdo->prepare('SELECT * FROM conversations WHERE tenant_id=? ORDER BY updated_at DESC');
+        $st->execute([$user['tenant_id']]);
+    }
     $conversations = [];
     foreach ($st->fetchAll() as $conversation) {
         $participants = jdec($conversation['participant_ids_json'], []);
-        if (!in_array((string)$user['id'], $participants, true)) continue;
+        if ($user['role'] !== 'super' && !in_array((string)$user['id'], $participants, true)) continue;
         $peerId = (string)array_values(array_filter($participants, fn($id) => (string)$id !== (string)$user['id']))[0];
         $peerSt = $pdo->prepare('SELECT id,full_name,role FROM users WHERE id=? LIMIT 1');
         $peerSt->execute([$peerId]);
@@ -987,7 +1005,7 @@ function r_messages_list(array $user, array $body, array $params, ?string $token
     return ['conversations'=>$conversations, 'recipients'=>message_recipients($user)];
 }
 function r_messages_send(array $user, array $body, array $params, ?string $token, array $query): array {
-    require_role($user, ['tenant_admin','supervisor','student','member','teacher']);
+    require_role($user, ['super','tenant_admin','supervisor','student','member','teacher']);
     $text = trim((string)($body['body'] ?? ''));
     need($text !== '' && mb_strlen($text) <= 5000, 'Message must be between 1 and 5000 characters');
     $ids = $body['recipientIds'] ?? [];
@@ -1022,7 +1040,7 @@ function r_messages_send(array $user, array $body, array $params, ?string $token
     return ['sent'=>count($recipients)];
 }
 function r_messages_thread_get(array $user, array $body, array $params, ?string $token, array $query): array {
-    require_role($user, ['tenant_admin','supervisor','student','member','teacher']);
+    require_role($user, ['super','tenant_admin','supervisor','student','member','teacher']);
     $conversation = require_conversation($user, (string)$params['id']);
     $pdo = db();
     $now = now_dt();
@@ -1045,7 +1063,7 @@ function r_messages_thread_get(array $user, array $body, array $params, ?string 
     return ['conversation'=>['id'=>$conversation['id'], 'participants'=>$people], 'messages'=>$messages];
 }
 function r_messages_reply(array $user, array $body, array $params, ?string $token, array $query): array {
-    require_role($user, ['tenant_admin','supervisor','student','member','teacher']);
+    require_role($user, ['super','tenant_admin','supervisor','student','member','teacher']);
     $conversation = require_conversation($user, (string)$params['id']);
     $participants = jdec($conversation['participant_ids_json'], []);
     $peerId = (string)array_values(array_filter($participants, fn($id) => (string)$id !== (string)$user['id']))[0];
