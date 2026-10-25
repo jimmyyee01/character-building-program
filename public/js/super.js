@@ -2695,6 +2695,7 @@ $('superLoginForm').addEventListener('submit', async function (e) {
     });
     API.setToken(data.token);
     API.setUser(data.user);
+    initCommunicationWidget();
     $('slPw').value = '';
     toast('Signed in', 'ok');
     init();

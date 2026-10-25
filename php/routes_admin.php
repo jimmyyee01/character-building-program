@@ -986,11 +986,22 @@ function r_messages_list(array $user, array $body, array $params, ?string $token
     foreach ($st->fetchAll() as $conversation) {
         $participants = jdec($conversation['participant_ids_json'], []);
         if ($user['role'] !== 'super' && !in_array((string)$user['id'], $participants, true)) continue;
-        $peerId = (string)array_values(array_filter($participants, fn($id) => (string)$id !== (string)$user['id']))[0];
-        $peerSt = $pdo->prepare('SELECT id,full_name,role FROM users WHERE id=? LIMIT 1');
-        $peerSt->execute([$peerId]);
-        $peer = $peerSt->fetch();
-        if (!$peer) continue;
+        if ($user['role'] === 'super') {
+            $peerNames = [];
+            foreach ($participants as $pid) {
+                $ps = $pdo->prepare('SELECT full_name FROM users WHERE id=? LIMIT 1');
+                $ps->execute([$pid]);
+                $pn = $ps->fetchColumn();
+                $peerNames[] = $pn ?: $pid;
+            }
+            $peer = ['id' => $participants[0] ?? null, 'full_name' => implode(' ↔ ', $peerNames), 'role' => 'conversation'];
+        } else {
+            $peerId = (string)array_values(array_filter($participants, fn($id) => (string)$id !== (string)$user['id']))[0];
+            $peerSt = $pdo->prepare('SELECT id,full_name,role FROM users WHERE id=? LIMIT 1');
+            $peerSt->execute([$peerId]);
+            $peer = $peerSt->fetch();
+            if (!$peer) continue;
+        }
         $msgSt = $pdo->prepare('SELECT id,sender_id,body,created_at,read_at FROM conversation_messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT 1');
         $msgSt->execute([$conversation['id']]);
         $latest = $msgSt->fetch();

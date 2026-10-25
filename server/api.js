@@ -2626,13 +2626,18 @@ function conversationsFor(user) {
   return list.map(c => {
       const messages = dbm.collection('messages').filter(m => m.conversationId === c.id)
         .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
-      const peerId = c.participantIds.find(id => id !== user.id);
-      const peer = dbm.byId('users', peerId);
+      const peerId = user.role === 'super' ? null : c.participantIds.find(id => id !== user.id);
+      const peer = peerId ? dbm.byId('users', peerId) : null;
+      const superLabel = user.role === 'super'
+        ? (c.participantIds || []).map(id => { const u = dbm.byId('users', id); return u ? u.fullName : id; }).join(' ↔ ')
+        : null;
       const unread = messages.filter(m => m.senderId !== user.id && !m.readAt).length;
       const latest = messages[messages.length - 1];
       return {
         id: c.id,
-        participant: peer ? { id: peer.id, fullName: peer.fullName, role: peer.role } : null,
+        participant: user.role === 'super'
+          ? { id: (c.participantIds || [])[0], fullName: superLabel, role: 'conversation' }
+          : (peer ? { id: peer.id, fullName: peer.fullName, role: peer.role } : null),
         latestMessage: latest ? { body: latest.body, createdAt: latest.createdAt, senderId: latest.senderId } : null,
         unread,
         updatedAt: c.updatedAt || (latest && latest.createdAt) || c.createdAt
