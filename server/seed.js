@@ -359,6 +359,34 @@ function build() {
     books: content.books.map(b => b.title), bestBook: certificates[0] ? certificates[0].bestBook : null,
     performance: 100, objectiveScore: null, userName: grad.fullName,
     tenantName: 'Greenfield Academy', issuedAt: stamp(seq) });
+
+  /* ---- demo reading history: a few book opens per learner ---------------
+     The analytics page counts opens, so the demo accounts start with a
+     realistic spread instead of an empty card. */
+  const bookOpens = [];
+  const readers = demo.users.filter(u => ['student', 'member'].indexOf(u.role) !== -1);
+  const readableBooks = content.books.filter(b => b.scope === 'global' || b.scope === 'ten_greenfield');
+  const demoLibBooks = library.filter(l => l.type === 'book');
+  let openSeq = 0;
+  readers.forEach(function (reader, ri) {
+    const picks = readableBooks.filter(function (book, bi) { return (bi + ri) % 3 !== 2; }).slice(0, 5);
+    picks.forEach(function (book, bi) {
+      const times = 1 + ((ri + bi) % 3);           /* 1, 2 or 3 opens each */
+      for (let t = 0; t < times; t++) {
+        openSeq++;
+        bookOpens.push({ id: 'opn_demo_' + openSeq, tenantId: reader.tenantId, userId: reader.id,
+          kind: 'module', bookId: book.id, libraryId: null, title: book.title,
+          openedAt: stamp(openSeq) });
+      }
+    });
+    if (demoLibBooks.length && ri % 2 === 0) {     /* library books are opened too */
+      openSeq++;
+      bookOpens.push({ id: 'opn_demo_' + openSeq, tenantId: reader.tenantId, userId: reader.id,
+        kind: 'library', bookId: null, libraryId: demoLibBooks[0].id,
+        title: demoLibBooks[0].title, openedAt: stamp(openSeq) });
+    }
+  });
+
   return {
     settings,
     portals,
@@ -372,6 +400,8 @@ function build() {
     objectives: content.objectives,
     submissions: submissions,
     certificates: certificates,
+    book_opens: bookOpens,
+    video_alerts: [],
     thoughts: []
   };
 }

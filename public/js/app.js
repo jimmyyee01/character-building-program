@@ -9,7 +9,8 @@ function $(id) { return document.getElementById(id); }
 
 function show(view) {
   S.view = view;
-  ['home', 'modules', 'book', 'library', 'certificates', 'final', 'thoughts'].forEach(function (v) {
+  if (typeof stopAllNarrators === 'function') stopAllNarrators();
+  ['home', 'modules', 'book', 'library', 'certificates', 'final', 'thoughts', 'lessons'].forEach(function (v) {
     const el = $('view-' + v);
     if (el) el.classList.toggle('hidden', v !== view);
   });
@@ -17,16 +18,22 @@ function show(view) {
     b.classList.toggle('active', b.dataset.view === view);
   });
   window.scrollTo(0, 0);
+
+  if (view === 'lessons') {
+    renderLessonsView();
+  }
 }
 
 function modal(html, opts) {
   opts = opts || {};
+  if (typeof stopAllNarrators === 'function') stopAllNarrators();
   const root = $('modalRoot');
   root.innerHTML = '<div class="modal-bg"><div class="modal' + (opts.wide ? ' wide' : '') + '">' +
     (opts.noClose ? '' : '<button class="x" data-close>&times;</button>') +
     html + '</div></div>';
   root.classList.remove('hidden');
   const el = root.querySelector('.modal');
+  if (typeof initNarrators === 'function') initNarrators(el);
   root.querySelectorAll('[data-close]').forEach(function (b) {
     b.onclick = function () { closeModal(); if (opts.onClose) opts.onClose(); };
   });
@@ -38,6 +45,7 @@ function modal(html, opts) {
   return el;
 }
 function closeModal() {
+  if (typeof stopAllNarrators === 'function') stopAllNarrators();
   const root = $('modalRoot');
   root.innerHTML = '';
   root.classList.add('hidden');
@@ -71,6 +79,52 @@ function renderStrip() {
     statCard(perf.certificates, 'Certificates', 'green') +
     statCard(perf.flagged, 'Copy flags', 'red');
 }
+
+function lessonJoinUrl(value) {
+  const url = String(value || '').trim();
+  return /^https?:\/\/\S+$/i.test(url) ? url : '';
+}
+function renderLessonsView() {
+  const box = $('view-lessons');
+  if (!box) return;
+  box.innerHTML = '<p class="small muted">Loading lessons...</p>';
+  API.get('/live-lessons').then(function (r) {
+    const lessons = r.lessons || [];
+    if (!lessons.length) {
+      box.innerHTML = '<div class="card"><h2>Live Lessons</h2>' +
+        '<p class="small muted">No live lessons scheduled yet.</p></div>';
+      return;
+    }
+    let html = '<div class="card"><h2>Live Lessons</h2>' +
+      '<p class="small muted">Join a scheduled live session in a new window.</p>' +
+      '<div class="lesson-list">';
+    lessons.forEach(function (l) {
+      const url = lessonJoinUrl(l.joinUrl);
+      html += '<div class="list-item"><b>' + esc(l.title || 'Lesson') + '</b>' +
+        '<div class="small muted">' + esc(l.scheduledAt ? fmtDate(l.scheduledAt) : 'Time to be announced') + '</div>' +
+        (url
+          ? '<button type="button" class="ghost small" data-join="' + esc(url) + '">Join lesson</button>'
+          : '<span class="small muted">Meeting link not available</span>') +
+        '</div>';
+    });
+    html += '</div></div>';
+    box.innerHTML = html;
+    box.querySelectorAll('[data-join]').forEach(function (btn) {
+      btn.onclick = function () {
+        const url = lessonJoinUrl(btn.getAttribute('data-join'));
+        if (!url) { toast('This lesson has no valid meeting link.', 'err'); return; }
+        const win = window.open(url, '_blank');
+        if (win) { try { win.opener = null; } catch (e) {} }
+        else toast('Allow pop-ups to join the lesson.', 'err');
+      };
+    });
+  }).catch(function (e) {
+    box.innerHTML = '<div class="card"><p class="err-text">' +
+      esc(e.message || 'Failed to load lessons') + '</p></div>';
+  });
+}
+
+
 
 function renderModulesNav() {
   const f = S.flow;
@@ -116,6 +170,30 @@ async function markWatched(id) {
   loadVideos();
 }
 
+/* A video alert in the messages carries a library video: play it right here so
+   the learner never has to leave the page (common.js calls this). */
+window.cbpOpenVideoAlert = function (libraryId, url) {
+  const id = String(libraryId || '');
+  const known = (S.videos || []).find(function (v) { return String(v.id) === id; });
+  if (known && known.url) { playVideoById(known.id); return true; }
+  const item = (S.library || []).find(function (i) { return String(i.id) === id; });
+  if (item && item.url) { openMediaItem(item); return true; }
+  if (url) { window.open(url, '_blank', 'noopener'); return true; }
+  return false;
+};
+
+/* The account's reading analytics counts every open. It must never hold up the
+   reader, so a failure is swallowed — the book still opens. */
+function logBookOpen(payload) {
+  API.post('/reading/open', payload).catch(function () { /* history only */ });
+}
+
+/* Every third finished chapter may earn a library video, sent as an alert. */
+function videoAlertNote(response) {
+  const alert = response && response.videoAlert;
+  return alert ? ' A video was added to your alerts: ' + alert.title + '.' : '';
+}
+
 /* --------------------------------------------------------------- boot --- */
 document.querySelectorAll('.app-side button[data-view]').forEach(function (b) {
   b.onclick = function () { openView(b.dataset.view); };
@@ -133,14 +211,13 @@ async function openView(view) {
     else if (view === 'thoughts') await renderThoughts();
   } catch (e) { toast(e.message, 'err'); }
 }
-
 async function boot() {
   try { S.me = await API.get('/me'); }
   catch (e) { location.href = '/'; return; }
   if (S.me.user.role === 'tenant_admin') { location.href = '/admin'; return; }
   if (S.me.user.role === 'super') { location.href = '/super'; return; }
   API.setUser(S.me.user);
-  initCommunicationWidget();
+  if (typeof initCommunicationWidget === 'function') initCommunicationWidget();
   const b = S.me.branding;
   applyThemeColor(b.themeColor);
   $('sideName').textContent = b.tenantName || b.programName;
@@ -281,7 +358,8 @@ function startLetterFlow() {
         '<p class="muted small">You may close the video at any time — it pins itself to the corner while you read.</p>' +
         '<button id="closeLetterVideo" class="ghost">Close video (pin it to the corner)</button>' +
       '</div>' : '') +
-    '<div class="letter-box mt">' + esc(letter.text || 'The letter has not been configured yet.') + '</div>' +
+    narratedTextHtml(letter.text || 'The letter has not been configured yet.',
+      { className: 'letter-box mt', status: 'Press Play to hear this letter.' }) +
     '<label>Your feedback on the letter <b>(required before continuing)</b></label>' +
     '<textarea id="letterFeedback" placeholder="Write at least 20 characters about what the letter meant to you..."></textarea>' +
     '<div class="mt"><button id="submitLetter">Submit feedback &amp; continue</button></div>',
@@ -361,7 +439,7 @@ async function renderHome() {
           const status = r.flagged
             ? '<span class="flag">Copied ' + esc(r.similarity) + '%</span>'
             : (r.total ? '<span class="badge ok">' + r.score + '/' + r.total + '</span>' : '<span class="badge ok">Submitted</span>');
-          return '<tr><td class="timestamp">' + fmtDate(r.createdAt) + '</td>' +
+          return '<tr><td class="timestamp">' + fmtDate(r.submittedAt || r.createdAt) + '</td>' +
             '<td>' + esc(TYPE_LABELS[r.type] || r.type) + '</td>' +
             '<td>' + esc(r.chapter || r.book || r.label || '—') + '</td>' +
             '<td>' + status + '</td></tr>';
@@ -369,7 +447,11 @@ async function renderHome() {
     }
   } catch (e) {}
 
-  $('view-home').innerHTML =
+  /* The same belt the console shows, as the very first thing on the learner's
+     dashboard: the account's best performers by marks scored and coverage. */
+  const performers = await ribbonPerformers();
+  const home = $('view-home');
+  home.innerHTML = ribbonHtml(performers) +
     '<div class="card"><h2 class="home-title"><span class="motto">Be True</span>Welcome, ' + esc(S.me.user.fullName) + '</h2>' +
       (f.allDone
         ? '<p>Every module is complete — your summaries, certificates and library are waiting in the final records.</p>' +
@@ -397,6 +479,7 @@ async function renderHome() {
         chartWeekly(recentRows, 8, { caption: 'Your activity over the last 8 weeks' }) + '</div>' +
     '</div></div>' +
     '<div class="card"><h3>Recent activity</h3>' + recentHtml + '</div>';
+  wireRibbonPhotos(home);
 
   const gm = $('goModules'); if (gm) gm.onclick = function () { openView('modules'); };
   const gf = $('goFinal'); if (gf) gf.onclick = function () { openView('final'); };
@@ -491,6 +574,7 @@ async function openBook(bookId) {
   try {
     S.bookData = await API.get('/book/' + bookId);
   } catch (e) { toast(e.message, 'err'); return; }
+  logBookOpen({ bookId: bookId });
   S.selectedChapterId = null;
   show('book');
   renderBook();
@@ -548,6 +632,7 @@ function renderBook() {
   else if (chapter) body = chapterPanel(d, chapter);
   else body = '<div class="card"><p class="muted">This book has no chapters yet.</p></div>';
 
+  if (typeof stopNarratorsIn === 'function') stopNarratorsIn($('view-book'));
   $('view-book').innerHTML =
     '<div class="card"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">' +
       '<div><h3 style="margin:0">' + esc(d.book.title) + '</h3>' +
@@ -573,6 +658,7 @@ function renderBook() {
   wireChapterPanel(d, chapter);
   if (d.stage === 'letter') wireLetterPanel(d);
   if (d.stage === 'summaries') wireSummariesPanel(d);
+  if (typeof initNarrators === 'function') initNarrators($('view-book'));
 }
 
 function backToModule() {
@@ -593,7 +679,7 @@ function chapterPanel(d, ch) {
     '<h3>' + esc(ch.title) + '</h3>' +
     (pages ? '<p class="muted small">' + pages + '</p>' : '') +
     (ch.content
-      ? '<div class="content">' + esc(ch.content) + '</div>'
+      ? narratedTextHtml(ch.content, { className: 'content', status: 'Press Play to hear this chapter.' })
       : '<p class="muted">No written content for this chapter — read the pages of the PDF book.</p>') +
     /* clicking the chapter opens that chapter's own pages straight away, with a
        Close button; the rest of the book is never offered on this page */
@@ -609,7 +695,7 @@ function chapterPanel(d, ch) {
           : ''));
 
   if (ch.submission) {
-    html += '<hr><p class="timestamp">Submitted: <b>' + fmtDate(ch.submission.createdAt) + '</b></p>' +
+    html += '<hr><p class="timestamp">Submitted: <b>' + fmtDate(ch.submission.submittedAt || ch.submission.createdAt) + '</b></p>' +
       (ch.submission.flagged
         ? '<p class="flag">Copy assessment: ' + ch.submission.similarity + '% similar to another student’s submission.</p>'
         : '<span class="badge ok">Original work</span>') +
@@ -672,7 +758,7 @@ function wireChapterPanel(d, ch) {
         const kw = a.keywordScore == null ? ''
           : ' Key words: ' + a.keywordsUsed + ' of ' + a.keywordsTotal + ' (' + a.keywordScore + '%)' +
             (a.keywordsMissing && a.keywordsMissing.length ? ' — missing: ' + a.keywordsMissing.join(', ') : '');
-        toast((r.warning || 'Chapter summary submitted.') + kw, r.warning ? 'err' : 'ok');
+        toast((r.warning || 'Chapter summary submitted.') + kw + videoAlertNote(r), r.warning ? 'err' : 'ok');
         await refreshBook();
       } catch (e) { toast(e.message, 'err'); }
     };
@@ -708,7 +794,7 @@ async function loadObjectives(ch, box) {
           (o.correct === false ? '<div class="flag">Your answer was incorrect</div>' : '') +
           '</div>';
       }).join('') +
-      '<p class="timestamp">Submitted: ' + fmtDate(data.submission.createdAt) +
+      '<p class="timestamp">Submitted: ' + fmtDate(data.submission.submittedAt || data.submission.createdAt) +
       ' — score ' + data.submission.score + '/' + data.submission.total + '</p>';
       return;
     }
@@ -732,7 +818,8 @@ async function loadObjectives(ch, box) {
       try {
         const r = await API.post('/submissions',
           { type: 'objectives', chapterId: ch.id, answers: answers });
-        toast('Objectives submitted — score ' + r.submission.score + '/' + r.submission.total, 'ok');
+        toast('Objectives submitted — score ' + r.submission.score + '/' + r.submission.total +
+          videoAlertNote(r), 'ok');
         await refreshBook();
       } catch (e) { toast(e.message, 'err'); }
     };
@@ -747,13 +834,13 @@ function letterPanel(d) {
   }
   if (d.letterSubmission) {
     return '<div class="chapter-body"><h3>' + esc(d.letter.title) + '</h3>' +
-      '<div class="letter-box">' + esc(d.letter.text) + '</div>' +
-      '<p class="timestamp mt">Submitted: ' + fmtDate(d.letterSubmission.createdAt) + '</p></div>';
+      narratedTextHtml(d.letter.text, { className: 'letter-box', status: 'Press Play to hear this letter.' }) +
+      '<p class="timestamp mt">Submitted: ' + fmtDate(d.letterSubmission.submittedAt || d.letterSubmission.createdAt) + '</p></div>';
   }
   return '<div class="chapter-body">' +
     '<h3>' + esc(d.letter.title) + '</h3>' +
     '<p class="muted small">Read the whole letter, then write your summary to unlock the next book.</p>' +
-    '<div class="letter-box">' + esc(d.letter.text) + '</div>' +
+    narratedTextHtml(d.letter.text, { className: 'letter-box', status: 'Press Play to hear this letter.' }) +
     '<h4 class="mt">Summary of the letter</h4>' +
     '<textarea id="letterSum" class="no-paste" placeholder="At least 30 characters in your own words..."></textarea>' +
     '<div class="mt"><button id="letterSubmit">Submit letter summary</button></div></div>';
@@ -786,7 +873,7 @@ function summariesPanel(d) {
       if (s.submission) {
         return '<div class="summary-box" style="border-left:8px solid ' + esc(color) + '">' + head +
           '<div class="content mt">' + esc(s.submission.text || '') + '</div>' +
-          '<p class="timestamp">Submitted: ' + fmtDate(s.submission.createdAt) + '</p>' +
+          '<p class="timestamp">Submitted: ' + fmtDate(s.submission.submittedAt || s.submission.createdAt) + '</p>' +
           (s.submission.flagged ? '<p class="flag">Copy assessment: ' + s.submission.similarity + '% similar to another submission.</p>' : '') +
           '</div>';
       }
@@ -1013,31 +1100,102 @@ async function renderCertificates() {
 }
 
 /* ------------------------------------------------------------ library --- */
+function openMediaItem(item) {
+  const type = item.type;
+  const media = (S.library || []).filter(function (i) { return i.type === type && i.url; });
+  let idx = media.findIndex(function (i) { return String(i.id) === String(item.id); });
+  if (idx < 0) { media.unshift(item); idx = 0; }
+
+  function renderMedia(i) {
+    const it = media[i];
+    const old = document.getElementById('libMedia');
+    if (old) { try { old.pause(); } catch (e) {} }
+    const player = type === 'video'
+      ? '<video id="libMedia" class="video-frame" controls autoplay playsinline src="' + esc(it.url) + '"></video>'
+      : '<audio id="libMedia" controls autoplay src="' + esc(it.url) + '" style="width:100%"></audio>';
+    modal('<h3>' + esc(it.title) + '</h3>' +
+      player +
+      '<div class="mt" style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">' +
+      '<button id="mediaBack" class="ghost"' + (i > 0 ? '' : ' disabled') + '>Back</button>' +
+      '<button id="mediaPlay">Play</button>' +
+      '<button id="mediaPause" class="ghost">Pause</button>' +
+      '<button id="mediaNext" class="ghost"' + (i < media.length - 1 ? '' : ' disabled') + '>Next</button>' +
+      '</div>' +
+      '<div class="mt"><button data-close class="ghost">Close</button></div>',
+      { onClose: function () { const m = document.getElementById('libMedia'); if (m) { try { m.pause(); } catch (e) {} } } });
+    const el = document.getElementById('libMedia');
+    if (el) el.onerror = function () { toast('Could not load this media file. Check the link or upload a supported audio/video file.', 'err'); };
+    const bp = document.getElementById('mediaPlay');
+    if (bp) bp.onclick = function () {
+      if (!el) return;
+      const p = el.play();
+      if (p && p.catch) p.catch(function () { toast('The browser could not play this media file.', 'err'); });
+    };
+    const bpa = document.getElementById('mediaPause'); if (bpa) bpa.onclick = function () { if (el) el.pause(); };
+    const bb = document.getElementById('mediaBack'); if (bb) bb.onclick = function () { if (i > 0) renderMedia(i - 1); };
+    const bn = document.getElementById('mediaNext'); if (bn) bn.onclick = function () { if (i < media.length - 1) renderMedia(i + 1); };
+  }
+  renderMedia(idx);
+}
+
+function isTextFileUrl(url) {
+  return /\.(txt|text|md|markdown|log|csv|tsv)(?:[?#]|$)/i.test(String(url || ''));
+}
+
+async function openTextLibraryItem(item) {
+  modal('<h3>' + esc(item.title) + '</h3>' +
+    '<div id="libTextLoading" class="muted">Loading text file…</div>' +
+    '<div class="mt"><button data-close class="ghost">Close</button></div>', { wide: true });
+  try {
+    const res = await fetch(item.url, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('Could not load this text file (' + res.status + ').');
+    const text = await res.text();
+    if (!document.getElementById('libTextLoading')) return;   /* popup was closed */
+    modal('<h3>' + esc(item.title) + '</h3>' +
+      (item.text ? narratedTextHtml(item.text, {
+        className: 'letter-box', status: 'Press Play to hear this text.' }) : '') +
+      narratedTextHtml(text, { className: 'letter-box', status: 'Press Play to hear this file.' }) +
+      '<div class="mt"><button data-close class="ghost">Close</button></div>', { wide: true });
+  } catch (e) {
+    if (!document.getElementById('libTextLoading')) return;
+    modal('<h3>' + esc(item.title) + '</h3>' +
+      '<p class="muted">' + esc(e.message) + '</p>' +
+      '<p><a href="' + esc(item.url) + '" target="_blank" rel="noopener">Open the file ↗</a></p>' +
+      '<div class="mt"><button data-close class="ghost">Close</button></div>', { wide: true });
+  }
+}
+
 function openLibraryItem(item) {
-  /* books only open once every module is complete */
-  if (item.type === 'book' && (item.locked || !(S.flow && S.flow.allDone))) {
+  /* books and letters open once every module is complete */
+  if ((item.type === 'book' || item.type === 'letter') && (item.locked || !(S.flow && S.flow.allDone))) {
     modal('<h3>' + esc(item.title) + '</h3>' +
       bookLockedHtml(item.title, 'Finish every module to open the books in the programme.') +
       '<div class="mt"><button data-close class="ghost">Close</button></div>');
     return;
   }
-  if (item.type === 'video' && item.url) {
-    modal('<h3>' + esc(item.title) + '</h3>' +
-      '<video class="video-frame" controls autoplay src="' + esc(item.url) + '"></video>' +
-      '<div class="mt"><button data-close class="ghost">Close</button></div>',
-      { onClose: function () {} });
+  /* the book is opening now, so the account's reading analytics counts it */
+  if (item.type === 'book') logBookOpen({ libraryId: item.id });
+  /* audio and video always open in a popup player */
+  if ((item.type === 'audio' || item.type === 'video') && item.url) {
+    openMediaItem(item);
+    return;
+  }
+  if (item.url && isTextFileUrl(item.url)) {
+    openTextLibraryItem(item);
     return;
   }
   modal('<h3>' + esc(item.title) + '</h3>' +
     (item.url ? '<p>' + pdfHtml(item.url) + '</p>' : '') +
-    (item.text ? '<div class="letter-box">' + esc(item.text) + '</div>'
-               : '<p class="muted">No text content for this entry.</p>') +
+    (item.text ? narratedTextHtml(item.text, {
+      className: 'letter-box', status: 'Press Play to hear this text.'
+    }) : '<p class="muted">No text content for this entry.</p>') +
     '<div class="mt"><button data-close class="ghost">Close</button></div>', { wide: true });
 }
 
 async function renderLibrary() {
   const data = await API.get('/library');
-  const groups = { book: [], letter: [], video: [] };
+  S.library = data.library || [];
+  const groups = { book: [], letter: [], video: [], audio: [] };
   data.library.forEach(function (i) { (groups[i.type] || groups.book).push(i); });
   function list(type, title) {
     const items = groups[type];
@@ -1048,14 +1206,14 @@ async function renderLibrary() {
               '<b>' + esc(i.title) + '</b> ' +
               (i.fileName ? '<span class="badge info">file</span>' : '') +
               (i.text ? '<span class="badge lock">text</span>' : '') +
-              (i.type === 'book' && i.locked ? '<span class="badge off">locked until you finish every module</span>' : '') +
+              ((i.type === 'book' || i.type === 'letter') && i.locked ? '<span class="badge off">locked until you finish every module</span>' : '') +
               '</div>';
           }).join('')
         : '<p class="muted">Nothing here yet.</p>') + '</div>';
   }
   $('view-library').innerHTML = '<h2>Library</h2>' +
-    '<p class="muted">Every book, letter and video of the programme. The books and letters used in your modules are picked from here.</p>' +
-    '<div class="grid cols-3">' + list('book', 'Books') + list('letter', 'Letters') + list('video', 'Videos') + '</div>';
+    '<p class="muted">Every book, letter, video and audio recording in the programme. Click an item to open it.</p>' +
+    '<div class="grid cols-3">' + list('book', 'Books') + list('letter', 'Letters') + list('video', 'Videos') + list('audio', 'Audio') + '</div>';
   $('view-library').querySelectorAll('[data-lib]').forEach(function (el) {
     el.onclick = function () {
       const item = data.library.find(function (i) { return i.id === el.dataset.lib; });
@@ -1074,7 +1232,7 @@ async function renderThoughts() {
     '<div class="card">' + (data.thoughts.length
       ? data.thoughts.map(function (t) {
           return '<div class="summary-box"><div class="content">' + esc(t.text) + '</div>' +
-            '<div class="timestamp">' + fmtDate(t.createdAt) + '</div></div>';
+            '<div class="timestamp">' + fmtDate(t.submittedAt || t.createdAt) + '</div></div>';
         }).join('')
       : '<p class="muted">No thoughts recorded yet.</p>') + '</div>';
   $('thtAdd').onclick = async function () {
@@ -1097,7 +1255,7 @@ function finalSubHtml(s, colorBar) {
   return '<div class="summary-box"' + (colorBar ? ' style="border-left:8px solid ' + esc(colorBar) + '"' : '') + '>' +
     '<b>' + esc(s.chapter || s.book || s.label || TYPE_LABELS[s.type] || s.type) + '</b> ' + score + ' ' + flag +
     (s.text ? '<div class="content">' + esc(s.text) + '</div>' : '') +
-    '<div class="timestamp">' + fmtDate(s.createdAt) + '</div></div>';
+    '<div class="timestamp">' + fmtDate(s.submittedAt || s.createdAt) + '</div></div>';
 }
 
 function sectionBlock(title, list, mapper) {
@@ -1174,7 +1332,7 @@ function renderFinalTab() {
       '<div class="card"><h3>My thoughts</h3>' +
       (d.thoughts.length ? d.thoughts.map(function (t) {
         return '<div class="summary-box"><div class="content">' + esc(t.text) + '</div>' +
-          '<div class="timestamp">' + fmtDate(t.createdAt) + '</div></div>';
+          '<div class="timestamp">' + fmtDate(t.submittedAt || t.createdAt) + '</div></div>';
       }).join('') : '<p class="muted">No thoughts yet.</p>') + '</div>';
   } else if (FINAL_TAB === 'general') {
     html = '<div class="card"><h3>General summary</h3>' +
@@ -1279,11 +1437,3 @@ boot().catch(function (e) {
   console.error(e);
   toast(e.message || 'Failed to start', 'err');
 });
-
-
-
-
-
-
-
-

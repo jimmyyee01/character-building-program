@@ -9,7 +9,7 @@ function can_edit(array $user, ?string $rowScope): bool {
     return $rowScope !== null && $rowScope === ($user['tenant_id'] ?? null);
 }
 function lib_row(array $r): array {
-    return ['id'=>$r['id'],'type'=>$r['type'],'title'=>$r['title'],'scope'=>$r['scope'],
+    return ['id'=>$r['id'],'type'=>(($r['type'] ?? '') === 'mp3' ? 'audio' : ($r['type'] ?? null)),'title'=>$r['title'],'scope'=>$r['scope'],
         'text'=>$r['text'],'url'=>$r['url'],'fileName'=>$r['file_name'],
         'createdAt'=>iso($r['created_at'] ?? null)];
 }
@@ -370,6 +370,61 @@ function r_super_module_update(array $user, array $body, array $params, ?string 
     $st = db()->prepare('SELECT * FROM modules WHERE id=?'); $st->execute([$id]);
     return n_module($st->fetch());
 }
+function conversation_participant_ids(array $user): array {
+    $role = $user['role'] ?? '';
+    $ids = [];
+    if ($role === 'super') {
+        $st = db()->query('SELECT id FROM users');
+        $ids = array_column($st->fetchAll('id'), 'id');
+    } elseif ($role === 'tenant_admin') {
+        $st = db()->query('SELECT id FROM users WHERE tenant_id=?', [$user['tenant_id']]);
+        $ids = array_column($st->fetchAll('id'), 'id');
+    } elseif ($role === 'supervisor') {
+        $st = db()->prepare('SELECT id FROM users WHERE supervisor_id=?');
+        $st->execute([$user['id']]);
+        $ids = array_column($st->fetchAll('id'), 'id');
+    }
+    return array_unique($ids);
+}
+function r_super_conversations_list(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super']);
+    $participantIds = conversation_participant_ids($user);
+    if (!count($participantIds)) return ['conversations' => []];
+    $ph = implode(',', array_fill(0, count($participantIds), '?'));
+    $st = db()->prepare("SELECT c.id, c.tenant_id, c.participant_key, c.participant_ids_json,
+        (SELECT GROUP_CONCAT(m.id) FROM conversation_messages m WHERE m.conversation_id=c.id) as message_ids
+        FROM conversations c WHERE c.tenant_id IN ($ph) ORDER BY c.updated_at DESC");
+    $args = $participantIds;
+    $st->execute($args);
+    $out = [];
+    foreach ($st->fetchAll() as $r) {
+        $out[] = ['id'=>$r['id'],'tenant_id'=>$r['tenant_id'],'participant_key'=>$r['participant_key'],
+            'participant_ids_json'=>$r['participant_ids_json'],
+            'message_ids'=>$r['message_ids'] ?? ''];
+    }
+    return ['conversations' => $out];
+}
+function r_super_conversation_get(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super']);
+    $convId = $params['id'] ?? $body['conversationId'] ?? null; need($convId, 'conversation id required');
+    $st = db()->prepare('SELECT * FROM conversations WHERE id=? LIMIT 1'); $st->execute([$convId]);
+    if (!($c = $st->fetch())) return ['ok' => false, 'error' => 'Conversation not found', 404];
+    $mid = $body['messageId'] ?? null;
+    $where = '';
+    $args = [];
+    if ($mid) { $where = 'AND m.id=?'; $args = [$mid]; }
+    $st2 = db()->prepare("SELECT m.id, m.sender_id, m.body, m.read_at, m.created_at,
+        u.full_name AS sender_name FROM conversation_messages m LEFT JOIN users u ON u.id=m.sender_id $where ORDER BY m.created_at ASC");
+    $st2->execute($args);
+    $messages = [];
+    foreach ($st2->fetchAll() as $m) {
+        $messages[] = ['id'=>$m['id'],'sender_id'=>$m['sender_id'],'sender_name'=>$m['sender_name'] ?? 'Unknown',
+            'body'=>$m['body'],'read_at'=>$m['read_at'],'created_at'=>$m['created_at']];
+    }
+    return ['ok' => true, 'conversation' => ['id'=>$c['id'],'tenant_id'=>$c['tenant_id'],
+        'participant_key'=>$c['participant_key'],'participant_ids_json'=>$c['participant_ids_json']],
+        'messages' => $messages];
+}
 function r_super_module_delete(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super']);
     $id = $params['id'] ?? $body['id'] ?? null; need($id, 'id required');
@@ -377,6 +432,84 @@ function r_super_module_delete(array $user, array $body, array $params, ?string 
     need((int)$st->fetchColumn() === 0, 'Cannot delete module with books', 409);
     db()->prepare('DELETE FROM modules WHERE id=?')->execute([$id]);
     return ['deleted' => true];
+}
+/* ------------------------------------------- self-assessment management -- */
+function r_super_assessment_get(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super']);
+    return ['assessment'=>assessment_public_def(assessment_def())];
+}
+function r_super_assessment_category_create(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super']);
+    $title = trim((string)($body['title'] ?? ''));
+    need(mb_strlen($title) >= 2, 'Enter a category name (at least 2 characters)', 400);
+    $def = assessment_def();
+    $category = ['id'=>assessment_category_id($def, $title), 'title'=>$title,
+        'order'=>count($def['categories']) + 1, 'statements'=>[]];
+    $def['categories'][] = $category;
+    $def = assessment_save($def);
+    return ['assessment'=>assessment_public_def($def), 'category'=>$category];
+}
+function r_super_assessment_category_update(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super']);
+    $id = (string)($params[0] ?? '');
+    $def = assessment_def();
+    $index = assessment_category_index($def, $id);
+    need($index !== null, 'Category not found', 404);
+    $title = trim((string)($body['title'] ?? ''));
+    need(mb_strlen($title) >= 2, 'Enter a category name (at least 2 characters)', 400);
+    $def['categories'][$index]['title'] = $title;
+    $def = assessment_save($def);
+    return ['assessment'=>assessment_public_def($def), 'category'=>$def['categories'][$index]];
+}
+function r_super_assessment_category_delete(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super']);
+    $id = (string)($params[0] ?? '');
+    $def = assessment_def();
+    $index = assessment_category_index($def, $id);
+    need($index !== null, 'Category not found', 404);
+    $remaining = assessment_statement_count($def) - count($def['categories'][$index]['statements']);
+    need($remaining > 0, 'Keep at least one objective question in the self-assessment', 400);
+    array_splice($def['categories'], $index, 1);
+    $def = assessment_save($def);
+    return ['assessment'=>assessment_public_def($def)];
+}
+function r_super_assessment_statement_create(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super']);
+    $id = (string)($params[0] ?? '');
+    $def = assessment_def();
+    $index = assessment_category_index($def, $id);
+    need($index !== null, 'Category not found', 404);
+    $text = trim((string)($body['text'] ?? ''));
+    need(mb_strlen($text) >= 5, 'Enter the objective question (at least 5 characters)', 400);
+    $statement = ['id'=>assessment_statement_id($def['categories'][$index]), 'text'=>$text,
+        'order'=>count($def['categories'][$index]['statements']) + 1];
+    $def['categories'][$index]['statements'][] = $statement;
+    $def = assessment_save($def);
+    return ['assessment'=>assessment_public_def($def), 'statement'=>$statement];
+}
+function r_super_assessment_statement_update(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super']);
+    $id = (string)($params[0] ?? '');
+    $def = assessment_def();
+    $found = assessment_statement_find($def, $id);
+    need($found !== null, 'Objective question not found', 404);
+    $text = trim((string)($body['text'] ?? ''));
+    need(mb_strlen($text) >= 5, 'Enter the objective question (at least 5 characters)', 400);
+    $def['categories'][$found['categoryIndex']]['statements'][$found['statementIndex']]['text'] = $text;
+    $def = assessment_save($def);
+    return ['assessment'=>assessment_public_def($def),
+        'statement'=>$def['categories'][$found['categoryIndex']]['statements'][$found['statementIndex']]];
+}
+function r_super_assessment_statement_delete(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super']);
+    $id = (string)($params[0] ?? '');
+    $def = assessment_def();
+    $found = assessment_statement_find($def, $id);
+    need($found !== null, 'Objective question not found', 404);
+    need(assessment_statement_count($def) > 1, 'Keep at least one objective question in the self-assessment', 400);
+    array_splice($def['categories'][$found['categoryIndex']]['statements'], $found['statementIndex'], 1);
+    $def = assessment_save($def);
+    return ['assessment'=>assessment_public_def($def)];
 }
 function r_super_settings_get(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super']);
@@ -485,6 +618,114 @@ function copy_match(?array $sub): ?array {
         }
     }
     return $best;
+}
+
+/* The aggregates behind the "Reading activity" card. Mirrors readingSection()
+   in the Node build: opens per book, the books (and learners) with at least one
+   open, the book learners come back to most, and one learner's own books. */
+function reading_section(array $tenantIds, array $participants, ?string $fModule, ?array $onlyUserIds): array {
+    $pdo = db();
+    /* a database that has not run migrate.php has no opens to report, but the
+       analytics page must still load */
+    if (!has_table('book_opens')) {
+        return ['totals' => ['opens' => 0, 'booksOpened' => 0, 'readers' => 0,
+            'moduleBooks' => 0, 'libraryBooks' => 0, 'averagePerReader' => 0],
+            'mostLiked' => null, 'books' => [], 'readers' => [], 'readersTotal' => 0];
+    }
+    $people = [];
+    foreach ($participants as $person) $people[(string)$person['id']] = $person;
+    $bookModule = [];
+    if ($fModule) {
+        foreach ($pdo->query('SELECT id,module_id FROM books')->fetchAll() as $row) {
+            $bookModule[(string)$row['id']] = (string)$row['module_id'];
+        }
+    }
+
+    $opens = [];
+    foreach ($pdo->query('SELECT * FROM book_opens')->fetchAll() as $row) {
+        if (!in_array((string)$row['tenant_id'], $tenantIds, true)) continue;
+        if ($onlyUserIds !== null && !in_array((string)$row['user_id'], $onlyUserIds, true)) continue;
+        if (!isset($people[(string)$row['user_id']])) continue;
+        if ($fModule && empty($row['book_id'])) continue;
+        if ($fModule && ($bookModule[(string)$row['book_id']] ?? null) !== $fModule) continue;
+        $opens[] = $row;
+    }
+
+    $books = []; $readers = [];
+    foreach ($opens as $row) {
+        $key = !empty($row['book_id']) ? 'book:' . $row['book_id'] : 'library:' . (string)($row['library_id'] ?? '');
+        $at = (string)iso($row['opened_at'] ?? null);
+        if (!isset($books[$key])) {
+            $books[$key] = ['key' => $key, 'title' => $row['title'] ?: 'Book',
+                'kind' => $row['kind'] ?: 'module', 'bookId' => $row['book_id'],
+                'libraryId' => $row['library_id'], 'opens' => 0, 'readers' => [],
+                'firstOpenedAt' => $at, 'lastOpenedAt' => $at];
+        }
+        $books[$key]['opens']++;
+        $books[$key]['readers'][(string)$row['user_id']] = true;
+        if ($at < $books[$key]['firstOpenedAt']) $books[$key]['firstOpenedAt'] = $at;
+        if ($at > $books[$key]['lastOpenedAt']) $books[$key]['lastOpenedAt'] = $at;
+
+        $uidKey = (string)$row['user_id'];
+        if (!isset($readers[$uidKey])) {
+            $person = $people[$uidKey];
+            $readers[$uidKey] = ['userId' => $uidKey, 'name' => $person['full_name'] ?: 'Learner',
+                'className' => $person['class_name'] ?? null,
+                'studentNumber' => $person['student_number'] ?? null,
+                'photo' => public_login_photo($person['photo'] ?? null),
+                'opens' => 0, 'books' => [], 'lastOpenedAt' => $at];
+        }
+        $readers[$uidKey]['opens']++;
+        if ($at > $readers[$uidKey]['lastOpenedAt']) $readers[$uidKey]['lastOpenedAt'] = $at;
+        if (!isset($readers[$uidKey]['books'][$key])) {
+            $readers[$uidKey]['books'][$key] = ['key' => $key, 'title' => $books[$key]['title'],
+                'opens' => 1, 'lastOpenedAt' => $at];
+        } else {
+            $readers[$uidKey]['books'][$key]['opens']++;
+            if ($at > $readers[$uidKey]['books'][$key]['lastOpenedAt']) {
+                $readers[$uidKey]['books'][$key]['lastOpenedAt'] = $at;
+            }
+        }
+    }
+
+    $bookRows = [];
+    foreach ($books as $book) {
+        $readerCount = count($book['readers']);
+        $bookRows[] = ['key' => $book['key'], 'title' => $book['title'], 'kind' => $book['kind'],
+            'bookId' => $book['bookId'], 'libraryId' => $book['libraryId'],
+            'opens' => $book['opens'], 'readers' => $readerCount,
+            'opensPerReader' => $readerCount ? round($book['opens'] / $readerCount, 2) : 0,
+            'firstOpenedAt' => $book['firstOpenedAt'], 'lastOpenedAt' => $book['lastOpenedAt']];
+    }
+    usort($bookRows, fn($a, $b) => ($b['opens'] <=> $a['opens']) ?:
+        (($b['readers'] <=> $a['readers']) ?: strcasecmp((string)$a['title'], (string)$b['title'])));
+
+    $readerRows = [];
+    foreach ($readers as $reader) {
+        $own = array_values($reader['books']);
+        usort($own, fn($a, $b) => ($b['opens'] <=> $a['opens']) ?:
+            strcasecmp((string)$a['title'], (string)$b['title']));
+        $readerRows[] = ['userId' => $reader['userId'], 'name' => $reader['name'],
+            'className' => $reader['className'], 'studentNumber' => $reader['studentNumber'],
+            'photo' => $reader['photo'], 'opens' => $reader['opens'],
+            'booksOpened' => count($own), 'books' => $own,
+            'lastOpenedAt' => $reader['lastOpenedAt']];
+    }
+    usort($readerRows, fn($a, $b) => ($b['opens'] <=> $a['opens']) ?:
+        strcasecmp((string)$a['name'], (string)$b['name']));
+
+    $moduleBooks = count(array_filter($bookRows, fn($book) => $book['kind'] === 'module'));
+    return [
+        'totals' => ['opens' => count($opens), 'booksOpened' => count($bookRows),
+            'readers' => count($readerRows), 'moduleBooks' => $moduleBooks,
+            'libraryBooks' => count($bookRows) - $moduleBooks,
+            'averagePerReader' => count($readerRows) ? round(count($opens) / count($readerRows), 2) : 0],
+        /* "liked most" is the book learners come back to: the most opened one */
+        'mostLiked' => $bookRows[0] ?? null,
+        'books' => $bookRows,
+        'readers' => array_slice($readerRows, 0, 300),
+        'readersTotal' => count($readerRows),
+    ];
 }
 
 function analytics_payload(array $scope): array {
@@ -820,6 +1061,8 @@ function analytics_payload(array $scope): array {
         'learners' => array_slice($learnerRows, 0, 300),
         'learnersTotal' => count($learnerRows),
         'activity' => $activity,
+        /* how the account reads: opens, books opened at least once, most liked */
+        'reading' => reading_section($tIds, $participants, $fModule, $onlyUserIds),
         'flagged' => $flaggedOut,
     ];
 }
@@ -863,10 +1106,20 @@ function r_admin_analytics(array $user, array $body, array $params, ?string $tok
    how much of the programme they have covered (super/tenant admin/supervisor). */
 function create_notification(string $userId, array $data): void {
     $pdo = db();
-    $pdo->prepare('INSERT INTO notifications (id,user_id,type,title,body,conversation_id,student_id,submission_id,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-        ->execute([uid('ntf'), $userId, $data['type'], $data['title'], $data['body'],
-            $data['conversationId'] ?? null, $data['studentId'] ?? null,
-            $data['submissionId'] ?? null, now_dt()]);
+    /* an alert may point at a library video (the video alerts for chapter
+       milestones), so those two columns are written when the table has them */
+    $columns = ['id','user_id','type','title','body','conversation_id','student_id','submission_id','created_at'];
+    $values = [uid('ntf'), $userId, $data['type'], $data['title'], $data['body'],
+        $data['conversationId'] ?? null, $data['studentId'] ?? null,
+        $data['submissionId'] ?? null, now_dt()];
+    if (has_column('notifications', 'library_id')) {
+        $columns[] = 'library_id'; $values[] = $data['libraryId'] ?? null;
+    }
+    if (has_column('notifications', 'video_url')) {
+        $columns[] = 'video_url'; $values[] = $data['videoUrl'] ?? null;
+    }
+    $pdo->prepare('INSERT INTO notifications (' . implode(',', $columns) . ') VALUES (' .
+        implode(',', array_fill(0, count($columns), '?')) . ')')->execute($values);
 }
 function create_submission_notification(array $user, array $submission): void {
     if (!in_array($user['role'] ?? '', ['student','member'], true) || empty($user['supervisor_id'])) return;
@@ -1094,12 +1347,20 @@ function r_messages_reply(array $user, array $body, array $params, ?string $toke
 }
 function r_notifications_list(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['tenant_admin','supervisor','student','member','teacher']);
-    $st = db()->prepare('SELECT id,type,title,body,conversation_id,student_id,submission_id,read_at,created_at FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 100');
+    /* both columns arrive with migrate.php, each is asked for on its own so a
+       half-migrated table cannot break the whole messages list */
+    $videoColumns = '';
+    if (has_column('notifications', 'library_id')) $videoColumns .= ',library_id';
+    if (has_column('notifications', 'video_url')) $videoColumns .= ',video_url';
+    $st = db()->prepare('SELECT id,type,title,body,conversation_id,student_id,submission_id' .
+        $videoColumns . ',read_at,created_at FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 100');
     $st->execute([$user['id']]);
     $notifications = array_map(fn($n) => [
         'id'=>$n['id'], 'type'=>$n['type'], 'title'=>$n['title'], 'body'=>$n['body'],
         'conversationId'=>$n['conversation_id'], 'studentId'=>$n['student_id'],
-        'submissionId'=>$n['submission_id'], 'readAt'=>iso($n['read_at']), 'createdAt'=>iso($n['created_at']),
+        'submissionId'=>$n['submission_id'],
+        'libraryId'=>$n['library_id'] ?? null, 'videoUrl'=>$n['video_url'] ?? null,
+        'readAt'=>iso($n['read_at']), 'createdAt'=>iso($n['created_at']),
     ], $st->fetchAll());
     return ['notifications'=>$notifications, 'unread'=>count(array_filter($notifications, fn($n) => !$n['readAt']))];
 }
@@ -1138,6 +1399,7 @@ function r_reports_students(array $user, array $body, array $params, ?string $to
     }
     $activityYears = array_keys($activityYears);
     rsort($activityYears, SORT_STRING);
+    $assessmentDef = assessment_active_def(assessment_def());
     $students = [];
     foreach ($rows as $u) {
         if (!in_array($u['role'], ['student','teacher','member'], true)) continue;
@@ -1193,6 +1455,7 @@ function r_reports_students(array $user, array $body, array $params, ?string $to
             'progress'=>(int)$perf['overall'], 'modulesCompleted'=>$completed, 'moduleCount'=>count($mods),
             'keywordScore'=>$scores ? (int)round(array_sum($scores) / count($scores)) : null,
             'typedAnswers'=>count($scores),
+            'assessment'=>assessment_report(normalize_user($u), $assessmentDef),
             'level'=>$level,
             'modules'=>array_map(fn($m)=>['id'=>$m['id'], 'title'=>$m['title'],
                 'percent'=>(int)$m['percent'], 'status'=>$m['status']], $mods),
@@ -1206,6 +1469,8 @@ function r_reports_students(array $user, array $body, array $params, ?string $to
     });
     $n = count($students);
     return ['students'=>$students, 'count'=>$n, 'activityYears'=>$activityYears,
+        'assessmentCategories'=>array_map(fn($c)=>['id'=>$c['id'], 'title'=>$c['title'],
+            'max'=>count($c['statements']) * 5], $assessmentDef['categories']),
         'average'=>$n ? (int)round(array_sum(array_map(fn($s)=>$s['progress'], $students)) / $n) : 0,
         'finished'=>count(array_filter($students, fn($s)=>$s['moduleCount'] > 0 && $s['modulesCompleted'] === $s['moduleCount'])),
         'started'=>count(array_filter($students, fn($s)=>$s['submissions'] > 0)),
@@ -1292,6 +1557,48 @@ function r_reports_student_detail(array $user, array $body, array $params, ?stri
             'module'=>$detail['module']];
     }
     return ['submissions'=>$submissions, 'count'=>count($submissions)];
+}
+/* Statement-level self-assessment behind the report popup: exactly what the
+   learner chose for every objective question, pre and post, with the category
+   totals the supervisor sees in the table. */
+function r_reports_student_assessment(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super','tenant_admin','supervisor']);
+    $studentId = trim((string)($query['studentId'] ?? ''));
+    need($studentId !== '', 'studentId required');
+    $target = null;
+    foreach (scoped_user_rows($user, $query) as $row) {
+        if ((string)$row['id'] === $studentId &&
+            in_array($row['role'], ['student','teacher','member'], true)) {
+            $target = $row;
+            break;
+        }
+    }
+    need($target, 'Student not found', 404);
+    $student = normalize_user($target);
+    $def = assessment_active_def(assessment_def());
+    $summary = assessment_report($student, $def);
+    $pre = is_array($student['assessment_pre'] ?? null) ? $student['assessment_pre'] : null;
+    $post = is_array($student['assessment_post'] ?? null) ? $student['assessment_post'] : null;
+    $categories = [];
+    foreach ($def['categories'] as $c) {
+        $statements = [];
+        $preTotal = 0; $postTotal = 0;
+        foreach ($c['statements'] as $s) {
+            $pv = $pre && isset($pre['answers'][$s['id']]) ? (int)$pre['answers'][$s['id']] : null;
+            $qv = $post && isset($post['answers'][$s['id']]) ? (int)$post['answers'][$s['id']] : null;
+            if ($pv !== null) $preTotal += $pv;
+            if ($qv !== null) $postTotal += $qv;
+            $statements[] = ['id'=>$s['id'], 'text'=>$s['text'], 'pre'=>$pv, 'post'=>$qv];
+        }
+        $categories[] = ['id'=>$c['id'], 'title'=>$c['title'], 'statements'=>$statements,
+            'max'=>count($c['statements']) * 5,
+            'preTotal'=>$pre ? $preTotal : null, 'postTotal'=>$post ? $postTotal : null];
+    }
+    return ['student'=>['id'=>$student['id'], 'fullName'=>$student['full_name'],
+            'className'=>$student['class_name'] ?: null, 'studentNumber'=>$student['student_number'] ?: null,
+            'tenantId'=>$student['tenant_id'] ?: null, 'supervisorId'=>$student['supervisor_id'] ?: null],
+        'scale'=>$def['scale'], 'note'=>$def['note'], 'categories'=>$categories,
+        'pre'=>$summary['pre'], 'post'=>$summary['post'], 'growth'=>$summary['growth']];
 }
 function r_reports_module_performers(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin','supervisor']);
@@ -1410,6 +1717,94 @@ function r_reports_module_performers(array $user, array $body, array $params, ?s
         'completedBy'=>$allCompleted ? $to : null,
         'rankings'=>['combined'=>$topTen('combinedPercent'), 'objectives'=>$topTen('objectivePercent')]];
 }
+/* The ribbon at the top of the students page (mirrors the Node route). Learners
+   of ONE account, ranked by the marks they scored and the coverage they reached;
+   the two weigh the same and marks break a tie before coverage does. */
+function r_reports_top_performers(array $user, array $body, array $params, ?string $token, array $query): array {
+    /* the console's students page and the learner's own dashboard both show this
+       belt; a learner reads the same account, never a cross-account feed */
+    require_role($user, ['tenant_admin','supervisor','student','member']);
+    $pdo = db();
+    /* at most 50; an unreadable limit means "all 50", like the Node build */
+    $asked = $query['limit'] ?? null;
+    $limit = ($asked !== null && $asked !== '' && is_numeric($asked))
+        ? max(1, min(50, (int)$asked)) : 50;
+    if ($user['role'] === 'supervisor') {
+        $st = $pdo->prepare("SELECT * FROM users WHERE role IN ('student','member') AND suspended=0 AND supervisor_id=?");
+        $st->execute([$user['id']]);
+    } else {
+        $st = $pdo->prepare("SELECT * FROM users WHERE role IN ('student','member') AND suspended=0 AND tenant_id=?");
+        $st->execute([$user['tenant_id']]);
+    }
+    $learners = $st->fetchAll();
+
+    $marks = [];
+    if ($learners) {
+        $ph = implode(',', array_fill(0, count($learners), '?'));
+        $st = $pdo->prepare("SELECT user_id,type,score,total,`text`,keyword_score,keywords_used,
+            keywords_total,keywords_covered_json,keywords_missing_json,chapter_id,book_id,module_id
+            FROM submissions WHERE user_id IN ($ph)");
+        $st->execute(array_column($learners, 'id'));
+        foreach ($st->fetchAll() as $submission) {
+            $percent = null;
+            if ($submission['type'] === 'objectives' && (int)$submission['total'] > 0) {
+                $total = (int)$submission['total'];
+                $earned = max(0, min($total, (int)$submission['score']));
+                $percent = $earned * 100 / $total;
+            } elseif (in_array($submission['type'],
+                ['chapter_summary', 'letter_summary', 'book_summary'], true)) {
+                $assessment = submission_assessment($submission);
+                if ($assessment && ($assessment['keywordScore'] ?? null) !== null) {
+                    $percent = max(0, min(100, (int)$assessment['keywordScore']));
+                }
+            }
+            if ($percent === null) continue;
+            $studentId = (string)$submission['user_id'];
+            if (!isset($marks[$studentId])) $marks[$studentId] = ['sum' => 0, 'count' => 0];
+            $marks[$studentId]['sum'] += $percent;
+            $marks[$studentId]['count']++;
+        }
+    }
+
+    $performers = [];
+    foreach ($learners as $learner) {
+        $mark = $marks[$learner['id']] ?? ['sum' => 0, 'count' => 0];
+        $statuses = module_statuses(['id' => $learner['id'], 'tenant_id' => $learner['tenant_id'],
+            'role' => $learner['role'], 'full_name' => $learner['full_name'],
+            'class_name' => $learner['class_name'], 'student_number' => $learner['student_number']]);
+        $coverage = (int)(a_mean(array_map(fn($m) => (int)$m['progress']['percent'], $statuses)) ?? 0);
+        /* Marks and coverage weigh the same. A learner who has moved through the
+           programme but whose typed answers carry no score yet (a chapter with no
+           key words, for example) is still ranked on their coverage — their marks
+           simply show as a dash instead of hiding them from the belt. */
+        if (!$mark['count'] && $coverage <= 0) continue;
+        $scored = $mark['count'] ? (int)round($mark['sum'] / $mark['count']) : null;
+        $performers[] = [
+            'id' => $learner['id'], 'name' => $learner['full_name'],
+            'displayName' => public_login_display_name($learner['full_name']),
+            'className' => $learner['class_name'] ?: null,
+            'studentNumber' => $learner['student_number'] ?: null,
+            'photo' => public_login_photo($learner['photo'] ?? null),
+            'marks' => $scored, 'coverage' => $coverage,
+            'submissions' => $mark['count'],
+            'score' => $scored === null ? $coverage : (int)round(($scored + $coverage) / 2),
+        ];
+    }
+    usort($performers, function ($a, $b) {
+        if ($b['score'] !== $a['score']) return $b['score'] <=> $a['score'];
+        $am = $a['marks'] === null ? -1 : $a['marks'];
+        $bm = $b['marks'] === null ? -1 : $b['marks'];
+        if ($bm !== $am) return $bm <=> $am;
+        if ($b['coverage'] !== $a['coverage']) return $b['coverage'] <=> $a['coverage'];
+        return strcasecmp((string)$a['name'], (string)$b['name']);
+    });
+    $performers = array_slice($performers, 0, $limit);
+    foreach ($performers as $index => &$row) $row['rank'] = $index + 1;
+    unset($row);
+    return ['performers' => $performers, 'count' => count($performers), 'limit' => $limit,
+        'basis' => 'marks and coverage, equally weighted'];
+}
+
 function r_admin_overview(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin','supervisor']);
     if ($user['role'] === 'super') return r_super_overview($user, $body, $params, $token, $query);
@@ -1901,7 +2296,9 @@ function r_objectives_delete(array $user, array $body, array $params, ?string $t
 function r_library_create(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin']);
     $title = trim((string)($body['title'] ?? '')); need($title !== '', 'title required');
-    $type = $body['type'] ?? 'book';
+    $type = strtolower(trim((string)($body['type'] ?? 'book')));
+    if (!in_array($type, ['book','letter','video','audio','mp3'], true)) $type = 'book';
+    if ($type === 'mp3') $type = 'audio';
     $scope = $user['role'] === 'super' ? ($body['scope'] ?? 'global') : $user['tenant_id'];
     $url = $body['url'] ?? null; $fname = null; $text = $body['text'] ?? null;
     if (isset($body['file']) && is_array($body['file'])) {
@@ -1924,7 +2321,7 @@ function r_library_update(array $user, array $body, array $params, ?string $toke
     if (isset($body['title'])) { $set[] = 'title=?'; $args[] = $body['title']; }
     if (array_key_exists('text', $body)) { $set[] = '`text`=?'; $args[] = $body['text']; }
     if (array_key_exists('url', $body)) { $set[] = 'url=?'; $args[] = $body['url']; }
-    if (isset($body['type'])) { $set[] = 'type=?'; $args[] = $body['type']; }
+    if (isset($body['type'])) { $t = strtolower(trim((string)$body['type'])); if (in_array($t, ['book','letter','video','audio','mp3'], true)) { if ($t === 'mp3') $t = 'audio'; $set[] = 'type=?'; $args[] = $t; } }
     if (isset($body['file']) && is_array($body['file'])) {
         $u = save_upload($body['file']);
         if ($u) { $set[] = 'url=?'; $args[] = $u; $set[] = 'file_name=?'; $args[] = $body['file']['name'] ?? null; }

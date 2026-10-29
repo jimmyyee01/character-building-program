@@ -19,8 +19,10 @@ const MIME = {
   '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
   '.svg': 'image/svg+xml', '.webp': 'image/webp', '.ico': 'image/x-icon',
-  '.pdf': 'application/pdf', '.mp4': 'video/mp4', '.webm': 'video/webm',
-  '.ogg': 'audio/ogg', '.mp3': 'audio/mpeg', '.txt': 'text/plain; charset=utf-8'
+  '.pdf': 'application/pdf', '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime',
+  '.webm': 'video/webm', '.ogv': 'video/ogg',
+  '.ogg': 'audio/ogg', '.oga': 'audio/ogg', '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac', '.wav': 'audio/wav', '.flac': 'audio/flac', '.txt': 'text/plain; charset=utf-8'
 };
 
 function sendJSON(res, code, obj) {
@@ -35,7 +37,7 @@ function safeJoin(base, target) {
   return p;
 }
 
-function serveFile(res, file) {
+function serveFile(req, res, file) {
   // The Node backend cannot execute PHP, so never hand out PHP sources (the PHP
   // build serves those paths itself when it is the backend in use).
   if (path.extname(file).toLowerCase() === '.php') {
@@ -47,9 +49,28 @@ function serveFile(res, file) {
   }
   fs.stat(file, (err, st) => {
     if (err || !st.isFile()) return sendJSON(res, 404, { ok: false, error: 'Not found' });
+    const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
+    const range = req && req.headers ? /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '') : null;
+    if (range && st.size > 0) {
+      let start = range[1] ? parseInt(range[1], 10) : 0;
+      let end = range[2] ? parseInt(range[2], 10) : st.size - 1;
+      if (!isFinite(start) || !isFinite(end) || start > end || start >= st.size) {
+        res.writeHead(416, { 'Content-Range': 'bytes */' + st.size });
+        return res.end();
+      }
+      end = Math.min(end, st.size - 1);
+      res.writeHead(206, {
+        'Content-Type': type,
+        'Content-Length': end - start + 1,
+        'Content-Range': 'bytes ' + start + '-' + end + '/' + st.size,
+        'Accept-Ranges': 'bytes'
+      });
+      return fs.createReadStream(file, { start: start, end: end }).pipe(res);
+    }
     res.writeHead(200, {
-      'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
-      'Content-Length': st.size
+      'Content-Type': type,
+      'Content-Length': st.size,
+      'Accept-Ranges': 'bytes'
     });
     fs.createReadStream(file).pipe(res);
   });
@@ -95,15 +116,15 @@ const server = http.createServer(async (req, res) => {
     if (p.startsWith('/uploads/')) {
       const f = safeJoin(UPLOADS, p.slice('/uploads/'.length));
       if (!f) return sendJSON(res, 403, { ok: false, error: 'Forbidden' });
-      return serveFile(res, f);
+      return serveFile(req, res, f);
     }
-    if (PAGES[p]) return serveFile(res, path.join(PUBLIC, PAGES[p]));
-    if (p.startsWith('/t/')) return serveFile(res, path.join(PUBLIC, 'login.html'));
-    if (p === '/favicon.ico') return serveFile(res, path.join(PUBLIC, 'favicon.ico'));
+    if (PAGES[p]) return serveFile(req, res, path.join(PUBLIC, PAGES[p]));
+    if (p.startsWith('/t/')) return serveFile(req, res, path.join(PUBLIC, 'login.html'));
+    if (p === '/favicon.ico') return serveFile(req, res, path.join(PUBLIC, 'favicon.ico'));
 
     const f = safeJoin(PUBLIC, p);
     if (!f) return sendJSON(res, 403, { ok: false, error: 'Forbidden' });
-    return serveFile(res, f);
+    return serveFile(req, res, f);
   } catch (e) {
     console.error('[server]', e);
     if (!res.headersSent) {
@@ -115,6 +136,55 @@ const server = http.createServer(async (req, res) => {
 
 process.on('exit', () => { try { dbm.flush(); } catch (e) {} });
 process.on('SIGINT', () => { try { dbm.flush(); } catch (e) {} process.exit(0); });
+
+// Cron: notify students of due live lessons (once) at scheduled time.
+setInterval(() => {
+  try {
+    const now = new Date();
+    const lessons = dbm.collection('liveLessons');
+    let changed = false;
+    lessons.forEach(l => {
+      if (l.notified) return;
+      if (!l.scheduledAt) return;
+      if (new Date(l.scheduledAt) > now) return;
+      (l.recipientIds || []).forEach(rid => {
+        dbm.collection('notifications').push({
+          id: dbm.uid('ntf'),
+          userId: rid,
+          type: 'live_lesson',
+          title: 'Live lesson starting: ' + (l.title || ''),
+          body: 'Join now: ' + l.joinUrl,
+          conversationId: null,
+          readAt: null,
+          createdAt: dbm.nowISO()
+        });
+        try {
+          const participants = [l.creatorId, rid].sort();
+          let conv = dbm.collection('conversations').find(c =>
+            c.tenantId === l.tenantId && Array.isArray(c.participantIds) &&
+            c.participantIds.length === 2 && c.participantIds.slice().sort().join('|') === participants.join('|'));
+          if (!conv) {
+            conv = { id: dbm.uid('cnv'), tenantId: l.tenantId, participantIds: participants, createdAt: dbm.nowISO(), updatedAt: dbm.nowISO() };
+            dbm.collection('conversations').push(conv);
+          }
+          dbm.collection('messages').push({
+            id: dbm.uid('msg'),
+            conversationId: conv.id,
+            senderId: l.creatorId,
+            body: 'Live lesson starting: ' + (l.title || '') + ' — Join now: ' + l.joinUrl,
+            readAt: null,
+            createdAt: dbm.nowISO()
+          });
+          conv.updatedAt = dbm.nowISO();
+        } catch (e) {}
+      });
+      l.notified = true;
+      changed = true;
+    });
+    if (changed) dbm.save(true);
+  } catch (e) { console.error('[live-lessons cron]', e.message); }
+}, 60000);
+
 
 server.listen(PORT, () => {
   console.log('-------------------------------------------------------------');

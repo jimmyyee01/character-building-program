@@ -164,8 +164,15 @@ function probeHtml() {
     check('the sheet is fitted to the page\'s own shape (the probe page is square)',
       r.ratio !== '' && Math.abs(Number(r.ratio) - 1) < 0.02 && r.fitted === true,
       'ratio=' + r.ratio + ' fitted=' + r.fitted + ' ' + (r.fitError || ''));
+    /* The sheet keeps the page's own shape when the whole page fits. On a
+       short viewport the page is fitted by width and the sheet is shorter than
+       the page so the rest can be read by scrolling — that is the intended
+       "whole page, never cropped" state too. */
+    const expectedPageH = r.sheet && Number(r.ratio) ? r.sheet.w / Number(r.ratio) : 0;
+    const viewportLimited = !!expectedPageH && r.sheet.h < expectedPageH - 2;
     check('the fitted sheet takes that shape instead of a fixed A4 sheet',
-      !!r.sheet && Math.abs((r.sheet.w / r.sheet.h) - 1) < 0.06, JSON.stringify(r.sheet));
+      !!r.sheet && (Math.abs((r.sheet.w / r.sheet.h) - 1) < 0.06 || viewportLimited),
+      JSON.stringify(r.sheet) + (viewportLimited ? ' (tall page scrolls in the sheet)' : ''));
     check('the sheet fits inside its space (whole page visible, nothing cropped)',
       !!r.sheet && !!r.stage && r.sheet.w > 100 && r.sheet.h > 100 &&
       r.sheet.w <= r.stage.w + 1 && r.sheet.h <= r.stage.h + 1,

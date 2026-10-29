@@ -18,11 +18,12 @@ function need(cond, message, status) { if (!cond) throw new HttpError(message, s
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-const BUILD = '2026-10-19-self-assessment';
+const BUILD = '2026-10-29-reading-ribbon';
 const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.students', 'reports.student-roster',
-  'reports.student-detail', 'reports.module-performers', 'messaging', 'notifications',
-  'users.supervisor-auto-assignment', 'keywords',
-  'reader.book', 'library.lock', 'certificates', 'chapter.pages', 'exports', 'assessment'];
+  'reports.student-detail', 'reports.student-assessment', 'reports.module-performers', 'reports.top-performers',
+  'public.top-performers', 'reading.activity', 'reading.video-alerts',
+  'messaging', 'notifications', 'users.supervisor-auto-assignment', 'keywords',
+  'reader.book', 'library.lock', 'certificates', 'chapter.pages', 'exports', 'assessment', 'assessment.admin', 'read-aloud'];
 
 function send(res, code, obj) {
   const body = JSON.stringify(obj);
@@ -187,6 +188,100 @@ route('GET', '/api/public/tenant/([a-z0-9-]+)', ({ params }) => {
   };
 });
 
+/* Small, public ranking for an account's login page. It is rebuilt on every
+   request, so a newly scored activity can change the order immediately. Only
+   profile photos that are already small enough for a login page are exposed;
+   everything else falls back to the learner's initials in the browser. */
+function loginPhoto(value) {
+  const s = typeof value === 'string' ? value.trim() : '';
+  if (!s || s.length > 220000) return null;
+  return /^(https?:\/\/|\/|data:image\/(?:png|jpe?g|webp|gif);base64,)/i.test(s) ? s : null;
+}
+function loginDisplayName(fullName) {
+  const parts = String(fullName || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return 'Learner';
+  if (parts.length === 1) return parts[0];
+  return parts[0] + ' ' + parts[parts.length - 1].charAt(0).toUpperCase() + '.';
+}
+function loginTopPerformers(tenantId, limit) {
+  limit = Math.max(1, Math.min(10, Number(limit) || 10));
+  const moduleIds = new Set(ordered(dbm.db.modules).map(module => module.id));
+  let learners = dbm.db.users.filter(u => u.tenantId === tenantId &&
+    ['student', 'member'].indexOf(u.role) !== -1 && !u.suspended);
+
+  /* "Completed all modules" means a module certificate for every current
+     module. If a new module is added later, the learner can appear again. */
+  if (moduleIds.size) {
+    const completed = new Map();
+    dbm.db.certificates.forEach(certificate => {
+      if (certificate.type !== 'module' || !moduleIds.has(certificate.moduleId)) return;
+      if (!completed.has(certificate.userId)) completed.set(certificate.userId, new Set());
+      completed.get(certificate.userId).add(certificate.moduleId);
+    });
+    learners = learners.filter(learner => {
+      const done = completed.get(learner.id);
+      return !done || done.size < moduleIds.size;
+    });
+  }
+
+  const eligible = new Set(learners.map(learner => learner.id));
+  const marks = new Map();
+  dbm.db.submissions.forEach(submission => {
+    if (!eligible.has(submission.userId) || submission.flagged ||
+      !moduleIds.has(submission.moduleId)) return;
+    let percent = null;
+    if (submission.type === 'objectives' && Number(submission.total) > 0) {
+      const total = Number(submission.total);
+      const earned = Math.max(0, Math.min(total, Number(submission.score) || 0));
+      percent = earned * 100 / total;
+    } else if (['chapter_summary', 'letter_summary', 'book_summary'].indexOf(submission.type) !== -1) {
+      const assessment = assessOf(submission);
+      if (assessment && assessment.keywordScore != null &&
+        Number.isFinite(Number(assessment.keywordScore))) {
+        percent = Math.max(0, Math.min(100, Number(assessment.keywordScore)));
+      }
+    }
+    if (percent == null) return;
+    const mark = marks.get(submission.userId) || { sum: 0, count: 0 };
+    mark.sum += percent;
+    mark.count++;
+    marks.set(submission.userId, mark);
+  });
+
+  return learners.map(learner => {
+    const mark = marks.get(learner.id) || { sum: 0, count: 0 };
+    return {
+      name: learner.fullName,
+      displayName: loginDisplayName(learner.fullName),
+      className: learner.className || null,
+      photo: loginPhoto(learner.photo),
+      score: mark.count ? Math.round(mark.sum / mark.count) : null,
+      activityCount: mark.count
+    };
+  }).filter(learner => learner.activityCount > 0)
+    .sort((a, b) => b.score - a.score || b.activityCount - a.activityCount ||
+      String(a.name).localeCompare(String(b.name)))
+    .slice(0, limit)
+    .map((learner, index) => Object.assign(learner, { rank: index + 1 }));
+}
+
+route('GET', '/api/public/top-performers', ({ req, res }) => {
+  /* The ranking follows the latest scored work, so never let a browser or a
+     proxy serve yesterday's order. */
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  const slug = String(qp(req, 'slug') || '').trim();
+  need(slug, 'Account required', 400);
+  const tenant = dbm.db.tenants.find(t => t.slug === slug);
+  need(tenant, 'Portal not found', 404);
+  const performers = loginTopPerformers(tenant.id, qp(req, 'limit'));
+  return {
+    ok: true,
+    tenant: { slug: tenant.slug, name: tenant.name },
+    basis: 'Average of scored objective answers and written-answer key-word coverage.',
+    performers
+  };
+});
+
 /* Self-registration is disabled: only admins (and supervisors for members)
    create accounts through POST /api/users (or /api/users/bulk). */
 route('POST', '/api/auth/register', () => {
@@ -296,7 +391,7 @@ function assessOf(s) {
 
 function subMeta(s) {
   const kw = assessOf(s);
-  return s ? { id: s.id, createdAt: s.createdAt, score: s.score, flagged: !!s.flagged,
+  return s ? { id: s.id, createdAt: s.createdAt, submittedAt: s.submittedAt || s.createdAt, score: s.score, flagged: !!s.flagged,
     similarity: s.similarity || 0, color: s.color || null, text: s.text || null,
     bookId: s.bookId || null, chapterId: s.chapterId || null,
     moduleId: s.moduleId || null, index: s.index || null,
@@ -595,29 +690,107 @@ route('POST', '/api/flow/optional-video-seen', ({ user }) => {
 });
 
 /* ============================================ self-assessment (pre/post) === */
-/* One shared definition (assessment.json at the repo root) serves BOTH
-   backends, so the categories, statements and 1-5 scale can never drift apart.
+/* The definition is seeded from assessment.json on first use, then owned by
+   the database so the super admin can add, edit and delete categories and
+   objective questions after deployment. The same shape serves BOTH backends.
    The learner rates it once at the beginning (pre-score, right before the
    Letter from Christ) and once at the end (post-score, after the last
    module); each response carries its own total score. */
-let assessmentDefCache = null;
-function assessmentDef() {
-  if (!assessmentDefCache) {
-    const file = path.join(__dirname, '..', 'assessment.json');
-    assessmentDefCache = JSON.parse(fs.readFileSync(file, 'utf8'));
+function defaultScale() {
+  return [
+    { value: 1, label: 'Strongly Disagree' }, { value: 2, label: 'Disagree' },
+    { value: 3, label: 'Neutral' }, { value: 4, label: 'Agree' },
+    { value: 5, label: 'Strongly Agree' }
+  ];
+}
+function defaultAssessmentDef() {
+  const file = path.join(__dirname, '..', 'assessment.json');
+  try {
+    return normalizeAssessmentDef(JSON.parse(fs.readFileSync(file, 'utf8')));
+  } catch (e) {
+    return { scale: defaultScale(), note: '', categories: [] };
   }
-  return assessmentDefCache;
+}
+function normalizeAssessmentDef(def) {
+  def = def && typeof def === 'object' ? def : {};
+  const scale = Array.isArray(def.scale) && def.scale.length ? def.scale : defaultScale();
+  const categories = (Array.isArray(def.categories) ? def.categories : [])
+    .filter(c => c && c.id && c.title)
+    .map((c, ci) => ({
+      id: String(c.id),
+      title: String(c.title).trim(),
+      order: Number.isFinite(Number(c.order)) ? Number(c.order) : ci + 1,
+      statements: (Array.isArray(c.statements) ? c.statements : [])
+        .filter(s => s && s.id && s.text)
+        .map((s, si) => ({
+          id: String(s.id),
+          text: String(s.text).trim(),
+          order: Number.isFinite(Number(s.order)) ? Number(s.order) : si + 1
+        }))
+    }));
+  return { scale: scale, note: String(def.note || ''), categories: categories };
+}
+function assessmentDef() {
+  if (!dbm.db.assessment) {
+    dbm.db.assessment = defaultAssessmentDef();
+    dbm.save();
+  }
+  dbm.db.assessment = normalizeAssessmentDef(dbm.db.assessment);
+  return dbm.db.assessment;
+}
+function saveAssessmentDef(def) {
+  dbm.db.assessment = normalizeAssessmentDef(def);
+  dbm.save();
+  return dbm.db.assessment;
+}
+/* Empty categories are still being set up; participants and reports only see
+   categories that already carry at least one objective question. */
+function assessmentActiveDef(def) {
+  const active = normalizeAssessmentDef(def);
+  active.categories = active.categories.filter(c => c.statements.length > 0);
+  return active;
 }
 function assessmentStatementIds(def) {
   const ids = [];
   (def.categories || []).forEach(c => (c.statements || []).forEach(s => ids.push(s.id)));
   return ids;
 }
+function assessmentCategoryId(def, title) {
+  const base = slugify(title) || 'category';
+  const used = new Set((def.categories || []).map(c => c.id));
+  let id = base, n = 2;
+  while (used.has(id)) id = base + '-' + n++;
+  return id;
+}
+function assessmentStatementId(category) {
+  const used = new Set((category.statements || []).map(s => s.id));
+  let id;
+  /* never reuse a deleted question's id: historical pre/post answers are keyed
+     by it, and a new question must not inherit somebody else's ratings */
+  do {
+    id = category.id + '-' + Date.now().toString(36) + crypto.randomBytes(2).toString('hex');
+  } while (used.has(id));
+  return id;
+}
+function assessmentCategoryById(def, id) {
+  return (def.categories || []).find(c => c.id === id) || null;
+}
+function assessmentStatementById(def, id) {
+  for (const category of (def.categories || [])) {
+    const statement = (category.statements || []).find(s => s.id === id);
+    if (statement) return { category, statement };
+  }
+  return null;
+}
+function assessmentStatementCount(def) {
+  return (def.categories || []).reduce((total, c) => total + (c.statements || []).length, 0);
+}
 /* Every statement must be rated with an integer 1-5 — anything else is
    rejected before it can be stored, so a total always means something. */
 function assessmentAnswers(body, def) {
   const raw = (body && typeof body.answers === 'object' && body.answers) || {};
   const ids = assessmentStatementIds(def);
+  need(ids.length > 0, 'The self-assessment has no objective questions yet');
   const answers = {};
   ids.forEach(id => {
     const v = Number(raw[id]);
@@ -638,9 +811,36 @@ function assessmentTotals(answers, def) {
   const statements = assessmentStatementIds(def).length;
   return { total, max: statements * 5, byCategory };
 }
+/* Compact pre/post summary used by both progress reports and the popup. */
+function assessmentForReport(user, def) {
+  def = assessmentActiveDef(def);
+  function one(record) {
+    if (!record || !record.answers) return null;
+    const t = assessmentTotals(record.answers, def);
+    return {
+      at: record.at || null, total: t.total, max: t.max,
+      percent: t.max ? Math.round(t.total / t.max * 100) : 0,
+      categories: def.categories.map(c => {
+        const v = t.byCategory[c.id] || { total: 0, max: 0 };
+        return { id: c.id, title: c.title, total: v.total, max: v.max,
+          percent: v.max ? Math.round(v.total / v.max * 100) : 0 };
+      })
+    };
+  }
+  const pre = one(user.assessmentPre);
+  const post = one(user.assessmentPost);
+  return { pre: pre, post: post, growth: pre && post ? post.total - pre.total : null };
+}
+function assessmentReportScope(user, studentId) {
+  const student = dbm.byId('users', studentId);
+  need(student && ['student', 'teacher', 'member'].includes(student.role), 'Student not found', 404);
+  if (user.role === 'tenant_admin') need(student.tenantId === user.tenantId, 'Not permitted', 403);
+  else if (user.role === 'supervisor') need(student.supervisorId === user.id, 'Not permitted', 403);
+  return student;
+}
 route('GET', '/api/assessment', ({ user }) => {
   requireRole(user, PARTICIPANTS);
-  const def = assessmentDef();
+  const def = assessmentActiveDef(assessmentDef());
   const allDone = flowFor(user).allDone;
   return {
     ok: true, scale: def.scale, categories: def.categories, note: def.note || '',
@@ -655,7 +855,7 @@ route('GET', '/api/assessment', ({ user }) => {
 route('POST', '/api/assessment/pre', ({ user, body }) => {
   requireRole(user, PARTICIPANTS);
   need(!user.assessmentPre, 'Your pre-score has already been submitted');
-  const def = assessmentDef();
+  const def = assessmentActiveDef(assessmentDef());
   const answers = assessmentAnswers(body, def);
   const t = assessmentTotals(answers, def);
   user.assessmentPre = { answers, total: t.total, max: t.max, at: dbm.nowISO() };
@@ -666,13 +866,101 @@ route('POST', '/api/assessment/post', ({ user, body }) => {
   requireRole(user, PARTICIPANTS);
   need(flowFor(user).allDone, 'The post-score opens after the last module is complete');
   need(!user.assessmentPost, 'Your post-score has already been submitted');
-  const def = assessmentDef();
+  const def = assessmentActiveDef(assessmentDef());
   const answers = assessmentAnswers(body, def);
   const t = assessmentTotals(answers, def);
   user.assessmentPost = { answers, total: t.total, max: t.max, at: dbm.nowISO() };
   dbm.save();
   const growth = user.assessmentPre ? t.total - user.assessmentPre.total : null;
   return { ok: true, post: user.assessmentPost, total: t.total, max: t.max, growth };
+});
+
+/* Super-admin management: the saved definition is global and shared by every
+   account, exactly like the learner form it drives. */
+function assessmentPublicDef(def) {
+  def = normalizeAssessmentDef(def);
+  return {
+    scale: def.scale, note: def.note,
+    categories: def.categories.map(c => ({
+      id: c.id, title: c.title, order: c.order, max: c.statements.length * 5,
+      statements: c.statements.map(s => ({ id: s.id, text: s.text, order: s.order }))
+    })),
+    statementCount: assessmentStatementCount(def),
+    max: assessmentStatementCount(def) * 5
+  };
+}
+route('GET', '/api/super/assessment', ({ user }) => {
+  requireRole(user, SUPER);
+  return { ok: true, assessment: assessmentPublicDef(assessmentDef()) };
+});
+route('POST', '/api/super/assessment/categories', ({ user, body }) => {
+  requireRole(user, SUPER);
+  body = body || {};
+  const title = String(body.title || '').trim();
+  need(title.length >= 2, 'Enter a category name (at least 2 characters)');
+  const def = assessmentDef();
+  const category = { id: assessmentCategoryId(def, title), title, order: def.categories.length + 1, statements: [] };
+  def.categories.push(category);
+  saveAssessmentDef(def);
+  return { ok: true, assessment: assessmentPublicDef(def), category: category };
+});
+route('PUT', '/api/super/assessment/categories/([A-Za-z0-9_-]+)', ({ user, params, body }) => {
+  requireRole(user, SUPER);
+  body = body || {};
+  const def = assessmentDef();
+  const category = assessmentCategoryById(def, params[0]);
+  need(category, 'Category not found', 404);
+  const title = String(body.title || '').trim();
+  need(title.length >= 2, 'Enter a category name (at least 2 characters)');
+  category.title = title;
+  saveAssessmentDef(def);
+  return { ok: true, assessment: assessmentPublicDef(def), category: category };
+});
+route('DELETE', '/api/super/assessment/categories/([A-Za-z0-9_-]+)', ({ user, params }) => {
+  requireRole(user, SUPER);
+  const def = assessmentDef();
+  const category = assessmentCategoryById(def, params[0]);
+  need(category, 'Category not found', 404);
+  const remaining = assessmentStatementCount(def) - category.statements.length;
+  need(remaining > 0, 'Keep at least one objective question in the self-assessment');
+  def.categories = def.categories.filter(c => c.id !== category.id);
+  saveAssessmentDef(def);
+  return { ok: true, assessment: assessmentPublicDef(def) };
+});
+route('POST', '/api/super/assessment/categories/([A-Za-z0-9_-]+)/statements', ({ user, params, body }) => {
+  requireRole(user, SUPER);
+  body = body || {};
+  const def = assessmentDef();
+  const category = assessmentCategoryById(def, params[0]);
+  need(category, 'Category not found', 404);
+  const text = String(body.text || '').trim();
+  need(text.length >= 5, 'Enter the objective question (at least 5 characters)');
+  const statement = { id: assessmentStatementId(category), text: text, order: category.statements.length + 1 };
+  category.statements.push(statement);
+  saveAssessmentDef(def);
+  return { ok: true, assessment: assessmentPublicDef(def), statement: statement };
+});
+route('PUT', '/api/super/assessment/statements/([A-Za-z0-9_-]+)', ({ user, params, body }) => {
+  requireRole(user, SUPER);
+  body = body || {};
+  const def = assessmentDef();
+  const found = assessmentStatementById(def, params[0]);
+  need(found, 'Objective question not found', 404);
+  const text = String(body.text || '').trim();
+  need(text.length >= 5, 'Enter the objective question (at least 5 characters)');
+  found.statement.text = text;
+  saveAssessmentDef(def);
+  return { ok: true, assessment: assessmentPublicDef(def), statement: found.statement };
+});
+route('DELETE', '/api/super/assessment/statements/([A-Za-z0-9_-]+)', ({ user, params }) => {
+  requireRole(user, SUPER);
+  const def = assessmentDef();
+  const found = assessmentStatementById(def, params[0]);
+  need(found, 'Objective question not found', 404);
+  need(assessmentStatementCount(def) > 1, 'Keep at least one objective question in the self-assessment');
+  found.category.statements = found.category.statements.filter(s => s.id !== found.statement.id);
+  saveAssessmentDef(def);
+  return { ok: true, assessment: assessmentPublicDef(def) };
 });
 
 route('GET', '/api/modules', ({ user }) => {
@@ -735,7 +1023,7 @@ route('GET', '/api/chapter/([a-z0-9_-]+)/objectives', ({ user, token, params }) 
 });
 
 /* ------------------------------------------------------- submissions ----- */
-route('POST', '/api/submissions', ({ user, body }) => {
+route('POST', '/api/submissions', ({ user, token, body }) => {
   requireRole(user, PARTICIPANTS);
   body = body || {};
   const type = String(body.type || '');
@@ -745,6 +1033,7 @@ route('POST', '/api/submissions', ({ user, body }) => {
   let sub = null;
   let warning = null;
   let assessment = null;
+  let videoAlert = null;
 
   /* typed answers are measured against the chapter's key words */
   function keywordsFor(base) {
@@ -767,7 +1056,7 @@ route('POST', '/api/submissions', ({ user, body }) => {
     let copy = { similarity: 0, flagged: false };
     if (text) copy = assessCopy(user, base.type, matchForCopy || {}, text);
     sub = Object.assign({
-      id: dbm.uid('sub'), userId: user.id, tenantId, createdAt: now,
+      id: dbm.uid('sub'), userId: user.id, tenantId, createdAt: now, submittedAt: now,
       flagged: copy.flagged, similarity: copy.similarity, text: text || null
     }, base);
     const kw = keywordsFor(base);
@@ -782,6 +1071,7 @@ route('POST', '/api/submissions', ({ user, body }) => {
     dbm.collection('submissions').push(sub);
     dbm.save();
     createSubmissionNotification(user, sub);
+    videoAlert = maybeSendVideoAlert(user, sub);
     if (copy.flagged) warning = 'Copy assessment: your work matches another submission by ' + copy.similarity + '%.';
   }
   function requireText() {
@@ -834,9 +1124,13 @@ route('POST', '/api/submissions', ({ user, body }) => {
     objs.forEach(o => {
       const a = answers.find(x => x && x.objectiveId === o.id);
       need(a, 'Answer every objective before submitting');
-      const correct = Number(a.choice) === o.answerIndex;
+      const choice = Number(a.choice);
+      const shuffledOpts = shuffleWithSeed(o.options, o.id + (token || ''));
+      const chosenText = (choice >= 0 && choice < shuffledOpts.length) ? shuffledOpts[choice] : null;
+      const originalChoice = chosenText != null ? o.options.indexOf(chosenText) : choice;
+      const correct = originalChoice === o.answerIndex;
       if (correct) score++;
-      detail.push({ objectiveId: o.id, choice: Number(a.choice), correct });
+      detail.push({ objectiveId: o.id, choice: originalChoice, correct });
     });
     store({ type, chapterId: chapter.id, bookId: book.id, moduleId: mod.id,
       answers: detail, score, total: objs.length }, {});
@@ -891,7 +1185,7 @@ route('POST', '/api/submissions', ({ user, body }) => {
     need(false, 'Unknown submission type');
   }
 
-  return { ok: true, submission: subMeta(sub), assessment: assessment, warning };
+  return { ok: true, submission: subMeta(sub), assessment: assessment, warning: warning, videoAlert: videoAlert };
 });
 
 /* ----------------------------------------------------- certificates ------ */
@@ -998,6 +1292,144 @@ route('POST', '/api/videos/([a-z0-9_-]+)/watched', ({ user, params }) => {
   return { ok: true };
 });
 
+/* ============================================================ reading ===== */
+/* One row per open, so an account admin can read three things off the
+   analytics page: how often a book is opened, which books have been opened at
+   least once by a learner, and how often one learner opened one book. A book is
+   either a book of a module (the reader inside the programme) or a book kept in
+   the library; both are counted, and the title is stored with the open so a
+   removed book still shows up in the history. */
+function readingKey(row) {
+  return row.bookId ? 'book:' + row.bookId : 'library:' + (row.libraryId || '');
+}
+
+/* What did the browser open? (module reader -> bookId, library -> libraryId) */
+function readingTarget(body, user) {
+  body = body || {};
+  const bookId = String(body.bookId || '').trim();
+  const libraryId = String(body.libraryId || '').trim();
+  need(bookId || libraryId, 'Send the book that was opened');
+  if (bookId) {
+    const book = dbm.byId('books', bookId);
+    need(book, 'Book not found', 404);
+    need(book.scope === 'global' || book.scope === user.tenantId, 'Not available', 403);
+    const lib = book.libraryId ? dbm.byId('library', book.libraryId) : null;
+    return { kind: 'module', bookId: book.id, libraryId: lib ? lib.id : null,
+      title: book.title || (lib ? lib.title : 'Book') };
+  }
+  const item = dbm.byId('library', libraryId);
+  need(item, 'Library item not found', 404);
+  need(item.type === 'book', 'Only books are counted');
+  need(item.scope === 'global' || item.scope === user.tenantId, 'Not available', 403);
+  return { kind: 'library', bookId: null, libraryId: item.id, title: item.title };
+}
+
+/* The reader tells the server every time a learner opens a book. */
+route('POST', '/api/reading/open', ({ user, body }) => {
+  requireRole(user, PARTICIPANTS);
+  const target = readingTarget(body, user);
+  const key = readingKey(target);
+  dbm.collection('book_opens').push({
+    id: dbm.uid('opn'), tenantId: user.tenantId, userId: user.id,
+    kind: target.kind, bookId: target.bookId, libraryId: target.libraryId,
+    title: target.title, openedAt: dbm.nowISO()
+  });
+  dbm.save();
+  return { ok: true, key, timesOpened: dbm.collection('book_opens').filter(row =>
+    row.userId === user.id && readingKey(row) === key).length };
+});
+
+/* The aggregates behind the "Reading activity" card. It mirrors
+   reading_section() in the PHP build, so both backends answer the same numbers:
+   total opens, books opened at least once, who reads what, and the book
+   learners come back to most ("liked most" = most opened). */
+function readingSection(scope) {
+  scope = scope || {};
+  const tenantIds = scope.tenantIds || {};
+  const onlyUserIds = scope.userIds || null;
+  const fModule = scope.moduleId || null;
+  const inOnly = id => !onlyUserIds || onlyUserIds.indexOf(id) !== -1;
+  const people = new Map((scope.participants || []).map(person => [person.id, person]));
+
+  const opens = dbm.collection('book_opens').filter(row => {
+    if (!tenantIds[row.tenantId] || !inOnly(row.userId) || !people.has(row.userId)) return false;
+    if (fModule) {
+      /* a book kept in the library belongs to no module, so it cannot answer a
+         module filter: only that module's own books are counted */
+      if (!row.bookId) return false;
+      const book = dbm.byId('books', row.bookId);
+      if (!book || book.moduleId !== fModule) return false;
+    }
+    return true;
+  });
+
+  const books = new Map();
+  const readers = new Map();
+  opens.forEach(row => {
+    const key = readingKey(row);
+    let book = books.get(key);
+    if (!book) {
+      book = { key, title: row.title || 'Book', kind: row.kind || 'module',
+        bookId: row.bookId || null, libraryId: row.libraryId || null,
+        opens: 0, readers: new Set(), firstOpenedAt: row.openedAt, lastOpenedAt: row.openedAt };
+      books.set(key, book);
+    }
+    book.opens++;
+    book.readers.add(row.userId);
+    if (String(row.openedAt) < String(book.firstOpenedAt)) book.firstOpenedAt = row.openedAt;
+    if (String(row.openedAt) > String(book.lastOpenedAt)) book.lastOpenedAt = row.openedAt;
+
+    let reader = readers.get(row.userId);
+    if (!reader) {
+      const person = people.get(row.userId) || {};
+      reader = { userId: row.userId, name: person.fullName || 'Learner',
+        className: person.className || null, studentNumber: person.studentNumber || null,
+        photo: loginPhoto(person.photo), opens: 0, books: new Map(), lastOpenedAt: row.openedAt };
+      readers.set(row.userId, reader);
+    }
+    reader.opens++;
+    if (String(row.openedAt) > String(reader.lastOpenedAt)) reader.lastOpenedAt = row.openedAt;
+    const mine = reader.books.get(key);
+    if (!mine) {
+      reader.books.set(key, { key, title: book.title, opens: 1, lastOpenedAt: row.openedAt });
+    } else {
+      mine.opens++;
+      if (String(row.openedAt) > String(mine.lastOpenedAt)) mine.lastOpenedAt = row.openedAt;
+    }
+  });
+
+  const bookRows = Array.from(books.values()).map(book => ({
+    key: book.key, title: book.title, kind: book.kind,
+    bookId: book.bookId, libraryId: book.libraryId,
+    opens: book.opens, readers: book.readers.size,
+    opensPerReader: book.readers.size ? round2(book.opens / book.readers.size) : 0,
+    firstOpenedAt: book.firstOpenedAt, lastOpenedAt: book.lastOpenedAt
+  })).sort((a, b) => b.opens - a.opens || b.readers - a.readers ||
+    String(a.title).localeCompare(String(b.title)));
+
+  const readerRows = Array.from(readers.values()).map(reader => ({
+    userId: reader.userId, name: reader.name, className: reader.className,
+    studentNumber: reader.studentNumber, photo: reader.photo,
+    opens: reader.opens, booksOpened: reader.books.size,
+    books: Array.from(reader.books.values()).sort((a, b) => b.opens - a.opens ||
+      String(a.title).localeCompare(String(b.title))),
+    lastOpenedAt: reader.lastOpenedAt
+  })).sort((a, b) => b.opens - a.opens || String(a.name).localeCompare(String(b.name)));
+
+  return {
+    totals: {
+      opens: opens.length, booksOpened: bookRows.length, readers: readerRows.length,
+      moduleBooks: bookRows.filter(book => book.kind === 'module').length,
+      libraryBooks: bookRows.filter(book => book.kind === 'library').length,
+      averagePerReader: readerRows.length ? round2(opens.length / readerRows.length) : 0
+    },
+    mostLiked: bookRows.length ? bookRows[0] : null,
+    books: bookRows,
+    readers: readerRows.slice(0, 300),
+    readersTotal: readerRows.length
+  };
+}
+
 /* ----------------------------------------------------------- thoughts ---- */
 route('GET', '/api/thoughts', ({ user }) => {
   requireRole(user, PARTICIPANTS);
@@ -1022,7 +1454,7 @@ function describeSub(s) {
   const bk = s.bookId ? dbm.byId('books', s.bookId) : null;
   const md = s.moduleId ? dbm.byId('modules', s.moduleId) : null;
   const kw = assessOf(s);
-  return { id: s.id, type: s.type, text: s.text, createdAt: s.createdAt,
+  return { id: s.id, type: s.type, text: s.text, createdAt: s.createdAt, submittedAt: s.submittedAt || s.createdAt,
     color: s.color || null, label: s.label || null, score: s.score, total: s.total,
     flagged: !!s.flagged, similarity: s.similarity || 0,
     keywordScore: kw ? kw.keywordScore : null,
@@ -1054,7 +1486,7 @@ route('GET', '/api/final', ({ user }) => {
   const bookQuestions = subs.filter(s => s.type === 'objectives').map(s => {
     const ch = s.chapterId ? dbm.byId('chapters', s.chapterId) : null;
     const bk = s.bookId ? dbm.byId('books', s.bookId) : null;
-    return { createdAt: s.createdAt, score: s.score, total: s.total,
+    return { createdAt: s.createdAt, submittedAt: s.submittedAt || s.createdAt, score: s.score, total: s.total,
       chapter: ch ? ch.title : null, book: bk ? bk.title : null,
       answers: (s.answers || []).map(a => {
         const o = dbm.byId('objectives', a.objectiveId);
@@ -1102,12 +1534,13 @@ route('GET', '/api/library', ({ user }) => {
   const canConfig = user.role === 'super' || user.role === 'tenant_admin';
   const allDone = PARTICIPANTS.indexOf(user.role) !== -1 ? allModulesComplete(user) : true;
   return { ok: true, library: items.map(l => {
-    const base = Object.assign({}, l, canConfig ? { canEdit: canEdit(user, l) } : {});
-    /* learners may not open the books before they finish every module */
-    if (!canConfig && l.type === 'book' && l.url && !allDone) {
+    const type = l.type === 'mp3' ? 'audio' : l.type;
+    const base = Object.assign({}, l, { type }, canConfig ? { canEdit: canEdit(user, l) } : {});
+    /* learners may not open the books or letters before they finish every module */
+    if (!canConfig && (type === 'book' || type === 'letter') && l.url && !allDone) {
       base.url = null;
       base.locked = true;
-      base.lockedReason = 'Finish every module to open the books.';
+      base.lockedReason = 'Finish every module to open the ' + type + 's.';
     }
     return base;
   }) };
@@ -1451,6 +1884,9 @@ function analyticsPayload(scope) {
     learners: learnerRows.slice(0, 300),
     learnersTotal: learnerRows.length,
     activity: activity,
+    /* how the account reads: opens, books opened at least once, most liked */
+    reading: readingSection({ tenantIds: tenantIds, participants: participants,
+      moduleId: fModule, userIds: onlyUserIds }),
     /* every copy flag, and the person the work matched */
     flagged: flaggedSubs.slice(0, 200).map(s => {
       const m = copyMatch(s);
@@ -1741,7 +2177,9 @@ route('POST', '/api/library', ({ user, body }) => {
   requireRole(user, ADMINS);
   body = body || {};
   need(body.title && String(body.title).trim(), 'Title is required');
-  const type = ['book', 'letter', 'video'].indexOf(body.type) !== -1 ? body.type : 'book';
+  const rawType = String(body.type || 'book').toLowerCase();
+  const type = ['book', 'letter', 'video', 'audio', 'mp3'].indexOf(rawType) !== -1
+    ? (rawType === 'mp3' ? 'audio' : rawType) : 'book';
   const scope = user.role === 'super' ? (body.scope || 'global') : user.tenantId;
   const item = { id: dbm.uid('lib'), type, title: String(body.title).trim(), scope,
     text: body.text ? String(body.text) : null, url: body.url || null, fileName: null,
@@ -1766,7 +2204,10 @@ route('PUT', '/api/library/([a-z0-9_-]+)', ({ user, params, body }) => {
   if (body.title) item.title = String(body.title).trim();
   if (body.text !== undefined) item.text = body.text || null;
   if (body.url !== undefined) item.url = body.url || null;
-  if (body.type) item.type = body.type;
+  if (body.type) {
+    const rt = String(body.type).toLowerCase();
+    item.type = (rt === 'mp3') ? 'audio' : (['book','letter','video','audio'].indexOf(rt) !== -1 ? rt : item.type);
+  }
   if (body.file) { item.url = saveUpload(body.file); item.fileName = body.file.name; }
   if (body.scope && user.role === 'super') item.scope = body.scope;
   dbm.save();
@@ -2263,6 +2704,7 @@ route('GET', '/api/reports/students', ({ req, user }) => {
     const year = String(c.issuedAt || '').slice(0, 4);
     if (/^\d{4}$/.test(year)) activityYears.add(year);
   });
+  const reportDef = assessmentActiveDef(assessmentDef());
 
   const students = list.map(u => {
     const perf = performance(u);
@@ -2294,9 +2736,10 @@ route('GET', '/api/reports/students', ({ req, user }) => {
       progress: perf.overall, modulesCompleted: completed, moduleCount: mods.length, level: level,
       keywordScore: meanOf(subs.map(s => { const a = assessOf(s); return a ? a.keywordScore : null; })),
       typedAnswers: subs.filter(s => assessOf(s)).length,
+      assessment: assessmentForReport(u, reportDef),
       modules: mods.map(m => ({ id: m.id, title: m.title, percent: m.percent, status: m.status })),
       recent: subs.slice().sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).slice(0, 6)
-        .map(s => ({ type: s.type, createdAt: s.createdAt, text: String(s.text || '').slice(0, 240),
+        .map(s => ({ type: s.type, createdAt: s.createdAt, submittedAt: s.submittedAt || s.createdAt, text: String(s.text || '').slice(0, 240),
           score: s.score == null ? null : s.score, total: s.total == null ? null : s.total,
           flagged: !!s.flagged, similarity: s.similarity || 0, label: s.label || null,
           keywordScore: s.keywordScore == null ? null : s.keywordScore,
@@ -2312,6 +2755,7 @@ route('GET', '/api/reports/students', ({ req, user }) => {
 
   const total = students.length;
   return { ok: true, students: students, count: total,
+    assessmentCategories: reportDef.categories.map(c => ({ id: c.id, title: c.title, max: c.statements.length * 5 })),
     activityYears: Array.from(activityYears).sort().reverse(),
     average: total ? Math.round(students.reduce((s, x) => s + x.progress, 0) / total) : 0,
     finished: students.filter(s => s.moduleCount > 0 && s.modulesCompleted === s.moduleCount).length,
@@ -2339,7 +2783,7 @@ route('GET', '/api/reports/student-detail', ({ req, user }) => {
       const book = s.bookId ? dbm.byId('books', s.bookId) : null;
       const module = s.moduleId ? dbm.byId('modules', s.moduleId) : null;
       return {
-        id: s.id, type: s.type, createdAt: s.createdAt, text: s.text || '',
+        id: s.id, type: s.type, createdAt: s.createdAt, submittedAt: s.submittedAt || s.createdAt, text: s.text || '',
         score: s.score == null ? null : s.score, total: s.total == null ? null : s.total,
         flagged: !!s.flagged, similarity: s.similarity || 0,
         keywordScore: assessment ? assessment.keywordScore : null,
@@ -2351,6 +2795,45 @@ route('GET', '/api/reports/student-detail', ({ req, user }) => {
       };
     });
   return { ok: true, submissions: submissions, count: submissions.length };
+});
+
+/* Statement-level self-assessment behind the report popup: exactly what the
+   learner chose for every objective question, pre and post, with the category
+   totals the supervisor sees in the table. */
+route('GET', '/api/reports/student-assessment', ({ req, user }) => {
+  requireRole(user, ADMINS.concat(['supervisor']));
+  const studentId = qp(req, 'studentId');
+  need(studentId, 'studentId required');
+  const tenantId = qp(req, 'tenantId');
+  const student = assessmentReportScope(user, studentId);
+  if (user.role === 'super' && tenantId) need(student.tenantId === tenantId, 'Not permitted', 403);
+  const def = assessmentActiveDef(assessmentDef());
+  const summary = assessmentForReport(student, def);
+  const pre = student.assessmentPre || null;
+  const post = student.assessmentPost || null;
+  const categories = def.categories.map(c => {
+    const statements = c.statements.map(s => ({
+      id: s.id, text: s.text,
+      pre: pre && pre.answers && pre.answers[s.id] != null ? pre.answers[s.id] : null,
+      post: post && post.answers && post.answers[s.id] != null ? post.answers[s.id] : null
+    }));
+    return {
+      id: c.id, title: c.title, statements: statements,
+      max: c.statements.length * 5,
+      preTotal: pre ? statements.reduce((n, s) => n + (Number(s.pre) || 0), 0) : null,
+      postTotal: post ? statements.reduce((n, s) => n + (Number(s.post) || 0), 0) : null
+    };
+  });
+  return {
+    ok: true,
+    student: {
+      id: student.id, fullName: student.fullName, className: student.className || null,
+      studentNumber: student.studentNumber || null, tenantId: student.tenantId || null,
+      supervisorId: student.supervisorId || null
+    },
+    scale: def.scale, note: def.note || '', categories: categories,
+    pre: summary.pre, post: summary.post, growth: summary.growth
+  };
 });
 
 route('GET', '/api/reports/student-roster', ({ req, user }) => {
@@ -2504,6 +2987,83 @@ route('GET', '/api/reports/module-performers', ({ req, user }) => {
   };
 });
 
+/* The ribbon at the top of the students page: the account's best performers by
+   the marks they scored and by how much of the programme they covered. Both
+   numbers count equally, and marks break a tie before coverage does. */
+route('GET', '/api/reports/top-performers', ({ req, user }) => {
+  /* The console's students page and the learner's own dashboard both show this
+     belt, and both are account pages: a learner reads the same top 50 as the
+     admin of that account, never a cross-account feed. */
+  requireRole(user, ['tenant_admin', 'supervisor', 'student', 'member']);
+  /* the ribbon takes at most 50; a missing or unreadable limit means "all 50",
+     which is also how the PHP build reads it */
+  const asked = qp(req, 'limit');
+  const askedNumber = asked == null || String(asked).trim() === '' ? NaN : Number(asked);
+  const limit = Number.isFinite(askedNumber)
+    ? Math.max(1, Math.min(50, Math.trunc(askedNumber))) : 50;
+  let learners = dbm.db.users.filter(candidate => ['student', 'member'].indexOf(candidate.role) !== -1 &&
+    !candidate.suspended);
+  if (user.role === 'supervisor') {
+    learners = learners.filter(candidate => candidate.supervisorId === user.id);
+  } else {
+    /* a tenant admin and a learner both read their own account, nothing else */
+    learners = learners.filter(candidate => candidate.tenantId === user.tenantId);
+  }
+
+  /* marks: the same percentages the reports rank with (objectives + written work) */
+  const eligible = new Set(learners.map(learner => learner.id));
+  const marks = new Map();
+  dbm.db.submissions.forEach(submission => {
+    if (!eligible.has(submission.userId)) return;
+    let percent = null;
+    if (submission.type === 'objectives' && Number(submission.total) > 0) {
+      const total = Number(submission.total);
+      const earned = Math.max(0, Math.min(total, Number(submission.score) || 0));
+      percent = earned * 100 / total;
+    } else if (['chapter_summary', 'letter_summary', 'book_summary'].indexOf(submission.type) !== -1) {
+      const assessment = assessOf(submission);
+      if (assessment && assessment.keywordScore != null && Number.isFinite(Number(assessment.keywordScore))) {
+        percent = Math.max(0, Math.min(100, Number(assessment.keywordScore)));
+      }
+    }
+    if (percent == null) return;
+    const mark = marks.get(submission.userId) || { sum: 0, count: 0 };
+    mark.sum += percent;
+    mark.count++;
+    marks.set(submission.userId, mark);
+  });
+
+  const performers = learners.map(learner => {
+    const mark = marks.get(learner.id) || { sum: 0, count: 0 };
+    const statuses = moduleStatuses(learner);
+    const coverage = meanOf(statuses.map(status => status.progress.percent));
+    const scored = mark.count ? Math.round(mark.sum / mark.count) : null;
+    const cover = coverage == null ? 0 : coverage;
+    return {
+      id: learner.id, name: learner.fullName,
+      displayName: loginDisplayName(learner.fullName),
+      className: learner.className || null, studentNumber: learner.studentNumber || null,
+      photo: loginPhoto(learner.photo),
+      marks: scored, coverage: cover,
+      submissions: mark.count,
+      /* Marks and coverage weigh the same. A learner who has moved through the
+         programme but whose typed answers carry no score yet (a chapter with no
+         key words, for example) is still ranked on their coverage — their marks
+         simply show as a dash instead of hiding them from the belt. */
+      score: scored == null ? cover : Math.round((scored + cover) / 2)
+    };
+  }).filter(performer => performer.marks != null || performer.coverage > 0 || performer.submissions > 0)
+    .sort((a, b) => b.score - a.score ||
+      (b.marks == null ? -1 : b.marks) - (a.marks == null ? -1 : a.marks) ||
+      b.coverage - a.coverage ||
+      String(a.name).localeCompare(String(b.name)))
+    .slice(0, limit)
+    .map((performer, index) => Object.assign(performer, { rank: index + 1 }));
+
+  return { ok: true, performers: performers, count: performers.length, limit: limit,
+    basis: 'marks and coverage, equally weighted' };
+});
+
 route('GET', '/api/admin/overview', ({ user }) => {
   need(user, 'Sign in required', 401);
   if (user.role === 'super') {
@@ -2567,6 +3127,51 @@ function createCompletionNotification(user) {
     body: user.fullName + ' has completed every module and earned the general certificate.',
     studentId: user.id
   });
+}
+
+/* ------------------------------------------------------- video alerts ---- */
+/* Every third completed chapter earns one library video. It is chosen at random
+   from the videos this learner has never been sent, and it arrives as an alert in
+   the messages where the learner can play it. A milestone is rewarded once, and
+   the same video never reaches the same learner twice. */
+function completedChapterCount(userId) {
+  const chapters = new Set();
+  dbm.collection('submissions').forEach(submission => {
+    if (submission.userId !== userId || !submission.chapterId) return;
+    if (submission.type !== 'chapter_summary' && submission.type !== 'objectives') return;
+    chapters.add(submission.chapterId);
+  });
+  return chapters.size;
+}
+
+function maybeSendVideoAlert(user, submission) {
+  if (!submission || !submission.chapterId) return null;
+  if (['student', 'member'].indexOf(user.role) === -1) return null;
+  const chapters = completedChapterCount(user.id);
+  if (!chapters || chapters % 3 !== 0) return null;
+  const alerts = dbm.collection('video_alerts');
+  const milestone = 'chapters:' + chapters;
+  const mine = alerts.filter(alert => alert.userId === user.id);
+  if (mine.some(alert => alert.milestone === milestone)) return null;
+  const sent = new Set(mine.map(alert => alert.libraryId));
+  const videos = dbm.db.library.filter(video => video.type === 'video' && video.url &&
+    (video.scope === 'global' || video.scope === user.tenantId) && !sent.has(video.id));
+  if (!videos.length) return null;
+  const video = videos[Math.floor(Math.random() * videos.length)];
+  const alert = {
+    id: dbm.uid('val'), tenantId: user.tenantId, userId: user.id,
+    libraryId: video.id, title: video.title, videoUrl: video.url,
+    milestone, chaptersCompleted: chapters, createdAt: dbm.nowISO()
+  };
+  alerts.push(alert);
+  notificationFor(user.id, {
+    type: 'video_alert', title: 'A video has been unlocked for you',
+    body: 'You finished ' + chapters + ' chapters. Watch "' + video.title +
+      '" from the library whenever you like.',
+    libraryId: video.id, videoUrl: video.url
+  });
+  dbm.save();
+  return alert;
 }
 
 function messagingUsers(user) {
@@ -2752,7 +3357,7 @@ function adminSubmissions(user, req) {
       const who = dbm.byId('users', s.userId);
       const ch = s.chapterId ? dbm.byId('chapters', s.chapterId) : null;
       const bk = s.bookId ? dbm.byId('books', s.bookId) : null;
-      return { id: s.id, type: s.type, createdAt: s.createdAt, text: s.text,
+      return { id: s.id, type: s.type, createdAt: s.createdAt, submittedAt: s.submittedAt || s.createdAt, text: s.text,
         color: s.color || null, label: s.label || null, score: s.score, total: s.total,
         flagged: !!s.flagged, similarity: s.similarity || 0,
         matchedWith: copyMatch(s), matchedName: (copyMatch(s) || {}).name || null,
@@ -2785,6 +3390,74 @@ route('GET', '/api/admin/certificates', ({ user }) => {
 route('GET', '/api/super/submissions', ({ req, user }) => {
   requireRole(user, SUPER);
   return { ok: true, submissions: adminSubmissions(user, req) };
+});
+
+/* Live lessons. Creators: super (all users), tenant_admin (whole account), supervisor (their students). Students only receive. Meeting link (Zoom) required. */
+route('POST', '/api/live-lessons', ({ body, user }) => {
+  need(user, 'Sign in required', 401);
+  need(user.role === 'tenant_admin' || user.role === 'supervisor' || user.role === 'super', 'Not permitted', 403);
+  const title = String((body && body.title) || '').trim();
+  need(title, 'Title required');
+  need(title.length <= 200, 'Title is too long');
+  const scheduledAt = body && body.scheduledAt ? String(body.scheduledAt) : new Date().toISOString();
+  const scheduledDate = new Date(scheduledAt);
+  need(!isNaN(scheduledDate.getTime()), 'Invalid lesson date and time');
+  const providedLink = body && (body.joinUrl || body.link || body.zoomUrl || body.meetingUrl);
+  need(providedLink, 'Meeting link required');
+  const joinUrl = String(providedLink).trim();
+  need(/^https?:\/\/\S+$/i.test(joinUrl), 'Meeting link must start with http:// or https://');
+  need(joinUrl.length <= 1000, 'Meeting link is too long');
+  let recipients = [];
+  if (user.role === 'tenant_admin' || user.role === 'super') {
+    if (user.role === 'super') {
+      recipients = dbm.collection('users').filter(u => u.id !== user.id).map(u => u.id);
+    } else {
+      recipients = dbm.collection('users').filter(u => u.tenantId === user.tenantId && u.id !== user.id).map(u => u.id);
+    }
+  } else {
+    recipients = dbm.collection('users').filter(u => u.supervisorId === user.id).map(u => u.id);
+  }
+  const scheduledIso = scheduledDate.toISOString();
+  const notified = scheduledDate <= new Date();
+  const lesson = {
+    id: dbm.uid('lesson'),
+    title,
+    scheduledAt: scheduledIso,
+    creatorId: user.id,
+    tenantId: user.tenantId,
+    recipientIds: recipients,
+    room: null,
+    joinUrl,
+    notified,
+    createdAt: dbm.nowISO()
+  };
+  dbm.collection('liveLessons').push(lesson);
+  if (notified) {
+    recipients.forEach(rid => {
+      dbm.collection('notifications').push({
+        id: dbm.uid('ntf'),
+        userId: rid,
+        type: 'live_lesson',
+        title: 'Live lesson starting: ' + (title || ''),
+        body: 'Join now: ' + joinUrl,
+        conversationId: null,
+        readAt: null,
+        createdAt: dbm.nowISO()
+      });
+    });
+  }
+  dbm.save(true);
+  return { ok: true, lesson };
+});
+
+route('GET', '/api/live-lessons', ({ user }) => {
+  need(user, 'Sign in required', 401);
+  let list = dbm.collection('liveLessons');
+  if (user.role === 'super') { /* all */ }
+  else if (user.role === 'tenant_admin') list = list.filter(l => l.tenantId === user.tenantId);
+  else if (user.role === 'supervisor') list = list.filter(l => l.creatorId === user.id || (l.recipientIds || []).includes(user.id));
+  else list = list.filter(l => (l.recipientIds || []).includes(user.id));
+  return { ok: true, lessons: list.slice().sort((a,b) => String(a.scheduledAt).localeCompare(String(b.scheduledAt))) };
 });
 
 module.exports = { handle };

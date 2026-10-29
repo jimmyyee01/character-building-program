@@ -1,3 +1,4 @@
+
 /* Shared client helpers: API wrapper, auth state, formatting, uploads. */
 const API = {
   token() { return localStorage.getItem('cbp_token'); },
@@ -69,6 +70,40 @@ function fileToDataUrl(file) {
     r.readAsDataURL(file);
   });
 }
+/* Profile photos are cropped square and shrunk before upload, so lists, the
+   login-page portraits and the public ranking stay small and fast. */
+function fileToAvatarDataUrl(file, size) {
+  size = size || 256;
+  return new Promise(function (resolve, reject) {
+    if (!file || !/^image\//i.test(file.type || '')) {
+      reject(new Error('Choose an image file'));
+      return;
+    }
+    const r = new FileReader();
+    r.onload = function () {
+      const img = new Image();
+      img.onload = function () {
+        try {
+          const side = Math.min(img.naturalWidth || img.width, img.naturalHeight || img.height);
+          if (!side) throw new Error('Could not read that image');
+          const canvas = document.createElement('canvas');
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, size, size);
+          ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2,
+            side, side, 0, 0, size, size);
+          resolve(canvas.toDataURL('image/jpeg', 0.82));
+        } catch (e) { reject(e); }
+      };
+      img.onerror = function () { reject(new Error('Could not read that image')); };
+      img.src = r.result;
+    };
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
 function fileToBase64(file) {
   return new Promise(function (resolve, reject) {
     const r = new FileReader();
@@ -83,6 +118,377 @@ function blockPaste(el) {
     el.addEventListener(evt, function (e) { e.preventDefault(); toast('Please type your own words.', 'err'); });
   });
 }
+
+/* ==================================================== read-aloud helpers === */
+/* A dependency-free narrator built on the browser's own speech synthesis.
+   Text is split into one span per word, and the speech "boundary" event moves
+   a faint-yellow highlight from word to word as it is spoken. Every controller
+   shares the same global channel, so only one thing can ever speak at once. */
+const NARRATION_SUPPORTED = (function () {
+  try {
+    return typeof window !== 'undefined' && !!window.speechSynthesis &&
+      typeof window.SpeechSynthesisUtterance !== 'undefined';
+  } catch (e) { return false; }
+})();
+let narratorActive = null;
+
+function narrationWords(text) {
+  const s = String(text == null ? '' : text);
+  const out = [];
+  const re = /\S+/g;
+  let m;
+  while ((m = re.exec(s))) out.push({ text: m[0], start: m.index, end: m.index + m[0].length });
+  return out;
+}
+
+/* HTML for a block of text, one span per word (whitespace is kept exactly). */
+function narrationMarkup(text) {
+  const s = String(text == null ? '' : text);
+  let out = '';
+  let last = 0;
+  let i = 0;
+  const re = /\S+/g;
+  let m;
+  while ((m = re.exec(s))) {
+    out += esc(s.slice(last, m.index));
+    out += '<span class="narrate-word" data-narrate-word="' + i + '">' + esc(m[0]) + '</span>';
+    last = m.index + m[0].length;
+    i++;
+  }
+  out += esc(s.slice(last));
+  return out;
+}
+
+function narratorControlsHtml(opts) {
+  opts = opts || {};
+  return '<div class="narrator-bar" data-narrator-controls>' +
+    '<button type="button" class="small" data-narrate="play" title="Read this page aloud">▶ Play</button>' +
+    '<button type="button" class="small ghost" data-narrate="pause" disabled title="Pause reading">⏸ Pause</button>' +
+    '<button type="button" class="small ghost" data-narrate="stop" disabled title="Stop reading">⏹ Stop</button>' +
+    '<span class="narrator-status" data-narrate-status role="status" aria-live="polite">' +
+      esc(opts.status || 'Press Play to hear this page.') + '</span>' +
+  '</div>';
+}
+
+/* Text + controls, used for chapter text, letters and library text files. */
+function narratedTextHtml(text, opts) {
+  opts = opts || {};
+  const cls = opts.className ? ' ' + opts.className : '';
+  return '<div class="narrator" data-narrator>' +
+    '<div class="narrator-text' + cls + '" data-narrate-text data-narrate-raw="' + esc(text) + '">' +
+      narrationMarkup(text) + '</div>' +
+    narratorControlsHtml(opts) +
+  '</div>';
+}
+
+function narrationVoice() {
+  try {
+    const voices = window.speechSynthesis.getVoices() || [];
+    const english = voices.filter(function (v) {
+      return /^en([-_]|$)/i.test(String(v.lang || ''));
+    });
+    return english.filter(function (v) {
+      return /natural|neural|google|microsoft|samantha|daniel/i.test(String(v.name || ''));
+    })[0] || english.filter(function (v) { return v.localService; })[0] ||
+      english[0] || voices[0] || null;
+  } catch (e) { return null; }
+}
+
+function createNarrator(opts) {
+  opts = opts || {};
+  const box = opts.controlsRoot || opts.root || null;
+  const textEl = opts.textEl || null;
+  const statusEl = box && box.querySelector ? box.querySelector('[data-narrate-status]') : null;
+  const wordEls = opts.wordEls
+    ? Array.prototype.slice.call(opts.wordEls)
+    : (textEl && textEl.querySelectorAll
+        ? Array.prototype.slice.call(textEl.querySelectorAll('[data-narrate-word]')) : []);
+  let words;
+  let utteranceText;
+  if (opts.words && opts.words.length) {
+    words = opts.words.map(function (w) { return { text: String(w.text || ''), start: w.start, end: w.end }; });
+    utteranceText = words.map(function (w) { return w.text; }).join(' ');
+    let pos = 0;
+    words.forEach(function (w) {
+      w.start = pos;
+      w.end = pos + w.text.length;
+      pos = w.end + 1;
+    });
+  } else {
+    utteranceText = opts.text != null ? String(opts.text) : (textEl ? String(textEl.textContent || '') : '');
+    words = narrationWords(utteranceText);
+  }
+
+  const scrollWords = opts.scrollWords !== false;
+  let state = 'idle';               /* idle | playing | paused | loading */
+  let currentUtterance = null;
+  let currentWord = -1;
+  let token = 0;
+  let boundarySeen = false;
+  let fallbackTimer = null;
+  let fallbackProbe = null;
+  let startedAt = 0;
+  let pausedFor = 0;
+  let destroyed = false;
+
+  function setStatus(msg) {
+    if (statusEl) statusEl.textContent = msg;
+  }
+  function syncButtons() {
+    if (!box || !box.querySelector) return;
+    const play = box.querySelector('[data-narrate="play"]');
+    const pause = box.querySelector('[data-narrate="pause"]');
+    const stop = box.querySelector('[data-narrate="stop"]');
+    if (play) {
+      play.disabled = !NARRATION_SUPPORTED || !words.length || state === 'playing' || state === 'loading';
+      play.textContent = state === 'paused' ? '▶ Resume' : '▶ Play';
+    }
+    if (pause) pause.disabled = state !== 'playing';
+    if (stop) stop.disabled = state === 'idle' || state === 'loading';
+  }
+  function clearHighlight() {
+    if (currentWord >= 0 && wordEls[currentWord] && wordEls[currentWord].classList) {
+      wordEls[currentWord].classList.remove('narrating');
+    }
+    currentWord = -1;
+  }
+  function highlight(index) {
+    if (index < 0 || index >= wordEls.length) return;
+    if (index === currentWord) return;
+    if (currentWord >= 0 && wordEls[currentWord] && wordEls[currentWord].classList) {
+      wordEls[currentWord].classList.remove('narrating');
+    }
+    currentWord = index;
+    const el = wordEls[index];
+    if (el && el.classList) el.classList.add('narrating');
+    if (scrollWords && el && el.scrollIntoView && textEl &&
+        textEl.scrollHeight > textEl.clientHeight + 24) {
+      try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {}
+    }
+  }
+  function indexAt(charIndex) {
+    const ci = Number(charIndex);
+    if (!isFinite(ci)) return currentWord < 0 ? 0 : currentWord;
+    for (let i = 0; i < words.length; i++) {
+      if (ci < words[i].end) return i;
+    }
+    return words.length ? words.length - 1 : -1;
+  }
+  function clearTimers() {
+    if (fallbackTimer) { clearInterval(fallbackTimer); fallbackTimer = null; }
+    if (fallbackProbe) { clearTimeout(fallbackProbe); fallbackProbe = null; }
+  }
+  /* Not every engine sends word boundaries (Safari can be quiet), so after a
+     short wait we keep the page moving with a measured word-by-word estimate. */
+  function startTimedHighlight() {
+    if (!words.length || fallbackTimer) return;
+    const durations = words.map(function (w) { return 100 + w.text.length * 62; });
+    const tick = function () {
+      if (state !== 'playing' || boundarySeen) { clearTimers(); return; }
+      const elapsed = pausedFor + (Date.now() - startedAt);
+      let acc = 0;
+      let idx = 0;
+      for (let i = 0; i < durations.length; i++) {
+        acc += durations[i];
+        idx = i;
+        if (elapsed < acc) break;
+      }
+      highlight(idx);
+    };
+    fallbackTimer = setInterval(tick, 120);
+    tick();
+  }
+  function scheduleTimedFallback() {
+    if (fallbackProbe) clearTimeout(fallbackProbe);
+    fallbackProbe = setTimeout(function () {
+      fallbackProbe = null;
+      if (state === 'playing' && !boundarySeen) startTimedHighlight();
+    }, 900);
+  }
+  function finished() {
+    clearTimers();
+    state = 'idle';
+    currentUtterance = null;
+    boundarySeen = false;
+    pausedFor = 0;
+    clearHighlight();
+    if (narratorActive === api) narratorActive = null;
+    setStatus(words.length ? 'Finished' : 'No readable text was found here.');
+    syncButtons();
+  }
+  function stop() {
+    if (destroyed) return;
+    token++;
+    clearTimers();
+    if (currentUtterance && narratorActive === api) {
+      try { window.speechSynthesis.cancel(); } catch (e) {}
+    }
+    currentUtterance = null;
+    boundarySeen = false;
+    pausedFor = 0;
+    if (narratorActive === api) narratorActive = null;
+    state = 'idle';
+    clearHighlight();
+    setStatus(words.length ? 'Stopped' : 'No readable text was found here.');
+    syncButtons();
+  }
+  function pause() {
+    if (state !== 'playing') return;
+    try { window.speechSynthesis.pause(); } catch (e) { return; }
+    pausedFor += Date.now() - startedAt;
+    state = 'paused';
+    clearTimers();
+    setStatus('Paused');
+    syncButtons();
+  }
+  function resume() {
+    if (state !== 'paused') return;
+    try { window.speechSynthesis.resume(); } catch (e) { return; }
+    state = 'playing';
+    startedAt = Date.now();
+    boundarySeen = false;
+    setStatus('Reading aloud…');
+    syncButtons();
+    scheduleTimedFallback();
+  }
+  function play() {
+    if (destroyed) return;
+    if (!NARRATION_SUPPORTED) {
+      setStatus('Read-aloud is not supported by this browser.');
+      syncButtons();
+      return;
+    }
+    if (!words.length) {
+      setStatus('No readable text was found here.');
+      syncButtons();
+      return;
+    }
+    if (state === 'paused') { resume(); return; }
+    if (state === 'playing') return;
+    if (narratorActive && narratorActive !== api) narratorActive.stop();
+    clearTimers();
+    clearHighlight();
+    boundarySeen = false;
+    pausedFor = 0;
+    state = 'playing';
+    startedAt = Date.now();
+    syncButtons();
+    setStatus('Reading aloud…');
+    const mine = ++token;
+    let u;
+    try {
+      u = new window.SpeechSynthesisUtterance(utteranceText);
+    } catch (e) {
+      state = 'idle';
+      setStatus('Read-aloud could not start in this browser.');
+      syncButtons();
+      return;
+    }
+    u.lang = (typeof document !== 'undefined' && document.documentElement &&
+      document.documentElement.lang) || 'en-US';
+    u.rate = 0.96;
+    u.pitch = 1;
+    const voice = narrationVoice();
+    if (voice) u.voice = voice;
+    u.onstart = function () {
+      if (mine !== token) return;
+      setStatus('Reading aloud…');
+    };
+    u.onboundary = function (e) {
+      if (mine !== token || state !== 'playing') return;
+      const at = e && e.charIndex;
+      if (!isFinite(Number(at))) return;
+      boundarySeen = true;
+      clearTimers();
+      highlight(indexAt(at));
+    };
+    u.onend = function () {
+      if (mine !== token) return;
+      finished();
+    };
+    u.onerror = function (e) {
+      if (mine !== token) return;
+      const why = String((e && e.error) || '');
+      if (why === 'interrupted' || why === 'canceled' || why === 'cancelled') return;
+      finished();
+      if (why) setStatus('Read-aloud stopped (' + why + ').');
+    };
+    currentUtterance = u;
+    narratorActive = api;
+    try {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.resume();
+      window.speechSynthesis.speak(u);
+      scheduleTimedFallback();
+    } catch (e) {
+      finished();
+      setStatus('Read-aloud could not start in this browser.');
+    }
+  }
+  function destroy() {
+    stop();
+    destroyed = true;
+    if (box) box._narrator = null;
+  }
+
+  const api = {
+    play: play, pause: pause, stop: stop, destroy: destroy,
+    words: words, wordEls: wordEls,
+    state: function () { return state; }
+  };
+  if (box) box._narrator = api;
+  if (!NARRATION_SUPPORTED) setStatus('Read-aloud is not supported by this browser.');
+  else if (!words.length) setStatus('No readable text was found here.');
+  syncButtons();
+  return api;
+}
+
+/* Turn every narrator block inside a rendered view/modal into a live player. */
+function initNarrators(scope) {
+  const root = scope || (typeof document !== 'undefined' ? document : null);
+  if (!root || !root.querySelectorAll) return;
+  root.querySelectorAll('[data-narrator]').forEach(function (box) {
+    if (box.dataset.narrateReady === '1') return;
+    if (box.closest && box.closest('.book-reader')) return;
+    const textEl = box.querySelector('[data-narrate-text]');
+    if (!textEl) return;
+    box.dataset.narrateReady = '1';
+    createNarrator({
+      controlsRoot: box,
+      textEl: textEl,
+      text: textEl.getAttribute('data-narrate-raw') || textEl.textContent
+    });
+    if (box.addEventListener && !box.dataset.narrateWired) {
+      box.dataset.narrateWired = '1';
+      box.addEventListener('click', function (e) {
+        const btn = e.target && e.target.closest ? e.target.closest('[data-narrate]') : null;
+        if (!btn || !box._narrator) return;
+        const action = btn.getAttribute('data-narrate');
+        if (action === 'play') box._narrator.play();
+        else if (action === 'pause') box._narrator.pause();
+        else if (action === 'stop') box._narrator.stop();
+      });
+    }
+  });
+}
+function stopNarratorsIn(scope) {
+  const root = scope || (typeof document !== 'undefined' ? document : null);
+  if (!root || !root.querySelectorAll) return;
+  root.querySelectorAll('[data-narrator]').forEach(function (box) {
+    if (box._narrator) box._narrator.stop();
+  });
+  root.querySelectorAll('.book-reader').forEach(function (r) { stopBookNarration(r); });
+}
+function stopAllNarrators() {
+  if (narratorActive) narratorActive.stop();
+  if (typeof document !== 'undefined' && document.querySelectorAll) {
+    document.querySelectorAll('[data-narrator]').forEach(function (box) {
+      if (box._narrator) box._narrator.stop();
+    });
+    document.querySelectorAll('.book-reader').forEach(function (r) { stopBookNarration(r); });
+  }
+}
+
 function downloadText(filename, text) {
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
   const a = document.createElement('a');
@@ -247,6 +653,109 @@ function chartWeekly(rows, weeks, opts) {
     }
   });
   return chartBars(buckets, { caption: opts.caption || 'Grouped into the last ' + n + ' weeks' });
+}
+
+/* ================================================ self-assessment report === */
+/* Compact pre → post category totals for the student-progress tables. The
+   definition is supplied by /reports/students so the columns follow whatever
+   the super admin has configured. */
+function assessmentMiniHtml(assessment, categories) {
+  const pre = assessment && assessment.pre ? assessment.pre : null;
+  const post = assessment && assessment.post ? assessment.post : null;
+  if (!pre && !post) return '<span class="muted small">Not taken</span>';
+  let list = Array.isArray(categories) ? categories.filter(Boolean) : [];
+  if (!list.length) {
+    const source = (post || pre || {}).categories || [];
+    list = source.map(function (c) { return { id: c.id, title: c.title, max: c.max }; });
+  }
+  function total(rec, id) {
+    if (!rec) return '—';
+    const found = (rec.categories || []).find(function (c) { return String(c.id) === String(id); });
+    return found ? found.total + '/' + found.max : '—';
+  }
+  return '<div class="assess-mini" title="Self-assessment category totals: pre → post">' +
+    '<div class="assess-mini-head">Pre <span>→</span> Post</div>' +
+    list.map(function (c) {
+      return '<div class="assess-mini-row"><span class="assess-mini-name" title="' + esc(c.title) + '">' +
+        esc(c.title) + '</span><span class="assess-mini-total"><b>' + esc(total(pre, c.id)) +
+        '</b><span>→</span><b>' + esc(total(post, c.id)) + '</b></span></div>';
+    }).join('') + '</div>';
+}
+function assessmentScoreHtml(value, scale) {
+  if (value == null) return '<span class="assess-none">—</span>';
+  const n = Number(value);
+  const label = (scale || []).find(function (s) { return Number(s.value) === n; });
+  return '<span class="assess-val">' + esc(String(n)) + '</span>' +
+    (label ? '<div class="assess-score-label">' + esc(label.label) + '</div>' : '');
+}
+/* Full statement-by-statement body used inside the report popup. */
+function assessmentAttemptHtml(data) {
+  data = data || {};
+  const student = data.student || {};
+  const pre = data.pre || null;
+  const post = data.post || null;
+  const growth = data.growth == null ? null : Number(data.growth);
+  const scale = data.scale || [];
+  const fmtTotal = function (rec) { return rec ? rec.total + ' / ' + rec.max : '—'; };
+  let h = '<div class="assess-popup">' +
+    '<div class="assess-popup-head"><div><h2>' + esc(student.fullName || 'Self-assessment') + '</h2>' +
+      '<p class="muted small">' + esc(student.className || 'No class') +
+      (student.studentNumber ? ' · ' + esc(student.studentNumber) : '') +
+      '</p></div><div class="assess-popup-totals">' +
+      '<div class="stat tone-blue"><div class="n">' + fmtTotal(pre) + '</div><div class="l">Pre-score</div></div>' +
+      '<div class="stat tone-green"><div class="n">' + fmtTotal(post) + '</div><div class="l">Post-score</div></div>' +
+      '<div class="stat tone-violet"><div class="n">' + (growth == null ? '—' : (growth >= 0 ? '+' : '') + growth) +
+        '</div><div class="l">Growth</div></div></div></div>';
+  h += '<p class="muted small">How the learner rated every objective question. ' +
+    'Each answer is on the 1–5 scale; the category total is the sum of its questions.</p>';
+  if (!pre && !post) {
+    return h + '<div class="closed-banner">This learner has not taken the self-assessment yet.</div></div>';
+  }
+  const cats = data.categories || [];
+  h += cats.map(function (c) {
+    const preTotal = c.preTotal == null ? '—' : c.preTotal + ' / ' + c.max;
+    const postTotal = c.postTotal == null ? '—' : c.postTotal + ' / ' + c.max;
+    return '<div class="card assess-popup-cat"><div class="assess-cat-head"><h3>' + esc(c.title) + '</h3>' +
+      '<span class="badge info">Pre ' + esc(preTotal) + '</span> <span class="badge ok">Post ' + esc(postTotal) + '</span></div>' +
+      '<div class="table-wrap"><table class="assess-table"><thead><tr><th>Objective question</th>' +
+      '<th>Pre-score</th><th>Post-score</th><th>Change</th></tr></thead><tbody>' +
+      (c.statements || []).map(function (s) {
+        const change = s.pre != null && s.post != null ? Number(s.post) - Number(s.pre) : null;
+        return '<tr><td>' + esc(s.text) + '</td>' +
+          '<td>' + assessmentScoreHtml(s.pre, scale) + '</td>' +
+          '<td>' + assessmentScoreHtml(s.post, scale) + '</td>' +
+          '<td>' + (change == null ? '<span class="assess-none">—</span>'
+            : '<b class="' + (change > 0 ? 'assess-up' : change < 0 ? 'assess-down' : 'muted') + '">' +
+              (change > 0 ? '+' : '') + change + '</b>') + '</td></tr>';
+      }).join('') + '</tbody></table></div></div>';
+  }).join('');
+  if (!cats.length) h += '<p class="muted">No self-assessment categories are currently active.</p>';
+  return h + '</div>';
+}
+function closeAssessmentModal() {
+  const modal = document.getElementById('studentDetailModal');
+  if (modal) modal.classList.add('hidden');
+}
+/* Shared by the supervisor and super-admin reports. */
+async function openAssessmentModal(studentId) {
+  const modal = document.getElementById('studentDetailModal');
+  if (!modal) return;
+  modal.innerHTML = '<div class="student-detail-overlay"><div class="student-detail-card card">' +
+    '<p class="muted">Loading self-assessment…</p></div></div>';
+  modal.classList.remove('hidden');
+  try {
+    const data = await API.get('/reports/student-assessment?studentId=' +
+      encodeURIComponent(studentId));
+    modal.innerHTML = '<div class="student-detail-overlay" onclick="if(event.target===this) closeAssessmentModal()">' +
+      '<div class="student-detail-card assessment-detail-card">' +
+      '<button type="button" class="sd-close" onclick="closeAssessmentModal()">&times;</button>' +
+      assessmentAttemptHtml(data) + '</div></div>';
+  } catch (e) {
+    modal.innerHTML = '<div class="student-detail-overlay" onclick="if(event.target===this) closeAssessmentModal()">' +
+      '<div class="student-detail-card card"><button type="button" class="sd-close" onclick="closeAssessmentModal()">' +
+      '&times;</button><h3>Could not load the self-assessment</h3><p class="muted small">' +
+      esc(e.message || 'Request failed') + '</p></div></div>';
+  }
 }
 
 /* ================================================= chapter page picker ==== */
@@ -489,6 +998,9 @@ function bookReaderHtml(url, opts) {
       '<button type="button" class="page-turn next" data-book-turn="1" aria-label="Next page"' +
         ' title="Next page">›</button>' +
     '</div>' +
+    '<div class="book-narrator" data-book-narrator>' +
+      narratorControlsHtml({ status: 'Press Play to hear this page.' }) +
+    '</div>' +
     '<div class="book-bar">' +
       '<button type="button" class="ghost small" data-book-turn="-1">‹ Previous</button>' +
       '<span class="book-page-no">Page <b data-book-page>' + from + '</b>' +
@@ -616,6 +1128,290 @@ function pdfPageRatio(url) {
   return pdfFirstPageSize(url).then(function (s) { return s ? s.w / s.h : 0; });
 }
 
+/* ============================================ PDF page text + highlighting == */
+/* The browser's own PDF viewer cannot be told which word it is drawing, so when
+   someone presses Play we render that one page with PDF.js (canvas + a text
+   layer) and highlight the actual words on the page. The native iframe stays
+   underneath as the fallback for browsers where PDF.js cannot load. */
+let pdfJsPromise = null;
+const pdfScripts = {};
+function loadScriptOnce(src) {
+  if (pdfScripts[src]) return pdfScripts[src];
+  pdfScripts[src] = new Promise(function (resolve, reject) {
+    if (typeof document === 'undefined' || !document.head) {
+      reject(new Error('PDF.js cannot load here'));
+      return;
+    }
+    const s = document.createElement('script');
+    s.src = src;
+    s.async = true;
+    s.onload = function () { resolve(); };
+    s.onerror = function () { reject(new Error('Could not load ' + src)); };
+    document.head.appendChild(s);
+  }).catch(function (e) {
+    delete pdfScripts[src];
+    throw e;
+  });
+  return pdfScripts[src];
+}
+function loadPdfJs() {
+  if (typeof window === 'undefined') return Promise.reject(new Error('PDF.js needs a browser'));
+  if (window.pdfjsLib) {
+    return loadScriptOnce('/js/pdfjs/pdf.worker.min.js?v=38').catch(function () {}).then(function () {
+      try { window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/js/pdfjs/pdf.worker.min.js?v=38'; } catch (e) {}
+      return window.pdfjsLib;
+    });
+  }
+  if (pdfJsPromise) return pdfJsPromise;
+  pdfJsPromise = Promise.all([
+    loadScriptOnce('/js/pdfjs/pdf.min.js?v=38'),
+    /* Running the worker code on the main thread as well keeps read-aloud
+       reliable on locked-down browsers and inside in-app webviews, where a
+       separate worker can be blocked. PDF.js picks it up automatically. */
+    loadScriptOnce('/js/pdfjs/pdf.worker.min.js?v=38').catch(function () {})
+  ]).then(function () {
+    const lib = window.pdfjsLib;
+    if (!lib || !lib.getDocument) throw new Error('PDF.js did not initialise');
+    try { lib.GlobalWorkerOptions.workerSrc = '/js/pdfjs/pdf.worker.min.js?v=38'; } catch (e) {}
+    return lib;
+  }).catch(function (e) {
+    pdfJsPromise = null;
+    throw e;
+  });
+  return pdfJsPromise;
+}
+
+const pdfDocCache = {};
+function pdfDocFor(url) {
+  const key = String(url || '');
+  if (!key) return Promise.reject(new Error('No PDF address'));
+  if (!pdfDocCache[key]) {
+    pdfDocCache[key] = loadPdfJs().then(function (lib) {
+      return lib.getDocument({ url: key, isEvalSupported: false }).promise;
+    }).catch(function (e) {
+      delete pdfDocCache[key];
+      throw e;
+    });
+  }
+  return pdfDocCache[key];
+}
+
+function bookNarratorState(root) {
+  if (!root) return null;
+  if (!root._bookNarrator) {
+    root._bookNarrator = { controller: null, page: 0, seq: 0, loading: false, mode: false };
+  }
+  return root._bookNarrator;
+}
+function bookNarratorStatus(root, msg) {
+  const el = root && root.querySelector ? root.querySelector('[data-book-narrator] [data-narrate-status]') : null;
+  if (el) el.textContent = msg;
+}
+function bookNarratorSync(root) {
+  const st = bookNarratorState(root);
+  const bar = root && root.querySelector ? root.querySelector('[data-book-narrator]') : null;
+  if (!bar) return;
+  const play = bar.querySelector('[data-narrate="play"]');
+  const pause = bar.querySelector('[data-narrate="pause"]');
+  const stop = bar.querySelector('[data-narrate="stop"]');
+  const state = st && st.controller ? st.controller.state() : 'idle';
+  const noWords = !!(st && st.controller && st.controller.words && !st.controller.words.length);
+  if (play) play.disabled = !NARRATION_SUPPORTED || st.loading || noWords ||
+    state === 'playing' || state === 'loading';
+  if (pause) pause.disabled = state !== 'playing';
+  if (stop) stop.disabled = st.loading || (!st.controller && state === 'idle');
+}
+function pdfRenderNarratedPage(root, pageNo, token) {
+  const current = function () {
+    return !token || !root._bookNarrator ||
+      (root._bookNarrator.seq === token && Number(root.dataset.page) === Number(pageNo));
+  };
+  return loadPdfJs().then(function (lib) {
+    return pdfDocFor(root.dataset.book).then(function (doc) {
+      return doc.getPage(Number(pageNo) || 1);
+    }).then(function (page) {
+      if (!current()) throw new Error('Page changed before it could be read');
+      const first = page.getViewport({ scale: 1 });
+      const ratio = first.width / first.height;
+      root.dataset.bookRatio = String(ratio);
+      try { bookFit(root); } catch (e) {}
+      const sheet = root.querySelector('.book-page');
+      const wrap = root.querySelector('.book-frame-wrap');
+      if (!sheet || !wrap) throw new Error('The book page is not on screen');
+      let width = Math.floor(Number(sheet.clientWidth || 0));
+      if (!width) width = Math.floor(Number(wrap.clientWidth || 0)) || 640;
+      const cssScale = width / first.width;
+      const viewport = page.getViewport({ scale: cssScale });
+      const dpr = Math.max(1, Math.min(2, Number(window.devicePixelRatio || 1)));
+      let render = wrap.querySelector('.pdf-render');
+      if (!render) {
+        wrap.insertAdjacentHTML('beforeend',
+          '<div class="pdf-render"><canvas class="pdf-canvas"></canvas>' +
+          '<div class="pdf-text-layer" aria-hidden="true"></div></div>');
+        render = wrap.querySelector('.pdf-render');
+      }
+      const canvas = render.querySelector('.pdf-canvas');
+      const layer = render.querySelector('.pdf-text-layer');
+      if (!canvas || !layer) throw new Error('The page renderer is missing');
+      const ctx = canvas.getContext('2d');
+      canvas.width = Math.max(1, Math.floor(viewport.width * dpr));
+      canvas.height = Math.max(1, Math.floor(viewport.height * dpr));
+      canvas.style.width = viewport.width + 'px';
+      canvas.style.height = viewport.height + 'px';
+      render.style.width = viewport.width + 'px';
+      render.style.height = viewport.height + 'px';
+      layer.style.width = viewport.width + 'px';
+      layer.style.height = viewport.height + 'px';
+      layer.innerHTML = '';
+      const scaled = page.getViewport({ scale: cssScale * dpr });
+      return page.render({ canvasContext: ctx, viewport: scaled }).promise.then(function () {
+        if (!current()) throw new Error('Page changed while it was being read');
+        return page.getTextContent();
+      }).then(function (content) {
+        if (!current()) throw new Error('Page changed while its words were read');
+        const words = [];
+        const wordEls = [];
+        (content.items || []).forEach(function (item) {
+          const str = String(item.str == null ? '' : item.str);
+          if (!str || !str.replace(/\s+/g, '')) return;
+          if (!item.transform) return;
+          const tx = lib.Util.transform(viewport.transform, item.transform);
+          const fontHeight = Math.max(1, Math.hypot(tx[2], tx[3]));
+          const angle = Math.atan2(tx[1], tx[0]);
+          const span = document.createElement('span');
+          span.className = 'pdf-text-item';
+          span.style.left = tx[4] + 'px';
+          span.style.top = (tx[5] - fontHeight) + 'px';
+          span.style.fontSize = fontHeight + 'px';
+          span.style.lineHeight = '1';
+          span.style.fontFamily = 'sans-serif';
+          const parts = str.split(/(\s+)/);
+          parts.forEach(function (part) {
+            if (!part) return;
+            if (/^\s+$/.test(part)) {
+              span.appendChild(document.createTextNode(part));
+              return;
+            }
+            const word = document.createElement('span');
+            word.className = 'narrate-word pdf-word';
+            word.textContent = part;
+            span.appendChild(word);
+            words.push({ text: part });
+            wordEls.push(word);
+          });
+          layer.appendChild(span);
+          const natural = span.offsetWidth || span.getBoundingClientRect().width || 0;
+          const target = Math.abs(Number(item.width || 0) * viewport.scale) || natural;
+          const scaleX = (natural && target) ? target / natural : 1;
+          span.style.transformOrigin = '0 0';
+          span.style.transform = 'rotate(' + angle + 'rad)' +
+            (Math.abs(scaleX - 1) > 0.001 ? ' scaleX(' + scaleX + ')' : '');
+        });
+        wrap.classList.add('pdf-rendered');
+        try { page.cleanup(); } catch (e) {}
+        return { words: words, wordEls: wordEls, ratio: ratio };
+      });
+    });
+  });
+}
+
+function stopBookNarration(root, keepMode) {
+  const st = root && root._bookNarrator;
+  if (!root) return;
+  if (st) {
+    st.seq++;
+    st.loading = false;
+    if (st.controller) {
+      try { st.controller.stop(); } catch (e) {}
+      st.controller = null;
+    }
+    if (!keepMode) {
+      st.page = 0;
+      st.mode = false;
+      try { delete root.dataset.bookNarrate; } catch (e) { root.dataset.bookNarrate = ''; }
+    }
+  }
+  bookNarratorSync(root);
+}
+
+function bookPrepareNarration(root, opts) {
+  opts = opts || {};
+  const st = bookNarratorState(root);
+  const page = Number(root.dataset.page || 1);
+  if (!st) return Promise.resolve(null);
+  if (st.controller && st.page === page && !opts.force) return Promise.resolve(st.controller);
+  if (st.controller) {
+    try { st.controller.destroy(); } catch (e) {}
+    st.controller = null;
+  }
+  st.seq++;
+  const seq = st.seq;
+  st.loading = true;
+  st.mode = true;
+  root.dataset.bookNarrate = '1';
+  bookNarratorStatus(root, 'Preparing this page…');
+  bookNarratorSync(root);
+  return pdfRenderNarratedPage(root, page, seq).then(function (data) {
+    if (seq !== st.seq || Number(root.dataset.page) !== page) return null;
+    st.loading = false;
+    const bar = root.querySelector('[data-book-narrator]');
+    const controller = createNarrator({
+      controlsRoot: bar,
+      words: data.words,
+      wordEls: data.wordEls,
+      scrollWords: false,
+      status: data.words.length ? 'Press Play to hear this page.' : 'No readable text was found on this page.'
+    });
+    st.page = page;
+    st.controller = controller;
+    bookNarratorSync(root);
+    if (opts.autoPlay && data.words.length) controller.play();
+    return controller;
+  }).catch(function (e) {
+    if (seq !== st.seq) return null;
+    st.loading = false;
+    st.controller = null;
+    bookNarratorStatus(root, 'Read-aloud could not load this page: ' + (e.message || 'unknown error'));
+    bookNarratorSync(root);
+    return null;
+  });
+}
+
+function bookNarrateAction(root, action) {
+  if (!root) return null;
+  const st = bookNarratorState(root);
+  const page = Number(root.dataset.page || 1);
+  if (action === 'play') {
+    if (st.controller && st.page === page && !st.loading) {
+      st.controller.play();
+      bookNarratorSync(root);
+      return st.controller;
+    }
+    /* Keep the click's permission to speak while the page is prepared. Some
+       browsers only allow speech that begins while the user gesture is fresh. */
+    if (NARRATION_SUPPORTED) {
+      try {
+        const prime = new window.SpeechSynthesisUtterance(' ');
+        prime.volume = 0;
+        window.speechSynthesis.speak(prime);
+      } catch (e) {}
+    }
+    return bookPrepareNarration(root, { autoPlay: true });
+  }
+  if (action === 'pause') {
+    if (st.controller) st.controller.pause();
+    bookNarratorSync(root);
+    return st.controller;
+  }
+  if (action === 'stop') {
+    if (st.controller) st.controller.stop();
+    bookNarratorStatus(root, 'Stopped');
+    bookNarratorSync(root);
+    return st.controller;
+  }
+  return null;
+}
+
 function bookRootOf(el) { return el && el.closest ? el.closest('.book-reader') : null; }
 function bookGo(root, delta) {
   if (!root) return 1;
@@ -625,12 +1421,13 @@ function bookGo(root, delta) {
   let page = Number(root.dataset.page || min) + Number(delta || 0);
   if (page < min) page = min;
   if (total && page > total) page = total;
+  const changed = String(root.dataset.bookRendered || '') !== String(page);
   root.dataset.page = page;
   const no = root.querySelector('[data-book-page]');
   if (no) no.textContent = String(page);
   /* A fresh frame per page is the only reliable way to move the browser's PDF
      viewer: editing just the #page= fragment of a loaded frame is ignored. */
-  if (String(root.dataset.bookRendered || '') !== String(page)) {
+  if (changed) {
     root.dataset.bookRendered = String(page);
     bookScrollTo(root, 0);                 /* every leaf opens at its head */
     const frame = bookFrameHtml(root.dataset.book, page, root.dataset.bookTitle);
@@ -649,6 +1446,12 @@ function bookGo(root, delta) {
   }
   /* a rebuilt frame is a new sheet: keep it fitted to the space */
   bookFit(root);
+  /* Narration belongs to the page that is open now: a turn stops the old page
+     and prepares the new one, never reading pages the learner cannot see. */
+  if (changed && root.dataset.bookNarrate === '1') {
+    stopBookNarration(root, true);
+    bookPrepareNarration(root);
+  }
   /* a small page-turn flick so it reads like a book */
   const sheet = root.querySelector('.book-page');
   if (sheet && sheet.classList && delta) {
@@ -706,6 +1509,17 @@ if (typeof document !== 'undefined' && document.addEventListener) {
       }
       return;
     }
+    /* Read-aloud buttons under the PDF: play/pause/stop the open page only */
+    const narrateBtn = t.closest('[data-book-narrator] [data-narrate]');
+    if (narrateBtn) {
+      const root = bookRootOf(narrateBtn);
+      if (root) {
+        e.preventDefault();
+        bookActivate(root);
+        bookNarrateAction(root, narrateBtn.getAttribute('data-narrate'));
+      }
+      return;
+    }
     const turn = t.closest('[data-book-turn]');
     if (turn) {
       const root = bookRootOf(turn);
@@ -723,6 +1537,10 @@ if (typeof document !== 'undefined' && document.addEventListener) {
         const on = root.classList.toggle('book-full');
         full.textContent = on ? 'Close full page' : 'Full page';
         bookEnsureFit(root);          /* full page: the whole sheet may grow */
+        if (root.dataset.bookNarrate === '1') {
+          stopBookNarration(root, true);
+          bookPrepareNarration(root);
+        }
       }
       return;
     }
@@ -732,6 +1550,7 @@ if (typeof document !== 'undefined' && document.addEventListener) {
       const root = bookRootOf(closer);
       if (root) {
         e.preventDefault();
+        stopBookNarration(root);
         root.classList.remove('book-full');
         const holder = root.parentNode;
         if (root.dataset.bookBack === '1' && holder && root.insertAdjacentHTML) {
@@ -1042,6 +1861,7 @@ function exportReport(type, title, source) {
     d.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title>');
     d.write('<style>' + reportPrintCss + '</style></head><body>');
     d.write(escapeHtml(source.nodeType === 1 ? (source.outerHTML || source.innerHTML) : source));
+    d.write('<p class="muted small">Generated ' + esc(fmtDate(new Date().toISOString())) + '</p>');
     d.write('</body></html>');
     d.close();
     win.focus();
@@ -1063,7 +1883,8 @@ function exportReport(type, title, source) {
     toast('Exported as Excel (.csv)', 'ok');
   } else if (isWord) {
     const doc = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title>' +
-      '<style>' + reportPrintCss + '</style></head><body>' + escapeHtml(html) + '</body></html>';
+      '<style>' + reportPrintCss + '</style></head><body>' + escapeHtml(html) +
+      '<p class="muted small">Generated ' + esc(fmtDate(new Date().toISOString())) + '</p></body></html>';
     blobDownload(base + '.doc', doc, 'application/msword');
     toast('Exported as Word (.doc)', 'ok');
   }
@@ -1230,7 +2051,10 @@ function initCommunicationWidget() {
       return '<button type="button" class="cbp-comms-item' + (n.readAt ? '' : ' unread') +
         '" data-comms-notification="' + esc(n.id) + '">' +
         '<b>' + esc(n.title) + '</b><span>' + esc(n.body) + '</span>' +
-        '<small>' + esc(fmtDate(n.createdAt)) + '</small></button>';
+        '<small>' + esc(fmtDate(n.createdAt)) + '</small>' +
+        /* a video alert carries a library video the learner can play from here */
+        (n.libraryId ? '<i class="cbp-comms-play">\u25B6 Play video</i>' : '') +
+        '</button>';
     }).join('') + '</div>';
   }
 
@@ -1278,7 +2102,14 @@ function initCommunicationWidget() {
       if (!notification) return;
       try {
         await API.put('/notifications/' + encodeURIComponent(notification.id) + '/read');
-        if (notification.conversationId) {
+        if (notification.libraryId) {
+          /* a video alert: play it here when this page can, otherwise open it in
+             a new tab so the link always works */
+          const played = typeof window.cbpOpenVideoAlert === 'function' &&
+            window.cbpOpenVideoAlert(notification.libraryId, notification.videoUrl || null);
+          if (!played && notification.videoUrl) window.open(notification.videoUrl, '_blank', 'noopener');
+          await load(); draw();
+        } else if (notification.conversationId) {
           await load();
           state.activeId = notification.conversationId; state.screen = 'thread'; draw();
         } else if (notification.studentId) {
@@ -1313,4 +2144,88 @@ function initCommunicationWidget() {
   window.setInterval(function () {
     if (!document.hidden) load().catch(function (e) { console.error('[messages] Failed to refresh unread counts:', e); });
   }, 30000);
+}
+
+/* ================================================ best-performer ribbon ==== */
+/* One belt for every page that shows it: the students page, the student progress
+   page and the learner's own dashboard. It carries the best 50 learners of the
+   account — faces, names, marks and coverage — drifting from left to right.
+   Profile photos are used when the server exposes one, otherwise initials are
+   painted behind it. */
+function performerInitials(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
+}
+function ribbonChipHtml(p) {
+  const rank = Number(p.rank) || 0;
+  const marks = p.marks == null ? '—' : p.marks + '%';
+  const coverage = p.coverage == null ? '—' : p.coverage + '%';
+  const title = (p.name || 'Learner') + ' — marks ' + marks + ' · coverage ' + coverage +
+    (p.className ? ' · ' + p.className : '');
+  return '<div class="pp-chip rank-' + rank + '" title="' + esc(title) + '">' +
+    '<span class="pp-face">' +
+      '<span class="pp-initials">' + esc(performerInitials(p.name)) + '</span>' +
+      (p.photo ? '<img src="' + esc(p.photo) + '" alt="">' : '') +
+      '<span class="pp-rank">' + rank + '</span>' +
+    '</span>' +
+    '<span class="pp-who"><b>' + esc(p.displayName || p.name || 'Learner') + '</b>' +
+      '<span class="pp-marks">Marks ' + esc(marks) + '</span>' +
+      '<span class="pp-cover">Coverage ' + esc(coverage) + '</span></span>' +
+  '</div>';
+}
+/* The belt shows this account's best 50 learners, so it asks the ranking for 50
+   and never more. A role that may not read the ranking gets nothing back — that
+   returns null, which draws no belt at all instead of an empty one. */
+async function ribbonPerformers() {
+  try {
+    const res = await API.get('/reports/top-performers?limit=50');
+    return Array.isArray(res.performers) ? res.performers : [];
+  } catch (e) {
+    return null;
+  }
+}
+/* a profile photo that cannot load must never leave a broken image in a chip */
+function wireRibbonPhotos(root) {
+  if (!root || !root.querySelectorAll) return;
+  root.querySelectorAll('.pp-chip img').forEach(function (img) {
+    img.onerror = function () { img.remove(); };
+  });
+}
+function ribbonHtml(rows) {
+  /* null means "this role may not read the ranking": draw nothing at all */
+  if (rows == null) return '';
+  rows = (rows || []).slice(0, 50).filter(function (p) { return p && p.name; });
+  /* An account whose learners have no marks yet still keeps the belt on the page,
+     so it can never silently disappear again: the belt says what it waits for. */
+  if (!rows.length) {
+    return '<div class="pp-ribbon is-empty">' +
+      '<div class="pp-ribbon-head"><h3>Best performers</h3>' +
+        '<span class="pp-ribbon-note">top 50 · marks + coverage</span></div>' +
+      '<p class="pp-ribbon-empty">Nothing to rank yet. The best 50 learners of this account ' +
+        'appear here, drifting from left to right, as soon as they score marks or cover part of ' +
+        'the programme.</p></div>';
+  }
+  /* A long list drifts from left to right: repeat it until it fills a wide screen,
+     then duplicate that block so the loop never shows a gap between the last and
+     the first learner. A short list would only repeat the same few faces, so it
+     stands still and wraps instead. */
+  const quiet = rows.length < 4;
+  const reps = quiet ? 1 : Math.min(4, Math.max(1, Math.ceil(16 / rows.length)));
+  let block = '';
+  for (let r = 0; r < reps; r++) block += rows.map(ribbonChipHtml).join('');
+  const seconds = Math.max(18, Math.round(rows.length * reps * 2.2));
+  return '<div class="pp-ribbon">' +
+    '<div class="pp-ribbon-head"><h3>Best performers</h3>' +
+      '<span class="pp-ribbon-note">top ' + rows.length + ' · marks + coverage</span></div>' +
+    '<div class="pp-ribbon-view">' +
+      '<div class="pp-ribbon-track' + (quiet ? ' is-static' : '') +
+        '" style="--pp-duration:' + seconds + 's">' +
+        '<div class="pp-ribbon-group">' + block + '</div>' +
+        '<div class="pp-ribbon-group" aria-hidden="true">' + block + '</div>' +
+      '</div></div>' +
+    '<p class="pp-ribbon-foot">' + (quiet ? '' : 'Hover to pause. ') +
+      'Ranked by marks scored and programme coverage, ' +
+      'learners of this account only.</p></div>';
 }

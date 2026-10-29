@@ -32,7 +32,7 @@ function r_flow_optional_seen($user, $body, $params, $token, $query) {
 function r_assessment_get($user, $body, $params, $token, $query) {
   global $PARTICIPANTS;
   require_role($user, $PARTICIPANTS);
-  $def = assessment_def();
+  $def = assessment_active_def(assessment_def());
   $pre = $user['assessment_pre'] ?? null;
   $post = $user['assessment_post'] ?? null;
   return [
@@ -51,7 +51,7 @@ function r_assessment_pre($user, $body, $params, $token, $query) {
   global $PARTICIPANTS;
   require_role($user, $PARTICIPANTS);
   need(empty($user['assessment_pre']), 'Your pre-score has already been submitted', 400);
-  $def = assessment_def();
+  $def = assessment_active_def(assessment_def());
   $answers = assessment_answers($body, $def);
   $t = assessment_totals($answers, $def);
   $record = ['answers' => $answers, 'total' => $t['total'], 'max' => $t['max'], 'at' => iso(now_dt())];
@@ -64,7 +64,7 @@ function r_assessment_post($user, $body, $params, $token, $query) {
   require_role($user, $PARTICIPANTS);
   need(flow_for($user)['allDone'], 'The post-score opens after the last module is complete', 400);
   need(empty($user['assessment_post']), 'Your post-score has already been submitted', 400);
-  $def = assessment_def();
+  $def = assessment_active_def(assessment_def());
   $answers = assessment_answers($body, $def);
   $t = assessment_totals($answers, $def);
   $record = ['answers' => $answers, 'total' => $t['total'], 'max' => $t['max'], 'at' => iso(now_dt())];
@@ -164,6 +164,103 @@ function r_chapter_objectives($user, $body, $params, $token, $query) {
   }
   return ['submitted' => false, 'objectives' => $out];
 }
+/* ------------------------------------------------------------- reading --- */
+/* One row per book open (mirrors the Node route). A book is either a book of a
+   module or a book kept in the library; both are counted by the analytics. */
+function reading_target(array $user, array $body): array {
+    $pdo = db();
+    $bookId = trim((string)($body['bookId'] ?? $body['book_id'] ?? ''));
+    $libraryId = trim((string)($body['libraryId'] ?? $body['library_id'] ?? ''));
+    need($bookId !== '' || $libraryId !== '', 'Send the book that was opened');
+    if ($bookId !== '') {
+        $st = $pdo->prepare('SELECT * FROM books WHERE id=? LIMIT 1');
+        $st->execute([$bookId]);
+        $row = $st->fetch();
+        need($row, 'Book not found', 404);
+        need($row['scope'] === 'global' || $row['scope'] === $user['tenant_id'], 'Not available', 403);
+        $lib = !empty($row['library_id']) ? get_library((string)$row['library_id']) : null;
+        return ['kind' => 'module', 'bookId' => $row['id'], 'libraryId' => $lib ? $lib['id'] : null,
+            'title' => $row['title'] ?: ($lib ? $lib['title'] : 'Book')];
+    }
+    $item = get_library($libraryId);
+    need($item, 'Library item not found', 404);
+    need($item['type'] === 'book', 'Only books are counted');
+    need($item['scope'] === 'global' || $item['scope'] === $user['tenant_id'], 'Not available', 403);
+    return ['kind' => 'library', 'bookId' => null, 'libraryId' => $item['id'], 'title' => $item['title']];
+}
+
+function r_reading_open(array $user, array $body, array $params, ?string $token, array $query): array {
+    global $PARTICIPANTS;
+    require_role($user, $PARTICIPANTS);
+    $target = reading_target($user, $body);
+    $key = $target['bookId'] !== null ? 'book:' . $target['bookId'] : 'library:' . $target['libraryId'];
+    /* before migrate.php there is nowhere to keep the history: the book still
+       opens, the open is simply not counted yet */
+    if (!has_table('book_opens')) return ['key' => $key, 'timesOpened' => 0];
+    $pdo = db();
+    $pdo->prepare('INSERT INTO book_opens (id,tenant_id,user_id,kind,book_id,library_id,title,opened_at)
+        VALUES (?,?,?,?,?,?,?,?)')->execute([uid('opn'), $user['tenant_id'], $user['id'],
+            $target['kind'], $target['bookId'], $target['libraryId'],
+            mb_substr((string)$target['title'], 0, 255), now_dt()]);
+    if ($target['bookId'] !== null) {
+        $st = $pdo->prepare('SELECT COUNT(*) FROM book_opens WHERE user_id=? AND book_id=?');
+        $st->execute([$user['id'], $target['bookId']]);
+    } else {
+        $st = $pdo->prepare('SELECT COUNT(*) FROM book_opens WHERE user_id=? AND book_id IS NULL AND library_id=?');
+        $st->execute([$user['id'], $target['libraryId']]);
+    }
+    return ['key' => $key, 'timesOpened' => (int)$st->fetchColumn()];
+}
+
+/* Every third completed chapter earns one library video, chosen at random from
+   the ones this learner has never been sent. It arrives as an alert in the
+   messages, where the learner can play it. */
+function completed_chapter_count(array $user): int {
+    $st = db()->prepare("SELECT COUNT(DISTINCT chapter_id) FROM submissions
+        WHERE user_id=? AND chapter_id IS NOT NULL AND type IN ('chapter_summary','objectives')");
+    $st->execute([$user['id']]);
+    return (int)$st->fetchColumn();
+}
+
+function maybe_send_video_alert(array $user, array $submission): ?array {
+    if (empty($submission['chapter_id'])) return null;
+    if (!in_array($user['role'] ?? '', ['student', 'member'], true)) return null;
+    /* the alerts table arrives with migrate.php; without it nothing is sent */
+    if (!has_table('video_alerts')) return null;
+    $chapters = completed_chapter_count($user);
+    if (!$chapters || $chapters % 3 !== 0) return null;
+    $pdo = db();
+    $milestone = 'chapters:' . $chapters;
+    $st = $pdo->prepare('SELECT 1 FROM video_alerts WHERE user_id=? AND milestone=? LIMIT 1');
+    $st->execute([$user['id'], $milestone]);
+    if ($st->fetchColumn()) return null;
+    $st = $pdo->prepare('SELECT library_id FROM video_alerts WHERE user_id=?');
+    $st->execute([$user['id']]);
+    $sent = array_map('strval', array_column($st->fetchAll(), 'library_id'));
+    $st = $pdo->prepare("SELECT id,title,url FROM library WHERE type='video'
+        AND url IS NOT NULL AND url<>'' AND (scope='global' OR scope=?)");
+    $st->execute([$user['tenant_id']]);
+    $videos = array_values(array_filter($st->fetchAll(),
+        fn($video) => !in_array((string)$video['id'], $sent, true)));
+    if (!count($videos)) return null;
+    $video = $videos[random_int(0, count($videos) - 1)];
+    $id = uid('val');
+    $createdAt = now_dt();
+    $pdo->prepare('INSERT INTO video_alerts (id,tenant_id,user_id,library_id,title,video_url,
+        milestone,chapters_completed,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+        ->execute([$id, $user['tenant_id'], $user['id'], $video['id'], $video['title'],
+            $video['url'], $milestone, $chapters, $createdAt]);
+    create_notification($user['id'], [
+        'type' => 'video_alert', 'title' => 'A video has been unlocked for you',
+        'body' => 'You finished ' . $chapters . ' chapters. Watch "' . $video['title'] .
+            '" from the library whenever you like.',
+        'libraryId' => $video['id'], 'videoUrl' => $video['url'],
+    ]);
+    return ['id' => $id, 'tenantId' => $user['tenant_id'], 'userId' => $user['id'],
+        'libraryId' => $video['id'], 'title' => $video['title'], 'videoUrl' => $video['url'],
+        'milestone' => $milestone, 'chaptersCompleted' => $chapters, 'createdAt' => iso($createdAt)];
+}
+
 function r_submissions($user, $body, $params, $token, $query) {
   global $PARTICIPANTS;
   require_role($user, $PARTICIPANTS);
@@ -320,8 +417,11 @@ function r_submissions($user, $body, $params, $token, $query) {
         jenc($kw['keywordsCovered']), jenc($kw['keywordsMissing']), $newRow['id']]);
   }
   create_submission_notification($user, $newRow);
+  /* every third finished chapter may unlock a library video as an alert */
+  $videoAlert = maybe_send_video_alert($user, $newRow);
   if (!empty($newRow['flagged'])) $warn = 'Your submission was flagged for similarity review.';
-  return ['submission' => sub_meta(n_sub($newRow)), 'assessment' => $kw, 'warning' => $warn];
+  return ['submission' => sub_meta(n_sub($newRow)), 'assessment' => $kw, 'warning' => $warn,
+      'videoAlert' => $videoAlert];
 }
 function flow_ensure_general($user) {
   $pdo = db();
@@ -491,11 +591,11 @@ function r_library_get($user, $body, $params, $token, $query) {
     if ($isAdmin) {
       $row['canEdit'] = ($user['role'] === 'super') ? true : (($r['scope'] ?? '') === ($user['tenant_id'] ?? ''));
     }
-    /* learners may not open the books before they finish every module */
-    if (!$isAdmin && ($r['type'] ?? '') === 'book' && !empty($r['url']) && !$allDone) {
+    /* learners may not open the books or letters before they finish every module */
+    if (!$isAdmin && in_array($r['type'] ?? '', ['book','letter'], true) && !empty($r['url']) && !$allDone) {
       $row['url'] = null;
       $row['locked'] = true;
-      $row['lockedReason'] = 'Finish every module to open the books.';
+      $row['lockedReason'] = 'Finish every module to open the ' . ($r['type'] ?? 'item') . 's.';
     }
     $out[] = $row;
   }

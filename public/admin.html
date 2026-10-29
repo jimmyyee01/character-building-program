@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Admin Console</title>
-<link rel="stylesheet" href="/css/style.css?v=32">
+<link rel="stylesheet" href="/css/style.css?v=44">
 <style>
   .view { display: none; }
   .view.active { display: block; }
@@ -55,7 +55,9 @@
       <button type="button" class="nav-btn" data-view="certificates">Certificates</button>
       <button type="button" class="nav-btn" data-view="analytics">Analytics</button>
       <button type="button" class="nav-btn" data-view="progress">Student progress</button>
+      <button type="button" class="nav-btn" data-view="lessons">Live Lessons</button>
       <button type="button" class="nav-btn admin-only" data-view="branding">Branding</button>
+
     </nav>
   </aside>
   <main class="main">
@@ -75,13 +77,14 @@
     <section id="view-progress" class="view"></section>
     <section id="view-analytics" class="view"></section>
     <section id="view-branding" class="view"></section>
+    <section id="view-lessons" class="view"></section>
   </main>
 </div>
 
 <div id="modalRoot"></div>
 <div id="studentDetailModal" class="hidden"></div>
 
-<script src="/js/common.js?v=32"></script>
-<script src="/js/admin.js?v=32"></script>
+<script src="/js/common.js?v=44"></script>
+<script src="/js/admin.js?v=44"></script>
 </body>
 </html>

@@ -277,6 +277,22 @@ function has_column(string $table, string $column): bool {
     return $cache[$key];
 }
 
+/* A read-only build can meet a database that has not been migrated yet (the
+   reading tables arrive with migrate.php), so ask before querying them. */
+function has_table(string $table): bool {
+    static $cache = [];
+    if (array_key_exists($table, $cache)) return $cache[$table];
+    try {
+        $st = db()->prepare('SELECT COUNT(*) FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?');
+        $st->execute([$table]);
+        $cache[$table] = ((int)$st->fetchColumn()) > 0;
+    } catch (Throwable $e) {
+        $cache[$table] = false;
+    }
+    return $cache[$table];
+}
+
 /* ------------------------------------------ key words (typed answers) ----- */
 /* Module 1 is MODE: SUMMARY, so chapters are answered by typing. Each chapter
    carries key words from its own text; an admin can curate them, otherwise they
@@ -470,16 +486,80 @@ function flow_for(array $user): array {
             'percent' => $m['progress']['percent'], 'stage' => $m['progress']['stage']], $modules)];
 }
 /* ============================================ self-assessment (pre/post) === */
-/* One shared definition (assessment.json at the repo root) serves BOTH
-   backends, so the categories, statements and 1-5 scale can never drift apart.
-   Cached per request-process like other static programme content. */
+/* The definition is seeded from assessment.json on first use, then owned by
+   settings.assessment_json so the super admin can add, edit and delete
+   categories and objective questions after deployment. */
+function assessment_default_scale(): array {
+    return [
+        ['value' => 1, 'label' => 'Strongly Disagree'], ['value' => 2, 'label' => 'Disagree'],
+        ['value' => 3, 'label' => 'Neutral'], ['value' => 4, 'label' => 'Agree'],
+        ['value' => 5, 'label' => 'Strongly Agree'],
+    ];
+}
+function assessment_default_def(): array {
+    $raw = @file_get_contents(__DIR__ . '/../assessment.json');
+    $def = $raw ? json_decode($raw, true) : null;
+    return assessment_normalize(is_array($def) ? $def : []);
+}
+function assessment_normalize($def): array {
+    $def = is_array($def) ? $def : [];
+    $scale = (isset($def['scale']) && is_array($def['scale']) && count($def['scale']))
+        ? $def['scale'] : assessment_default_scale();
+    $categories = [];
+    foreach (($def['categories'] ?? []) as $ci => $c) {
+        if (!is_array($c) || empty($c['id']) || empty($c['title'])) continue;
+        $statements = [];
+        foreach (($c['statements'] ?? []) as $si => $s) {
+            if (!is_array($s) || empty($s['id']) || empty($s['text'])) continue;
+            $statements[] = [
+                'id' => (string)$s['id'],
+                'text' => trim((string)$s['text']),
+                'order' => isset($s['order']) && is_numeric($s['order']) ? (int)$s['order'] : $si + 1,
+            ];
+        }
+        $categories[] = [
+            'id' => (string)$c['id'],
+            'title' => trim((string)$c['title']),
+            'order' => isset($c['order']) && is_numeric($c['order']) ? (int)$c['order'] : $ci + 1,
+            'statements' => $statements,
+        ];
+    }
+    return ['scale' => $scale, 'note' => (string)($def['note'] ?? ''), 'categories' => $categories];
+}
 function assessment_def(): array {
     static $def = null;
-    if ($def === null) {
-        $raw = @file_get_contents(__DIR__ . '/../assessment.json');
-        $def = $raw ? json_decode($raw, true) : ['scale' => [], 'categories' => []];
-        if (!is_array($def)) $def = ['scale' => [], 'categories' => []];
+    if ($def !== null) return $def;
+    $stored = null;
+    if (has_column('settings', 'assessment_json')) {
+        $settings = get_settings();
+        $stored = jdec($settings['assessment_json'] ?? null, null);
     }
+    if (!is_array($stored) || empty($stored['categories'])) {
+        $stored = assessment_default_def();
+        if (has_column('settings', 'assessment_json')) {
+            try {
+                db()->prepare('UPDATE settings SET assessment_json=? WHERE id=1')
+                    ->execute([jenc($stored)]);
+            } catch (Throwable $e) { /* read-only fallback until migration runs */ }
+        }
+    }
+    $def = assessment_normalize($stored);
+    return $def;
+}
+function assessment_save(array $def): array {
+    $def = assessment_normalize($def);
+    need(has_column('settings', 'assessment_json'),
+        'Run migrate.php first: settings.assessment_json is missing', 500);
+    db()->prepare('UPDATE settings SET assessment_json=? WHERE id=1')
+        ->execute([jenc($def)]);
+    return $def;
+}
+/* Empty categories are still being set up; participants and reports only see
+   categories that already carry at least one objective question. */
+function assessment_active_def(array $def): array {
+    $def = assessment_normalize($def);
+    $def['categories'] = array_values(array_filter($def['categories'],
+        fn($c) => count($c['statements'] ?? []) > 0));
     return $def;
 }
 function assessment_statement_ids(array $def): array {
@@ -488,12 +568,49 @@ function assessment_statement_ids(array $def): array {
         foreach (($c['statements'] ?? []) as $s) $ids[] = (string)$s['id'];
     return $ids;
 }
+function assessment_statement_count(array $def): int {
+    $n = 0;
+    foreach (($def['categories'] ?? []) as $c) $n += count($c['statements'] ?? []);
+    return $n;
+}
+function assessment_category_index(array $def, string $id): ?int {
+    foreach (($def['categories'] ?? []) as $i => $c) if ((string)$c['id'] === $id) return $i;
+    return null;
+}
+function assessment_statement_find(array $def, string $id): ?array {
+    foreach (($def['categories'] ?? []) as $ci => $c) {
+        foreach (($c['statements'] ?? []) as $si => $s) {
+            if ((string)$s['id'] === $id) return ['categoryIndex' => $ci, 'statementIndex' => $si];
+        }
+    }
+    return null;
+}
+function assessment_category_id(array $def, string $title): string {
+    $base = slugify($title) ?: 'category';
+    $used = [];
+    foreach (($def['categories'] ?? []) as $c) $used[(string)$c['id']] = true;
+    $id = $base; $n = 2;
+    while (isset($used[$id])) $id = $base . '-' . $n++;
+    return $id;
+}
+function assessment_statement_id(array $category): string {
+    $used = [];
+    foreach (($category['statements'] ?? []) as $s) $used[(string)$s['id']] = true;
+    /* never reuse a deleted question's id: historical pre/post answers are keyed
+       by it, and a new question must not inherit somebody else's ratings */
+    do {
+        $id = $category['id'] . '-' . bin2hex(random_bytes(3));
+    } while (isset($used[$id]));
+    return $id;
+}
 /* Every statement must be rated with an integer 1-5 — anything else is
    rejected before it can be stored, so a total always means something. */
 function assessment_answers($body, array $def): array {
     $raw = is_array($body['answers'] ?? null) ? $body['answers'] : [];
+    $ids = assessment_statement_ids($def);
+    need(count($ids) > 0, 'The self-assessment has no objective questions yet', 400);
     $answers = [];
-    foreach (assessment_statement_ids($def) as $id) {
+    foreach ($ids as $id) {
         $v = is_numeric($raw[$id] ?? null) ? $raw[$id] : null;
         need($v !== null && (string)(int)$v === (string)(float)$v
             && (int)$v >= 1 && (int)$v <= 5, 'Please rate every statement from 1 to 5', 400);
@@ -511,6 +628,41 @@ function assessment_totals(array $answers, array $def): array {
     }
     return ['total' => $total, 'max' => count(assessment_statement_ids($def)) * 5,
         'byCategory' => $byCategory];
+}
+/* Compact pre/post summary used by both progress reports and the popup. */
+function assessment_report(array $user, array $def): array {
+    $def = assessment_active_def($def);
+    $one = function ($record) use ($def) {
+        if (!is_array($record) || !is_array($record['answers'] ?? null)) return null;
+        $t = assessment_totals($record['answers'], $def);
+        $categories = [];
+        foreach ($def['categories'] as $c) {
+            $v = $t['byCategory'][(string)$c['id']] ?? ['total' => 0, 'max' => 0];
+            $categories[] = ['id' => $c['id'], 'title' => $c['title'],
+                'total' => $v['total'], 'max' => $v['max'],
+                'percent' => $v['max'] ? (int)round($v['total'] / $v['max'] * 100) : 0];
+        }
+        return ['at' => $record['at'] ?? null, 'total' => $t['total'], 'max' => $t['max'],
+            'percent' => $t['max'] ? (int)round($t['total'] / $t['max'] * 100) : 0,
+            'categories' => $categories];
+    };
+    $pre = $one($user['assessment_pre'] ?? null);
+    $post = $one($user['assessment_post'] ?? null);
+    return ['pre' => $pre, 'post' => $post,
+        'growth' => ($pre && $post) ? $post['total'] - $pre['total'] : null];
+}
+function assessment_public_def(array $def): array {
+    $def = assessment_normalize($def);
+    $categories = [];
+    foreach ($def['categories'] as $c) {
+        $categories[] = ['id' => $c['id'], 'title' => $c['title'], 'order' => $c['order'],
+            'max' => count($c['statements']) * 5, 'statements' => array_map(
+                fn($s) => ['id' => $s['id'], 'text' => $s['text'], 'order' => $s['order']],
+                $c['statements'])];
+    }
+    $count = assessment_statement_count($def);
+    return ['scale' => $def['scale'], 'note' => $def['note'], 'categories' => $categories,
+        'statementCount' => $count, 'max' => $count * 5];
 }
 /* Deterministic shuffle, seeded per user+session+day (shuffles each login). */
 function shuffle_with_seed(array $arr, string $seed): array {

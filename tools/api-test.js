@@ -34,10 +34,15 @@ async function main() {
     r.ok && (r.data.features || []).indexOf('super.analytics') !== -1 &&
     (r.data.features || []).indexOf('admin.analytics') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
-  check('this deployment includes calendar-year period marks rankings',
-    r.ok && r.data.build === '2026-10-19-self-assessment' &&
+  check('the login serves the live top-performers build and its features',
+    r.ok && r.data.build === '2026-10-29-reading-ribbon' &&
       (r.data.features || []).indexOf('reports.module-performers') !== -1 &&
-      (r.data.features || []).indexOf('assessment') !== -1,
+      (r.data.features || []).indexOf('reports.top-performers') !== -1 &&
+      (r.data.features || []).indexOf('public.top-performers') !== -1 &&
+      (r.data.features || []).indexOf('reading.activity') !== -1 &&
+      (r.data.features || []).indexOf('reading.video-alerts') !== -1 &&
+      (r.data.features || []).indexOf('assessment') !== -1 &&
+      (r.data.features || []).indexOf('assessment.admin') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
   check('this deployment includes scoped student details',
     r.ok && (r.data.features || []).indexOf('reports.student-detail') !== -1,
@@ -54,6 +59,25 @@ async function main() {
   check('GET /public/tenant/<slug>', r.ok && r.data.tenant && r.data.tenant.name, 'status ' + r.status);
   check('tenant branding exposes themeColor', !!(r.data.branding && 'themeColor' in r.data.branding));
 
+  r = await call('/public/top-performers?slug=greenfield-academy');
+  check('GET /public/top-performers returns a ranked top-ten list for the login page',
+    r.ok && r.data.tenant && r.data.tenant.slug === 'greenfield-academy' &&
+      Array.isArray(r.data.performers) && r.data.performers.length <= 10 &&
+      r.data.performers.every(function (p, i, rows) {
+        return p.name && p.displayName && typeof p.score === 'number' &&
+          p.score >= 0 && p.score <= 100 && p.rank === i + 1 &&
+          (i === 0 || rows[i - 1].score >= p.score);
+      }),
+    'status ' + r.status + ' count ' + ((r.data.performers || []).length));
+  check('login-page top performers exclude learners who completed every module',
+    r.ok && !(r.data.performers || []).some(function (p) { return p.name === 'Grace Graduate'; }),
+    JSON.stringify((r.data.performers || []).map(function (p) { return p.name; })));
+  const limitedPerformers = await call('/public/top-performers?slug=greenfield-academy&limit=2');
+  check('login-page top performers honour the small display limit',
+    limitedPerformers.ok && (limitedPerformers.data.performers || []).length <= 2);
+  check('login-page top performers require an account slug',
+    (await call('/public/top-performers')).status === 400);
+
   const sr = await call('/auth/super-login', { method: 'POST', body: { username: 'superadmin', password: 'SuperAdmin@123' } });
   check('super admin login', sr.ok && sr.data.token, JSON.stringify(sr.data).slice(0, 120));
   const superToken = sr.data.token;
@@ -62,6 +86,11 @@ async function main() {
   check('GET /super/tenants', r.ok && (r.data.tenants || []).length >= 4, 'status ' + r.status);
   r = await call('/super/users', null, superToken);
   check('GET /super/users', r.ok && (r.data.users || []).length >= 8, 'count ' + (r.data.users || []).length);
+  r = await call('/super/assessment', null, superToken);
+  check('super admin can read the editable self-assessment definition',
+    r.ok && r.data.assessment && (r.data.assessment.categories || []).length > 0 &&
+      r.data.assessment.statementCount > 0,
+    JSON.stringify(r.data).slice(0, 180));
 
   const portals = [
     ['greenfield-academy', 'admin@greenfield.edu', 'Admin@123', 'schools'],
@@ -100,45 +129,60 @@ async function main() {
 main().catch(function (e) { console.log('FATAL ' + e.message); process.exit(1); });
 
 async function part2(r, tok, check) {
-  r = await call('/users', { method: 'POST', body: { role: 'teacher', fullName: 'API Teacher', email: 'api.teacher@greenfield.edu', password: 'Teacher@123' } }, tok.schools);
+  /* each run makes its own people, so the suite can be run again on the same
+     database without meeting "an account with those details already exists" */
+  const run = Date.now().toString(36).slice(-5);
+  const teacherEmail = 'api.teacher.' + run + '@greenfield.edu';
+  const supervisorEmail = 'api.sup.' + run + '@horizon.org';
+  r = await call('/users', { method: 'POST', body: { role: 'teacher', fullName: 'API Teacher', email: teacherEmail, password: 'Teacher@123' } }, tok.schools);
   check('schools admin creates teacher', r.ok, JSON.stringify(r.data).slice(0, 140));
-  r = await call('/users', { method: 'POST', body: { role: 'student', fullName: 'API Student', studentNumber: 'STU-API', password: 'Student@123' } }, tok.schools);
+  r = await call('/users', { method: 'POST', body: { role: 'student', fullName: 'API Student', studentNumber: 'STU-API-' + run, password: 'Student@123' } }, tok.schools);
   check('schools admin creates student with supervisor assignment or waitlist',
     r.ok && r.data.user && (r.data.user.supervisorId || r.data.user.supervisorWaitlisted),
     JSON.stringify(r.data).slice(0, 180));
 
   r = await call('/users', { method: 'POST', body: { role: 'member', fullName: 'Nope', email: 'nope@horizon.org', password: 'Member@123' } }, tok.organization);
   check('org admin CANNOT create member (403)', r.status === 403, 'status ' + r.status);
-  r = await call('/users', { method: 'POST', body: { role: 'supervisor', fullName: 'API Supervisor', email: 'api.sup@horizon.org', password: 'Super@123' } }, tok.organization);
+  r = await call('/users', { method: 'POST', body: { role: 'supervisor', fullName: 'API Supervisor', email: supervisorEmail, password: 'Super@123' } }, tok.organization);
   check('org admin creates supervisor', r.ok, JSON.stringify(r.data).slice(0, 160));
   const newSup = r.data.user || {};
   check('supervisor gets an access code', !!newSup.supervisorCode, JSON.stringify(newSup).slice(0, 140));
   check('supervisor is not nested under another', newSup.supervisorId === null || newSup.supervisorId === undefined);
 
   if (newSup.id) {
-    const sl = await call('/auth/login', { method: 'POST', body: { slug: 'horizon-alliance', identifier: 'api.sup@horizon.org', password: 'Super@123' } });
+    const sl = await call('/auth/login', { method: 'POST', body: { slug: 'horizon-alliance', identifier: supervisorEmail, password: 'Super@123' } });
     check('new supervisor can log in', sl.ok && sl.data.token, JSON.stringify(sl.data).slice(0, 120));
     const st = sl.data.token;
-    r = await call('/users', { method: 'POST', body: { role: 'member', fullName: 'Sup Member', email: 'sup.member1@horizon.org', password: 'Member@123' } }, st);
+    r = await call('/users', { method: 'POST', body: { role: 'member', fullName: 'Sup Member', email: 'sup.member.' + run + '@horizon.org', password: 'Member@123' } }, st);
     check('supervisor creates member under self', r.ok && r.data.user && r.data.user.supervisorId === newSup.id, JSON.stringify(r.data.user || {}).slice(0, 160));
     r = await call('/users', null, st);
     check('supervisor quota max = 100 (GET /users)', r.data.limit && r.data.limit.max === 100, JSON.stringify(r.data.limit || {}));
-    r = await call('/users', { method: 'POST', body: { role: 'tenant_admin', fullName: 'No Escalate', email: 'no.escalate@horizon.org', password: 'Abc12345' } }, st);
+    r = await call('/users', { method: 'POST', body: { role: 'tenant_admin', fullName: 'No Escalate', email: 'no.escalate.' + run + '@horizon.org', password: 'Abc12345' } }, st);
     check('supervisor cannot escalate (created as member or 403)',
       (r.status === 403) || (r.ok && r.data.user && r.data.user.role === 'member'),
       'status ' + r.status + ' role ' + ((r.data.user || {}).role));
-    r = await call('/users', { method: 'POST', body: { role: 'supervisor', fullName: 'No Sup', email: 'no.sup@horizon.org', password: 'Abc12345' } }, st);
+    r = await call('/users', { method: 'POST', body: { role: 'supervisor', fullName: 'No Sup', email: 'no.sup.' + run + '@horizon.org', password: 'Abc12345' } }, st);
     check('supervisor cannot create supervisors (member or 403)',
       (r.status === 403) || (r.ok && r.data.user && r.data.user.role === 'member'),
       'status ' + r.status + ' role ' + ((r.data.user || {}).role));
     r = await call('/reports/students', null, st);
     check('GET /reports/students (supervisor sees own members)',
       r.ok && Array.isArray(r.data.students), 'status ' + r.status);
+    check('student progress report carries self-assessment category totals',
+      r.ok && Array.isArray(r.data.assessmentCategories) &&
+        r.data.assessmentCategories.length > 0 &&
+        r.data.students.every(s => s.assessment && 'pre' in s.assessment && 'post' in s.assessment),
+      'categories ' + ((r.data.assessmentCategories || []).length));
     if (r.data.students && r.data.students.length) {
       const member = r.data.students[0];
       r = await call('/reports/student-detail?studentId=' + encodeURIComponent(member.id), null, st);
       check('GET /reports/student-detail (supervisor sees own member submissions)',
         r.ok && Array.isArray(r.data.submissions) && typeof r.data.count === 'number',
+        'status ' + r.status);
+      r = await call('/reports/student-assessment?studentId=' + encodeURIComponent(member.id), null, st);
+      check('GET /reports/student-assessment (statement-level pre/post detail)',
+        r.ok && Array.isArray(r.data.categories) &&
+          r.data.categories.every(c => Array.isArray(c.statements)),
         'status ' + r.status);
     }
   }

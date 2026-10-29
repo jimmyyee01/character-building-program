@@ -54,13 +54,17 @@ const post = (p, body, token) => api(p, token, {
   check('a learner cannot open account analytics (403)', denied.ok === false && denied.error, JSON.stringify(denied).slice(0, 120));
 
   /* ---- the person a copy flag is connected to ---- */
-  /* two fresh learners so the check never depends on other tests' progress */
-  const mkA = await post('/users', { role: 'student', fullName: 'Copy Check A', studentNumber: 'STU-901', password: 'Student@123' }, gf.token);
-  const mkB = await post('/users', { role: 'student', fullName: 'Copy Check B', studentNumber: 'STU-902', password: 'Student@123' }, gf.token);
+  /* two fresh learners so the check never depends on other tests' progress, and
+     so running it twice on the same database never collides */
+  const run = Date.now().toString(36).slice(-5);
+  const numA = 'STU-901-' + run;
+  const numB = 'STU-902-' + run;
+  const mkA = await post('/users', { role: 'student', fullName: 'Copy Check A', studentNumber: numA, password: 'Student@123' }, gf.token);
+  const mkB = await post('/users', { role: 'student', fullName: 'Copy Check B', studentNumber: numB, password: 'Student@123' }, gf.token);
   check('two learners created for the copy check', mkA.ok !== false && mkB.ok !== false,
     JSON.stringify(mkA).slice(0, 120) + JSON.stringify(mkB).slice(0, 120));
-  const ca = await post('/auth/login', { slug: 'greenfield-academy', identifier: 'STU-901', password: 'Student@123' });
-  const cb = await post('/auth/login', { slug: 'greenfield-academy', identifier: 'STU-902', password: 'Student@123' });
+  const ca = await post('/auth/login', { slug: 'greenfield-academy', identifier: numA, password: 'Student@123' });
+  const cb = await post('/auth/login', { slug: 'greenfield-academy', identifier: numB, password: 'Student@123' });
   check('the copy-check learners can log in', !!ca.token && !!cb.token);
   const books = await api('/books?moduleId=mod_gamma', sup.token);
   const book = (books.books || [])[0] || {};
@@ -92,6 +96,17 @@ const post = (p, body, token) => api(p, token, {
     JSON.stringify((SF.flagged || [])[0] || {}).slice(0, 160));
   check('the super report also filters by portal and account',
     (SF.filters.portals || []).length >= 4 && (SF.filters.tenants || []).length >= 4);
+
+  /* the two learners existed only for this check: remove them again so the
+     account's learner list and its best-performer ribbon stay clean */
+  const madeIds = [mkA, mkB].map(function (made) { return (made.user || {}).id || null; }).filter(Boolean);
+  let removed = 0;
+  for (const id of madeIds) {
+    const gone = await api('/users/' + encodeURIComponent(id), gf.token, { method: 'DELETE' });
+    if (gone && gone.ok) removed++;
+  }
+  check('the copy-check learners are removed again', madeIds.length === 2 && removed === 2,
+    JSON.stringify(madeIds) + ' removed=' + removed);
 
   console.log(bad ? '\n' + bad + ' FAILED' : '\nANALYTICS SCOPING OK');
   process.exit(bad ? 1 : 0);

@@ -1,6 +1,7 @@
 /* Tenant admin / supervisor console — served at /admin. */
 let ME = null, ROLE = null, VIEW = 'dashboard';
 let progressStudentCache = [];
+let assessmentCategoriesCache = [];
 let supOverview = null, newSupCode = null, usersCache = [], certsCache = [];
 const booksState = { modules: [], moduleId: null, books: [], openBookId: null };
 const submState = { flagged: false, type: '', search: '' };
@@ -43,7 +44,7 @@ function roleBadge(role) {
   return '<span class="badge ' + m[0] + '">' + esc(m[1]) + '</span>';
 }
 function typeBadge(t) {
-  const map = { book: ['info', 'Book'], letter: ['warn', 'Letter'], video: ['ok', 'Video'],
+  const map = { book: ['info', 'Book'], letter: ['warn', 'Letter'], video: ['ok', 'Video'], audio: ['ok', 'Audio'],
     objectives: ['info', 'Objectives'], chapter_summary: ['warn', 'Chapter summary'],
     letter_summary: ['warn', 'Letter summary'], book_summary: ['warn', 'Book summary'],
     best_book: ['ok', 'Best book'], general_summary: ['warn', 'General summary'] };
@@ -61,7 +62,10 @@ function searchText(o) {
   if (o && o.score != null && o.total != null) parts.push(o.score + '/' + o.total);
   if (o && o.createdAt) parts.push(fmtDate(o.createdAt));
   if (o && o.issuedAt) parts.push(fmtDate(o.issuedAt));
-  if (o && Array.isArray(o.books)) parts.push(o.books.join(' '));
+  if (o && Array.isArray(o.books)) parts.push(o.books.map(function (b) {
+    /* a reader row carries book objects, a report row carries titles */
+    return typeof b === 'string' ? b : (b && (b.title || b.name)) || '';
+  }).join(' '));
   if (o && o.bestBook) parts.push(String(o.bestBook));
   return parts.join(' | ').toLowerCase();
 }
@@ -73,7 +77,10 @@ function applyTableSearch(tableEl, inputEl, countEl) {
   tableEl.querySelectorAll('tbody tr[data-search]').forEach(function (tr) {
     const hit = !q || (tr.dataset.search || '').indexOf(q) !== -1;
     tr.style.display = hit ? '' : 'none';
-    if (hit) shown++;
+    /* the reading card gives each learner a row plus a hidden row holding their
+       books; that second row carries the same search text and moves with its
+       learner, so it must not be counted as another line */
+    if (hit && tr.dataset.readerDetail == null) shown++;
   });
   if (countEl) countEl.textContent = shown + ' shown';
 }
@@ -92,15 +99,20 @@ function fallbackCopy(text, done) {
   document.body.removeChild(ta);
 }
 function openModal(html, wide) {
+  if (typeof stopAllNarrators === 'function') stopAllNarrators();
   const root = document.getElementById('modalRoot');
   root.innerHTML = '<div class="modal-bg" id="modalBg"><div class="modal' + (wide ? ' wide' : '') +
     '"><button type="button" class="x no-print" id="modalX" title="Close">&#10005;</button>' + html + '</div></div>';
+  if (typeof initNarrators === 'function') initNarrators(root);
   document.getElementById('modalX').onclick = closeModal;
   document.getElementById('modalBg').onclick = function (e) {
     if (e.target.id === 'modalBg') closeModal();
   };
 }
-function closeModal() { document.getElementById('modalRoot').innerHTML = ''; }
+function closeModal() {
+  if (typeof stopAllNarrators === 'function') stopAllNarrators();
+  document.getElementById('modalRoot').innerHTML = '';
+}
 async function filePayload(input) {
   const f = input.files[0];
   if (!f) return null;
@@ -220,7 +232,7 @@ async function renderDashboard() {
       '<th>Similarity</th><th>Date</th><th></th></tr></thead><tbody>';
     flagged.slice(0, 6).forEach(function (s) {
       html += '<tr><td><b>' + esc(s.userName || '—') + '</b></td><td>' + typeBadge(s.type) + '</td>' +
-        '<td>' + esc(s.similarity || 0) + '%</td><td class="small">' + fmtDate(s.createdAt) + '</td>' +
+        '<td>' + esc(s.similarity || 0) + '%</td><td class="small">' + fmtDate(s.submittedAt || s.createdAt) + '</td>' +
         '<td><button type="button" class="small" data-review="1">Review</button></td></tr>';
     });
     html += '</tbody></table></div>';
@@ -485,13 +497,16 @@ function usersTableHtml() {
 async function renderUsers() {
   const el = sec('users');
   el.innerHTML = '<div class="card"><p class="muted">Loading users…</p></div>';
-  let d;
+  let d, performers;
   try {
-    const reqs = [API.get('/users')];
+    const reqs = [API.get('/users'), ribbonPerformers()];
     if (isAdmin()) reqs.push(API.get('/admin/overview'));
     const res = await Promise.all(reqs);
     d = res[0];
-    if (isAdmin()) supOverview = res[1];
+    /* the best-performer belt opens the student list, exactly like the one on the
+       progress page: same account, same 50, fetched non-fatally */
+    performers = res[1];
+    if (isAdmin()) supOverview = res[2];
   } catch (e) {
     el.innerHTML = '<div class="card"><p class="muted">Could not load users: ' +
       esc(msg(e)) + '</p></div>';
@@ -500,7 +515,7 @@ async function renderUsers() {
   }
   usersCache = d.users || [];
   const heading = isAdmin() ? 'Users' : 'My members';
-  let html = newSupCodeHtml();
+  let html = ribbonHtml(performers) + newSupCodeHtml();
   if (!isAdmin() && ME.user.supervisorCode) {
     html += '<div class="card"><h3>My supervisor access code</h3>' +
       '<p class="muted small">Give this code to members of your team so an administrator can add them under you.</p>' +
@@ -529,6 +544,7 @@ async function renderUsers() {
     (usersCache.length ? usersTableHtml() : '<p class="muted">No users yet.</p>') +
   '</div></div>';
   el.innerHTML = html;
+  wireRibbonPhotos(el);
 
   const roleSel = document.getElementById('ufRole');
   roleSel.onchange = syncUserForm;
@@ -704,12 +720,13 @@ async function renderLibrary() {
     '<div><label>Type</label><select id="lfType">' +
     '<option value="book">Book / Reading (file)</option>' +
     '<option value="letter">Letter (text)</option>' +
-    '<option value="video">Video (URL)</option></select></div>' +
+    '<option value="video">Video (URL)</option>' +
+    '<option value="audio">Audio / MP3 (file)</option></select></div>' +
     '<div><label>Title</label><input type="text" id="lfTitle" required></div>' +
     '</div>' +
     '<div id="lfTextRow"><label>Text (for letters)</label>' +
     '<textarea id="lfText" placeholder="Paste the letter text"></textarea></div>' +
-    '<div id="lfUrlRow" class="hidden"><label>Video URL</label>' +
+    '<div id="lfUrlRow" class="hidden"><label>Video / audio URL</label>' +
     '<input type="text" id="lfUrl" placeholder="https://…"></div>' +
     '<label>File (optional — max 40MB)</label><input type="file" id="lfFile">' +
     '<div class="mt"><button type="submit">Upload</button></div></form></div>';
@@ -724,10 +741,13 @@ async function renderLibrary() {
       const scope = it.scope === 'global'
         ? '<span class="badge lock">Global</span>'
         : '<span class="badge info">This account</span>';
+      const playBtn = (it.type === 'audio' || it.type === 'video') && it.url
+        ? '<button type="button" class="ghost small" data-libplay="' + esc(it.id) + '">Play</button> '
+        : '';
       const acts = it.canEdit
-        ? '<button type="button" class="ghost small" data-libedit="' + esc(it.id) + '">Edit</button> ' +
+        ? playBtn + '<button type="button" class="ghost small" data-libedit="' + esc(it.id) + '">Edit</button> ' +
           '<button type="button" class="danger small" data-libdel="' + esc(it.id) + '">Delete</button>'
-        : '<span class="badge lock">Read-only</span>';
+        : (playBtn ? playBtn : '<span class="badge lock">Read-only</span>');
       html += '<tr><td>' + typeBadge(it.type) + '</td><td><b>' + esc(it.title) + '</b></td>' +
         '<td>' + scope + '</td><td>' + libIndicator(it) + '</td>' +
         '<td style="white-space:nowrap">' + acts + '</td></tr>';
@@ -757,7 +777,7 @@ async function renderLibrary() {
   const syncType = function () {
     const t = typeSel.value;
     document.getElementById('lfTextRow').classList.toggle('hidden', t !== 'letter');
-    document.getElementById('lfUrlRow').classList.toggle('hidden', t !== 'video');
+    document.getElementById('lfUrlRow').classList.toggle('hidden', t !== 'video' && t !== 'audio');
   };
   typeSel.onchange = syncType;
   syncType();
@@ -773,8 +793,8 @@ async function renderLibrary() {
     if (type === 'letter') {
       if (!text && !file) { toast('Add text or a file for the letter', 'err'); return; }
       if (text) body.text = text;
-    } else if (type === 'video') {
-      if (!url && !file) { toast('Add a video URL', 'err'); return; }
+    } else if (type === 'video' || type === 'audio') {
+      if (!url && !file) { toast('Add a URL or choose a file', 'err'); return; }
       if (url) body.url = url;
     } else {
       if (!file && !url) { toast('Attach a file or provide a URL', 'err'); return; }
@@ -789,6 +809,38 @@ async function renderLibrary() {
   el.onclick = wrap(async function (e) {
     const b = e.target.closest('button');
     if (!b) return;
+    if (b.dataset.libplay) {
+      const chosen = items.filter(function (x) { return String(x.id) === String(b.dataset.libplay); })[0];
+      if (!chosen) return;
+      const type = chosen.type;
+      const media = items.filter(function (x) { return x.type === type && x.url; });
+      let idx = media.findIndex(function (x) { return String(x.id) === String(chosen.id); });
+      if (idx < 0) idx = 0;
+      function renderMedia(i) {
+        const it = media[i];
+        const old = document.getElementById('admMedia');
+        if (old) { try { old.pause(); } catch (e) {} }
+        const player = type === 'video'
+          ? '<video id="admMedia" controls autoplay playsinline src="' + esc(it.url) + '" style="width:100%;max-height:70vh"></video>'
+          : '<audio id="admMedia" controls autoplay src="' + esc(it.url) + '" style="width:100%"></audio>';
+        openModal('<h3>' + esc(it.title) + '</h3>' + player +
+          '<div class="mt" style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">' +
+          '<button id="admMediaBack" class="ghost"' + (i > 0 ? '' : ' disabled') + '>Back</button>' +
+          '<button id="admMediaPlay">Play</button>' +
+          '<button id="admMediaPause" class="ghost">Pause</button>' +
+          '<button id="admMediaNext" class="ghost"' + (i < media.length - 1 ? '' : ' disabled') + '>Next</button>' +
+          '</div>', true);
+        const el = document.getElementById('admMedia');
+        if (el) el.onerror = function () { toast('Could not load this media file. Check the link or upload a supported audio/video file.', 'err'); };
+        const bp = document.getElementById('admMediaPlay');
+        if (bp) bp.onclick = function () { if (!el) return; const p = el.play(); if (p && p.catch) p.catch(function () { toast('The browser could not play this media file.', 'err'); }); };
+        const bpa = document.getElementById('admMediaPause'); if (bpa) bpa.onclick = function () { if (el) el.pause(); };
+        const bb = document.getElementById('admMediaBack'); if (bb) bb.onclick = function () { if (i > 0) renderMedia(i - 1); };
+        const bn = document.getElementById('admMediaNext'); if (bn) bn.onclick = function () { if (i < media.length - 1) renderMedia(i + 1); };
+      }
+      if (media.length) renderMedia(idx);
+      return;
+    }
     if (b.dataset.libedit) {
       const it = items.filter(function (x) { return x.id === b.dataset.libedit; })[0];
       if (it) openLibEdit(it);
@@ -1333,7 +1385,7 @@ async function loadSubmRows() {
         (s.userRole ? '<div class="small muted">' + esc(s.userRole) + '</div>' : '') + '</td>' +
         '<td>' + typeBadge(s.type) + label + '</td>' +
         '<td>' + (loc || '<span class="muted">—</span>') + '</td>' +
-        '<td class="small">' + fmtDate(s.createdAt) + '</td>' +
+        '<td class="small">' + fmtDate(s.submittedAt || s.createdAt) + '</td>' +
         '<td>' + score + '</td><td class="small">' + sim + '</td>' +
         '<td style="min-width:220px"><details class="exp"><summary>Read text</summary>' +
         '<div class="small" style="white-space:pre-wrap;margin-top:6px">' +
@@ -1571,13 +1623,20 @@ async function renderBranding() {
 /* How each learner is using the system, which level they are on, ranked by how
    much of the programme they have covered. A summary can be expanded for every
    learner who finished all the modules. */
+/* ------------------------------------------- best-performer ribbon ------- */
+/* The belt that opens the students page, the student progress page and the
+   learner's own dashboard is built once in common.js (ribbonHtml /
+   ribbonPerformers / wireRibbonPhotos), so every page shares one renderer. */
 async function renderProgress() {
   const el = sec('progress');
   el.innerHTML = '<div class="card"><p class="muted">Loading student progress…</p></div>';
-  let d, moduleData;
+  let d, moduleData, performerData;
   try {
-    d = await API.get('/reports/students');
-    moduleData = await API.get('/modules');
+    const results = await Promise.all([API.get('/reports/students'), API.get('/modules'),
+      ribbonPerformers()]);
+    d = results[0];
+    moduleData = results[1];
+    performerData = results[2];
   }
   catch (e) {
     el.innerHTML = '<div class="card"><p class="muted">' + esc(msg(e)) + '</p></div>';
@@ -1586,6 +1645,7 @@ async function renderProgress() {
   }
   const list = d.students || [];
   progressStudentCache = list;
+  assessmentCategoriesCache = d.assessmentCategories || [];
   const finished = function (s) { return s.moduleCount > 0 && s.modulesCompleted === s.moduleCount; };
   const byLevel = {};
   list.forEach(function (s) {
@@ -1624,6 +1684,7 @@ async function renderProgress() {
     }).join('')
     : '';
   el.innerHTML = '<h2><span class="motto">Be True</span>Student progress</h2>' +
+    ribbonHtml(performerData) +
     '<div class="grid cols-4">' +
       statCard(d.count, 'Learners', 'blue') +
       statCard(d.average + '%', 'Average coverage', 'violet') +
@@ -1697,9 +1758,17 @@ async function renderProgress() {
   if (search) search.addEventListener('input', filterProgressRows);
   if (supervisorFilter) supervisorFilter.addEventListener('change', filterProgressRows);
   filterProgressRows();
+  /* a profile photo that cannot load never leaves a broken image in the ribbon */
+  wireRibbonPhotos(el);
   const progressArea = document.getElementById('progressArea');
   if (progressArea) {
     progressArea.addEventListener('click', function (event) {
+      const assess = event.target.closest('[data-assessment]');
+      if (assess) {
+        event.preventDefault();
+        openAssessmentModal(assess.dataset.assessment);
+        return;
+      }
       const button = event.target.closest('button[data-detail]');
       if (button) showProgressStudentDetail(button.dataset.detail);
     });
@@ -1866,7 +1935,8 @@ function progressTableHtml(list) {
   if (!list.length) return '<p class="muted">No learners yet.</p>';
   let h = '<div class="table-wrap"><table><thead><tr>' +
     '<th>#</th><th>Learner</th><th>Class</th><th>Supervisor</th><th>Level (module)</th><th>Covered</th>' +
-    '<th>Submissions</th><th>Certificates</th><th>Flagged</th><th>Last active</th><th>Details</th><th>Summary</th>' +
+    '<th>Self-assessment</th><th>Submissions</th><th>Certificates</th><th>Flagged</th><th>Last active</th>' +
+    '<th>Details</th><th>Summary</th>' +
     '</tr></thead><tbody>';
   list.forEach(function (s, i) {
     const done = s.moduleCount > 0 && s.modulesCompleted === s.moduleCount;
@@ -1874,7 +1944,8 @@ function progressTableHtml(list) {
     const level = s.level || {};
     h += '<tr data-search="' + esc(searchText(s)) + '" data-supervisor="' + esc(s.supervisorName || '') + '">' +
       '<td><b>' + (i + 1) + '</b></td>' +
-      '<td><b>' + esc(s.fullName || '—') + '</b>' +
+      '<td><a href="#" class="student-assess-link" data-assessment="' + esc(s.id) + '" title="Open this learner’s self-assessment"><b>' +
+        esc(s.fullName || '—') + '</b></a>' +
         (ident ? '<div class="small muted">' + ident + '</div>' : '') +
         '</td>' +
       '<td>' + esc(s.className || '—') + '</td>' +
@@ -1883,6 +1954,7 @@ function progressTableHtml(list) {
         '<div class="muted">' + esc(level.state || '') +
         (s.moduleCount ? ' · ' + s.modulesCompleted + '/' + s.moduleCount + ' modules' : '') + '</div></td>' +
       '<td style="min-width:130px"><b>' + (s.progress || 0) + '%</b>' + bar(s.progress || 0) + '</td>' +
+      '<td class="assessment-cell">' + assessmentMiniHtml(s.assessment, assessmentCategoriesCache) + '</td>' +
       '<td>' + (s.submissions || 0) + '</td>' +
       '<td>' + (s.certificates || 0) + '</td>' +
       '<td>' + (s.flagged ? '<span class="badge off">' + s.flagged + '</span>' : '<span class="badge ok">0</span>') + '</td>' +
@@ -1953,7 +2025,7 @@ function progressStudentDetailHtml(student, submissions) {
     const keywords = s.keywordScore == null ? '—' : esc(String(s.keywordScore)) + '%' +
       (s.keywordsMissing && s.keywordsMissing.length
         ? '<div class="muted small">Missing: ' + esc(s.keywordsMissing.join(', ')) + '</div>' : '');
-    return '<tr><td class="small">' + fmtDate(s.createdAt) + '</td><td>' + esc(s.type || '—') +
+    return '<tr><td class="small">' + fmtDate(s.submittedAt || s.createdAt) + '</td><td>' + esc(s.type || '—') +
       '</td><td class="small">' + where + '</td><td>' + result + '</td><td>' + keywords +
       '</td><td class="small">' + response + '</td></tr>';
   }).join('');
@@ -1998,10 +2070,10 @@ function summaryRowHtml(s) {
       ? '<span class="flag">Copied ' + esc(r.similarity) + '%</span>'
       : (r.total ? '<span class="badge ok">' + esc(r.score) + '/' + esc(r.total) + '</span>'
                  : '<span class="badge ok">Submitted</span>');
-    return '<tr><td class="small">' + fmtDate(r.createdAt) + '</td><td>' + typeBadge(r.type) + '</td>' +
+    return '<tr><td class="small">' + fmtDate(r.submittedAt || r.createdAt) + '</td><td>' + typeBadge(r.type) + '</td>' +
       '<td class="small">' + where + '</td><td>' + status + '</td></tr>';
   }).join('');
-  return '<tr class="sum-row hidden" id="sum-' + esc(s.id) + '"><td colspan="12"><div class="sum-box">' +
+  return '<tr class="sum-row hidden" id="sum-' + esc(s.id) + '"><td colspan="13"><div class="sum-box">' +
     '<div class="chart-grid">' +
       '<div><h4>Programme coverage</h4>' +
         chartProgress((s.modules || []).map(function (m) {
@@ -2235,6 +2307,104 @@ function astatFlagsHtml(d) {
   });
   return h + '</tbody></table></div></div></div>';
 }
+/* Reading activity: how often each book was opened, which books and learners
+   reached at least one open, the book learners liked most, and a search box that
+   shows how often one learner opened one book. */
+function asReadingBooksHtml(books) {
+  if (!books || !books.length) {
+    return '<p class="muted">No book has been opened yet. An open is counted the moment a learner opens a book ' +
+      'inside a module or from the library.</p>';
+  }
+  let h = '<div class="table-wrap"><table><thead><tr><th>#</th><th>Book</th><th>Opens</th>' +
+    '<th>Opened at least once by</th><th>Opens per learner</th><th>First opened</th><th>Last opened</th>' +
+    '</tr></thead><tbody>';
+  books.forEach(function (b, i) {
+    h += '<tr data-search="' + esc(searchText(b)) + '">' +
+      '<td><b>' + (i + 1) + '</b></td>' +
+      '<td><b>' + esc(b.title) + '</b><div class="small muted">' +
+        (b.kind === 'library' ? 'library book' : 'module book') + '</div></td>' +
+      '<td><b>' + (b.opens || 0) + '</b></td>' +
+      '<td>' + (b.readers || 0) + ' learner' + (b.readers === 1 ? '' : 's') + '</td>' +
+      '<td>' + (b.opensPerReader || 0) + '</td>' +
+      '<td class="small">' + (b.firstOpenedAt ? fmtDate(b.firstOpenedAt) : '—') + '</td>' +
+      '<td class="small">' + (b.lastOpenedAt ? fmtDate(b.lastOpenedAt) : '—') + '</td></tr>';
+  });
+  return h + '</tbody></table></div>';
+}
+function asReaderBooksHtml(reader) {
+  const books = (reader && reader.books) || [];
+  if (!books.length) return '<p class="muted small">This learner has not opened a book yet.</p>';
+  let h = '<table class="nested"><thead><tr><th>Book</th><th>Times opened</th><th>Last opened</th>' +
+    '</tr></thead><tbody>';
+  books.forEach(function (b) {
+    h += '<tr><td>' + esc(b.title) + '</td><td><b>' + (b.opens || 0) + '</b></td>' +
+      '<td class="small">' + (b.lastOpenedAt ? fmtDate(b.lastOpenedAt) : '—') + '</td></tr>';
+  });
+  return h + '</tbody></table>';
+}
+function asReadingReadersHtml(readers, total) {
+  if (!readers || !readers.length) return '';
+  /* the server sends the learners who read most: say so when it had to cut */
+  const all = Number(total) > readers.length ? Number(total) : 0;
+  let h = '<h4 class="mt">How often did one learner open one book?</h4>' +
+    '<p class="muted small">Search for a learner, then open their row to see every book they opened and how ' +
+    'many times they opened it.</p>' +
+    (all ? '<p class="small"><span class="badge warn">Showing the ' + readers.length + ' learners who read ' +
+      'most of ' + all + ' in all</span></p>' : '') +
+    '<div class="row" style="align-items:flex-end">' +
+      '<div style="min-width:240px"><label for="asReaderSearch">Search a learner</label>' +
+        '<input type="text" id="asReaderSearch" placeholder="Name, class or student number…"></div>' +
+      '<div class="fixed" style="padding-bottom:10px"><span class="badge lock" id="asReaderCount">' +
+        readers.length + ' shown</span></div></div>' +
+    '<div id="asReaders"><div class="table-wrap"><table><thead><tr><th>#</th><th>Learner</th>' +
+      '<th>Opens</th><th>Books opened</th><th>Last opened</th><th></th></tr></thead><tbody>';
+  readers.forEach(function (r, i) {
+    const rowText = searchText(r) + ' | ' +
+      (r.books || []).map(function (b) { return b.title; }).join(' ');
+    h += '<tr data-search="' + esc(rowText) + '"><td><b>' + (i + 1) + '</b></td>' +
+      '<td><b>' + esc(r.name) + '</b><div class="small muted">' +
+        esc([r.className, r.studentNumber].filter(Boolean).join(' · ')) + '</div></td>' +
+      '<td><b>' + (r.opens || 0) + '</b></td><td>' + (r.booksOpened || 0) + '</td>' +
+      '<td class="small">' + (r.lastOpenedAt ? fmtDate(r.lastOpenedAt) : '—') + '</td>' +
+      '<td><button type="button" class="ghost small" data-reader="' + esc(r.userId) + '">Books</button></td></tr>' +
+      '<tr class="hidden" data-search="' + esc(rowText) + '" data-reader-detail="' + esc(r.userId) + '">' +
+        '<td colspan="6">' + asReaderBooksHtml(r) + '</td></tr>';
+  });
+  return h + '</tbody></table></div></div>';
+}
+function astatReadingHtml(d) {
+  const r = d.reading;
+  if (!r) return '';
+  const t = r.totals || {};
+  const liked = r.mostLiked;
+  /* while a module is picked the card counts that module's books only */
+  const mods = (d.filters || {}).modules || [];
+  const picked = ASTAT.moduleId
+    ? mods.filter(function (m) { return String(m.id) === String(ASTAT.moduleId); })[0] : null;
+  return '<div class="card"><h3>Reading activity <span class="badge info">' + (t.opens || 0) + ' opens</span></h3>' +
+    '<p class="muted small">Every time a learner opens a book it is counted once — the books inside the modules ' +
+    'and the books kept in the library. “Opened at least once” tells you which books and which learners have at ' +
+    'least one open, and “liked most” is the book learners come back to most often.' +
+    (picked ? ' Only the books of “' + esc(picked.title) + '” are counted while that module is selected.' : '') +
+    '</p>' +
+    '<div class="grid cols-4">' +
+      statCard(t.opens || 0, 'Times a book was opened', 'blue') +
+      statCard(t.booksOpened || 0, 'Books opened at least once', 'violet') +
+      statCard(t.readers || 0, 'Learners who opened a book', 'green') +
+      statCard(liked ? liked.opens : 0, liked ? 'Most liked: ' + liked.title : 'Most liked: no opens yet', 'amber') +
+    '</div>' +
+    (liked
+      ? '<p class="small mt"><b>Liked most:</b> ' + esc(liked.title) + ' — opened <b>' + liked.opens +
+        '</b> time' + (liked.opens === 1 ? '' : 's') + ' by ' + liked.readers + ' learner' +
+        (liked.readers === 1 ? '' : 's') + ', ' + (t.averagePerReader || 0) +
+        ' opens per learner on average.</p>'
+      : '') +
+    '<div class="row export-buttons" data-target="#asReadingBooks">' + exportBtnsHtml() + '</div>' +
+    '<h4>Opens per book</h4><div id="asReadingBooks">' + asReadingBooksHtml(r.books) + '</div>' +
+    asReadingReadersHtml(r.readers, r.readersTotal) +
+    '</div>';
+}
+
 async function renderAnalytics() {
   const el = sec('analytics');
   el.innerHTML = '<div class="card"><p class="muted">Loading analytics…</p></div>';
@@ -2258,7 +2428,7 @@ async function renderAnalytics() {
   }
   ASTAT.data = d;
   el.innerHTML = '<h2><span class="motto">Be True</span>Analytics &amp; impact</h2>' +
-    astatFiltersHtml(d) + astatKpisHtml(d) + astatChartsHtml(d) +
+    astatFiltersHtml(d) + astatKpisHtml(d) + astatChartsHtml(d) + astatReadingHtml(d) +
     astatLearnersHtml(d) + astatModulesHtml(d) + astatFlagsHtml(d);
   wireAstats(el);
 }
@@ -2283,9 +2453,98 @@ function wireAstats(el) {
     });
     applyTableSearch(table, s, document.getElementById('asLearnerCount'));
   }
+  /* reading search: narrow the readers, and open one to see their books */
+  const readerSearch = document.getElementById('asReaderSearch');
+  const readersTable = el.querySelector('#asReaders table');
+  if (readerSearch && readersTable) {
+    readerSearch.addEventListener('input', function () {
+      applyTableSearch(readersTable, readerSearch, document.getElementById('asReaderCount'));
+    });
+    applyTableSearch(readersTable, readerSearch, document.getElementById('asReaderCount'));
+    readersTable.addEventListener('click', function (event) {
+      const button = event.target.closest('button[data-reader]');
+      if (!button) return;
+      const detail = readersTable.querySelector(
+        '[data-reader-detail="' + button.dataset.reader + '"]');
+      if (!detail) return;
+      const hidden = detail.classList.toggle('hidden');
+      button.textContent = hidden ? 'Books' : 'Hide books';
+    });
+  }
 }
 
 /* =============================================================== wiring ==== */
+function lessonJoinUrl(value) {
+  const url = String(value || '').trim();
+  return /^https?:\/\/\S+$/i.test(url) ? url : '';
+}
+async function renderLessons() {
+  const el = document.getElementById('view-lessons');
+  if (!el) return;
+  const me = ME || {};
+  const canCreate = me.user && (me.user.role === 'tenant_admin' || me.user.role === 'supervisor' || me.user.role === 'super');
+  let lessons = [];
+  try {
+    const r = await API.get('/live-lessons');
+    lessons = r.lessons || [];
+  } catch (e) {
+    el.innerHTML = '<div class="card"><p class="err-text">' + esc(msg(e)) + '</p></div>';
+    return;
+  }
+  let html = '<div class="card"><h2>Live Lessons</h2>' +
+    '<p class="small muted">Schedule a meeting and share its link with the learners in your scope.</p>';
+  if (canCreate) {
+    html += '<form id="lessonForm" class="form-row">' +
+      '<input name="title" placeholder="Lesson title" required maxlength="200">' +
+      '<input name="scheduledAt" type="datetime-local">' +
+      '<input name="joinUrl" type="url" placeholder="https://... meeting link (required)" required>' +
+      '<button type="submit">Schedule lesson</button></form>';
+  }
+  html += '<div class="list">';
+  if (!lessons.length) html += '<p class="small muted">No live lessons scheduled yet.</p>';
+  lessons.forEach(function (l) {
+    const url = lessonJoinUrl(l.joinUrl);
+    html += '<div class="list-item"><b>' + esc(l.title || 'Lesson') + '</b> ' +
+      '<small>' + esc(l.scheduledAt ? fmtDate(l.scheduledAt) : 'Time to be announced') + '</small><br>' +
+      (url
+        ? '<button type="button" class="ghost small" data-join="' + esc(url) + '">Join</button>'
+        : '<span class="small muted">Meeting link not available</span>') +
+      '</div>';
+  });
+  html += '</div></div>';
+  el.innerHTML = html;
+  const form = document.getElementById('lessonForm');
+  if (form) form.addEventListener('submit', wrap(async function (e) {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const title = String(fd.get('title') || '').trim();
+    if (!title) throw new Error('Lesson title is required');
+    const joinUrl = lessonJoinUrl(fd.get('joinUrl'));
+    if (!joinUrl) throw new Error('Meeting link must start with http:// or https://');
+    const sched = fd.get('scheduledAt');
+    let scheduledAt = new Date().toISOString();
+    if (sched) {
+      const when = new Date(sched);
+      if (isNaN(when.getTime())) throw new Error('Enter a valid lesson date and time');
+      scheduledAt = when.toISOString();
+    }
+    await API.post('/live-lessons', { title: title, scheduledAt: scheduledAt, joinUrl: joinUrl });
+    toast('Lesson scheduled', 'ok');
+    renderLessons();
+  }));
+  el.querySelectorAll('[data-join]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      const url = lessonJoinUrl(btn.getAttribute('data-join'));
+      if (!url) { toast('This lesson has no valid meeting link.', 'err'); return; }
+      const win = window.open(url, '_blank');
+      if (win) { try { win.opener = null; } catch (e) {} }
+      else toast('Allow pop-ups to join the lesson.', 'err');
+    });
+  });
+}
+RENDER.lessons = renderLessons;
+
+
 RENDER.dashboard = renderDashboard;
 RENDER.users = renderUsers;
 RENDER.supervisors = renderSupervisors;

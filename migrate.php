@@ -32,6 +32,14 @@ $wanted = [
     'certificates' => [
         'transcript_json' => 'LONGTEXT NULL',
     ],
+    'settings' => [
+        'assessment_json' => 'LONGTEXT NULL',
+    ],
+    'notifications' => [
+        /* a video alert carries the library video the learner may play */
+        'library_id' => 'VARCHAR(64) NULL',
+        'video_url' => 'VARCHAR(1000) NULL',
+    ],
 ];
 
 $done = 0; $skipped = 0;
@@ -68,9 +76,48 @@ try {
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             INDEX (user_id, created_at), INDEX (user_id, read_at), INDEX (conversation_id)
         ) ENGINE=InnoDB',
+        'CREATE TABLE IF NOT EXISTS live_lessons (
+            id VARCHAR(64) PRIMARY KEY,
+            tenant_id VARCHAR(64) NULL,
+            title VARCHAR(255) NOT NULL,
+            scheduled_at DATETIME NOT NULL,
+            creator_id VARCHAR(64) NOT NULL,
+            recipient_ids_json LONGTEXT NOT NULL,
+            join_url VARCHAR(1000) NOT NULL,
+            notified TINYINT(1) NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_live_lessons_tenant (tenant_id),
+            INDEX idx_live_lessons_creator (creator_id),
+            INDEX idx_live_lessons_scheduled (scheduled_at)
+        ) ENGINE=InnoDB',
+        'CREATE TABLE IF NOT EXISTS book_opens (
+            id VARCHAR(64) PRIMARY KEY,
+            tenant_id VARCHAR(64) NOT NULL,
+            user_id VARCHAR(64) NOT NULL,
+            kind VARCHAR(20) NOT NULL DEFAULT \'module\',
+            book_id VARCHAR(64) NULL,
+            library_id VARCHAR(64) NULL,
+            title VARCHAR(255) NOT NULL,
+            opened_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX (tenant_id, opened_at), INDEX (user_id, opened_at),
+            INDEX (book_id), INDEX (library_id)
+        ) ENGINE=InnoDB',
+        'CREATE TABLE IF NOT EXISTS video_alerts (
+            id VARCHAR(64) PRIMARY KEY,
+            tenant_id VARCHAR(64) NOT NULL,
+            user_id VARCHAR(64) NOT NULL,
+            library_id VARCHAR(64) NOT NULL,
+            title VARCHAR(255) NOT NULL,
+            video_url VARCHAR(1000) NULL,
+            milestone VARCHAR(64) NOT NULL,
+            chapters_completed INT NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_video_alert_milestone (user_id, milestone),
+            INDEX (user_id, created_at), INDEX (library_id)
+        ) ENGINE=InnoDB',
     ];
     foreach ($communicationTables as $ddl) db()->exec($ddl);
-    echo "ok       messaging and notification tables ready\n";
+    echo "ok       messaging, notification and live lesson tables ready\n";
     foreach ($wanted as $table => $columns) {
         foreach ($columns as $column => $type) {
             if (has_column($table, $column)) {

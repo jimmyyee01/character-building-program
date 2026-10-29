@@ -9,6 +9,8 @@ const S = {
   users: [], usersTenant: '', usersSearch: '',
   editPortalId: null, editTenantId: null, editModuleId: null, editLibraryId: null,
   editChapterId: null,
+  assessmentDef: null, assessmentCategories: [],
+  editAssessmentCategoryId: null, editAssessmentStatementId: null,
   rpFlagged: false, rpType: '', rpSearch: '', rpRosterSearch: '', rpSupervisorId: '',
   settings: {}
 };
@@ -78,7 +80,8 @@ const RENDERERS = {
   dashboard: renderDashboard, portals: renderPortals, accounts: renderAccounts,
   modules: renderModules, library: renderLibrary, books: renderBooks,
   users: renderUsers, reports: renderReports, progress: renderProgress,
-  analytics: renderAnalytics, settings: renderSettings
+  assessment: renderAssessment, analytics: renderAnalytics,
+  settings: renderSettings, lessons: renderLessons
 };
 
 function showView(name) {
@@ -108,6 +111,7 @@ async function init() {
 function startApp(user) {
   showApp();
   $('whoName').textContent = (user && (user.fullName || user.username)) || 'Super admin';
+  if (typeof initCommunicationWidget === 'function') initCommunicationWidget();
   showView(S.view);
 }
 /* ======================================================= dashboard ======= */
@@ -504,6 +508,7 @@ async function renderProgress() {
   catch (e) { v.innerHTML = errBox(e); return; }
   const list = d.students || [];
   S.progressCache = { list: list, meta: d };
+  S.assessmentCategories = d.assessmentCategories || [];
   const finished = function (s) { return s.moduleCount > 0 && s.modulesCompleted === s.moduleCount; };
   const byAccount = {};
   list.forEach(function (s) { const k = s.tenantName || '—'; byAccount[k] = (byAccount[k] || 0) + 1; });
@@ -557,6 +562,12 @@ async function renderProgress() {
   console.log('[renderProgress] Click handler attached to view-progress, students:', list.length);
   v.onclick = function (e) {
     console.log('[renderProgress] Click detected on progress section:', e.target.tagName, e.target.className, e.target.dataset.student || 'no-student-data');
+    const assess = e.target.closest('[data-assessment]');
+    if (assess) {
+      e.preventDefault();
+      openAssessmentModal(assess.dataset.assessment);
+      return;
+    }
     const b = e.target.closest('button[data-sum]');
     if (b) {
       console.log('[renderProgress] Clicked summary button:', b.dataset.sum);
@@ -591,7 +602,7 @@ function supProgressTable(list) {
   if (!list.length) return '<p class="muted">No learners yet.</p>';
   let h = '<div class="table-wrap"><table id="supProgressTable"><thead><tr>' +
     '<th>#</th><th>Learner</th><th>Account</th><th>Level (module)</th><th class="sort-col" title="Sorted by performance (coverage %)">Covered <span class="sort-dir">▼</span></th>' +
-    '<th>Submissions</th><th>Certificates</th><th>Flagged</th><th>Last active</th><th>Details</th>' +
+    '<th>Self-assessment</th><th>Submissions</th><th>Certificates</th><th>Flagged</th><th>Last active</th><th>Actions</th>' +
     '</tr></thead><tbody>';
   list.forEach(function (s, i) {
     const done = s.moduleCount > 0 && s.modulesCompleted === s.moduleCount;
@@ -600,9 +611,9 @@ function supProgressTable(list) {
     h += '<tr data-search="' + esc(searchText(s)) + '">' +
       '<td><span class="rank-badge rank-' + Math.min(5, i + 1) + '">' + (i + 1) + '</span></td>' +
       '<td>' +
-        '<button type="button" class="small ghost" data-student="' + esc(s.id) + '">' +
+        '<a href="#" class="student-assess-link" data-assessment="' + esc(s.id) + '" title="Open this learner’s self-assessment">' +
           '<b>' + esc(s.fullName || '—') + '</b>' +
-        '</button>' +
+        '</a>' +
         (ident ? '<div class="small muted">' + ident + '</div>' : '') + '</td>' +
       '<td class="small">' + esc(s.tenantName || '—') +
         (s.supervisorName ? '<div class="muted">sup. ' + esc(s.supervisorName) + '</div>' : '') + '</td>' +
@@ -610,12 +621,13 @@ function supProgressTable(list) {
         '<div class="muted">' + esc(level.state || '') +
         (s.moduleCount ? ' · ' + s.modulesCompleted + '/' + s.moduleCount + ' modules' : '') + '</div></td>' +
       '<td style="min-width:130px"><b>' + (s.progress || 0) + '%</b>' + supBar(s.progress || 0) + '</td>' +
+      '<td class="assessment-cell">' + assessmentMiniHtml(s.assessment, S.assessmentCategories) + '</td>' +
       '<td>' + (s.submissions || 0) + '</td>' +
       '<td>' + (s.certificates || 0) + '</td>' +
       '<td>' + (s.flagged ? '<span class="badge off">' + s.flagged + '</span>' : '<span class="badge ok">0</span>') + '</td>' +
       '<td class="small">' + (s.lastActiveAt ? fmtDate(s.lastActiveAt) : '<span class="muted">never</span>') + '</td>' +
-      '<td>' + (done
-        ? '<button type="button" class="small" data-sum="' + esc(s.id) + '">Summary</button>'
+      '<td class="nowrap"><button type="button" class="small ghost" data-student="' + esc(s.id) + '">Profile</button> ' +
+        (done ? '<button type="button" class="small" data-sum="' + esc(s.id) + '">Summary</button>'
         : '<span class="muted small">Not finished yet</span>') + '</td></tr>';
     if (done) h += supSummaryRow(s);
   });
@@ -632,10 +644,10 @@ function supSummaryRow(s) {
       ? '<span class="flag">Copied ' + esc(r.similarity) + '%</span>'
       : (r.total ? '<span class="badge ok">' + esc(r.score) + '/' + esc(r.total) + '</span>'
                  : '<span class="badge ok">Submitted</span>');
-    return '<tr><td class="small">' + fmtDate(r.createdAt) + '</td><td class="small">' + esc(r.type) + '</td>' +
+    return '<tr><td class="small">' + fmtDate(r.submittedAt || r.createdAt) + '</td><td class="small">' + esc(r.type) + '</td>' +
       '<td class="small">' + where + '</td><td>' + status + '</td></tr>';
   }).join('');
-  return '<tr class="sum-row hidden" id="sum-' + esc(s.id) + '"><td colspan="10"><div class="sum-box">' +
+  return '<tr class="sum-row hidden" id="sum-' + esc(s.id) + '"><td colspan="11"><div class="sum-box">' +
     '<div class="chart-grid">' +
       '<div><h4>Programme coverage</h4>' +
         chartProgress((s.modules || []).map(function (m) {
@@ -760,7 +772,7 @@ function studentDetailHtml(s) {
                 ? '<span class="flag">Copied ' + esc(r.similarity) + '%</span>'
                 : (r.total != null ? '<span class="badge ok">' + esc(r.score) + '/' + esc(r.total) + '</span>'
                    : '<span class="badge ok">Submitted</span>');
-              return '<tr><td class="small">' + fmtDate(r.createdAt) + '</td><td class="small">' + esc(r.type) + '</td>' +
+              return '<tr><td class="small">' + fmtDate(r.submittedAt || r.createdAt) + '</td><td class="small">' + esc(r.type) + '</td>' +
                 '<td class="small">' + where + '</td><td>' + status + '</td></tr>';
             }).join('') + '</tbody></table></div>'
           : '<p class="muted small">No submissions recorded.</p>') +
@@ -919,7 +931,7 @@ function studentDetailHtml(s) {
               : (r.total != null ? '<span class="badge ok">' + esc(r.score) + '/' + esc(r.total) + '</span>'
                  : '<span class="badge ok">Submitted</span>');
             const kw = r.keywordScore != null ? '<span class="small">' + Math.round(r.keywordScore) + '%</span>' : '<span class="muted">—</span>';
-            return '<tr><td class="small">' + fmtDate(r.createdAt) + '</td><td class="small">' + esc(r.type) + '</td>' +
+            return '<tr><td class="small">' + fmtDate(r.submittedAt || r.createdAt) + '</td><td class="small">' + esc(r.type) + '</td>' +
               '<td class="small">' + where + '</td><td>' + status + '</td><td>' + kw + '</td>' +
               '<td class="small">' + (r.text ? esc(r.text.slice(0, 120)) + (r.text.length > 120 ? '…' : '') : '—') + '</td>' +
               '</tr>';
@@ -1570,7 +1582,7 @@ async function deleteModule(id) {
 }
 /* ======================================================== library ======== */
 function libraryTypeBadge(type) {
-  const cls = type === 'letter' ? 'warn' : type === 'video' ? 'ok' : 'info';
+  const cls = type === 'letter' ? 'warn' : (type === 'video' || type === 'audio') ? 'ok' : 'info';
   return '<span class="badge ' + cls + '">' + esc(String(type).toUpperCase()) + '</span>';
 }
 function libraryScope(scope, tenants) {
@@ -1592,6 +1604,7 @@ async function renderLibrary() {
     : null;
   if (S.editLibraryId && !el) S.editLibraryId = null;
 
+  S.library = items;
   const scopeOpts = '<option value="global">Global</option>' +
     tenants.map(function (t) {
       return '<option value="' + esc(String(t.id)) + '">' + esc(t.name) + '</option>';
@@ -1612,11 +1625,12 @@ async function renderLibrary() {
       '<td class="small">' + flags.join(' ') + '</td>' +
       '<td class="nowrap">' +
         (i.canEdit
-          ? '<button type="button" class="small ghost" data-act="l-edit" data-id="' +
+          ? ((i.type === 'audio' || i.type === 'video') && i.url ? '<button type="button" class="small ghost" data-act="l-play" data-id="' + esc(String(i.id)) + '">Play</button> ' : '') +
+            '<button type="button" class="small ghost" data-act="l-edit" data-id="' +
               esc(String(i.id)) + '">Edit</button> ' +
             '<button type="button" class="small danger" data-act="l-del" data-id="' +
               esc(String(i.id)) + '">Delete</button>'
-          : '<span class="muted small">read only</span>') +
+          : ((i.type === 'audio' || i.type === 'video') && i.url ? '<button type="button" class="small ghost" data-act="l-play" data-id="' + esc(String(i.id)) + '">Play</button>' : '<span class="muted small">read only</span>')) +
       '</td></tr>';
   }).join('') : '<tr><td colspan="5" class="muted">Library is empty.</td></tr>';
 
@@ -1629,6 +1643,7 @@ async function renderLibrary() {
           '<option value="book"' + (el && el.type === 'book' ? ' selected' : '') + '>Book (PDF)</option>' +
           '<option value="letter"' + (el && el.type === 'letter' ? ' selected' : '') + '>Letter</option>' +
           '<option value="video"' + (el && el.type === 'video' ? ' selected' : '') + '>Video</option>' +
+          '<option value="audio"' + (el && el.type === 'audio' ? ' selected' : '') + '>Audio / MP3</option>' +
         '</select></div>' +
         '<div><label>Title *</label><input type="text" id="lfTitle" required value="' +
           esc(el ? el.title : '') + '"></div>' +
@@ -1637,7 +1652,7 @@ async function renderLibrary() {
       '<label>Text (rich text for letters)</label>' +
       '<textarea id="lfText">' + esc(el && el.text ? el.text : '') + '</textarea>' +
       '<div class="row">' +
-        '<div><label>URL (videos / external files)</label>' +
+        '<div><label>URL (video / audio / external files)</label>' +
           '<input type="text" id="lfUrl" placeholder="https://…" value="' +
             esc(el && el.url ? el.url : '') + '"></div>' +
         '<div><label>File upload (max 40MB)' +
@@ -2194,7 +2209,7 @@ async function createUser(e) {
     /* Optional photo upload */
     const photoInput = $('cuPhoto');
     if (photoInput && photoInput.files && photoInput.files[0]) {
-      body.photo = await fileToDataUrl(photoInput.files[0]);
+      body.photo = await fileToAvatarDataUrl(photoInput.files[0], 256);
     }
     await API.post('/super/users', body);
     toast('User created', 'ok');
@@ -2258,7 +2273,7 @@ function submissionRow(s) {
     '<td class="small">' + esc(s.type || '—') + label + '</td>' +
     '<td class="small">' + esc(s.chapter || '—') +
       (s.book ? '<div class="muted">' + esc(s.book) + '</div>' : '') + '</td>' +
-    '<td class="small">' + esc(fmtDate(s.createdAt)) + '</td>' +
+    '<td class="small">' + esc(fmtDate(s.submittedAt || s.createdAt)) + '</td>' +
     '<td>' + esc(sim) + '</td>' +
     '<td>' + (s.flagged
       ? '<span class="badge off">FLAGGED</span>'
@@ -2277,16 +2292,22 @@ async function renderReports() {
   const rosterParams = [];
   if (S.rpSupervisorId) rosterParams.push('supervisorId=' + encodeURIComponent(S.rpSupervisorId));
   let subs = [], roster = { students: [], supervisors: [] };
+  let assessmentRows = [], assessCats = [];
   try {
     const results = await Promise.all([
       API.get('/super/submissions' + (params.length ? '?' + params.join('&') : '')),
       API.get('/reports/student-roster' +
-        (rosterParams.length ? '?' + rosterParams.join('&') : ''))
+        (rosterParams.length ? '?' + rosterParams.join('&') : '')),
+      API.get('/reports/students')
     ]);
     const d = results[0];
     subs = d.submissions || [];
     roster = results[1];
+    assessmentRows = results[2].students || [];
+    assessCats = results[2].assessmentCategories || [];
   } catch (e) { v.innerHTML = errBox(e); return; }
+  const assessmentById = {};
+  assessmentRows.forEach(function (s) { assessmentById[s.id] = s.assessment; });
 
   const rows = subs.length ? subs.map(submissionRow).join('')
     : '<tr><td colspan="7" class="muted">No submissions match this filter.</td></tr>';
@@ -2295,10 +2316,13 @@ async function renderReports() {
       : s.supervisorName ? esc(s.supervisorName) : '<span class="badge off">NOT ASSIGNED</span>';
     const status = s.suspended ? '<span class="badge off">SUSPENDED</span>' : '<span class="badge ok">ACTIVE</span>';
     return '<tr data-search="' + esc([s.fullName, s.studentNumber, s.className, s.supervisorName, s.tenantName].join(' ').toLowerCase()) + '">' +
-      '<td><b>' + esc(s.fullName || '—') + '</b></td><td>' + esc(s.studentNumber || '—') + '</td>' +
+      '<td><a href="#" class="student-assess-link" data-assessment="' + esc(s.id) + '" title="Open this learner’s self-assessment"><b>' +
+        esc(s.fullName || '—') + '</b></a></td><td>' + esc(s.studentNumber || '—') + '</td>' +
       '<td>' + esc(s.className || '—') + '</td><td>' + assignment + '</td>' +
-      '<td>' + esc(s.tenantName || '—') + '</td><td>' + status + '</td></tr>';
-  }).join('') : '<tr><td colspan="6" class="muted">No students match this supervisor.</td></tr>';
+      '<td>' + esc(s.tenantName || '—') + '</td>' +
+      '<td class="assessment-cell">' + assessmentMiniHtml(assessmentById[s.id], assessCats) + '</td>' +
+      '<td>' + status + '</td></tr>';
+  }).join('') : '<tr><td colspan="7" class="muted">No students match this supervisor.</td></tr>';
   const supervisorOptions = '<option value="">All students</option>' +
     roster.supervisors.map(function (s) {
       const label = (s.fullName || 'Supervisor') + (s.tenantName ? ' — ' + s.tenantName : '') +
@@ -2315,7 +2339,8 @@ async function renderReports() {
         '<span class="badge info">' + roster.count + ' students</span> ' +
         '<span class="badge lock" id="rpRosterTableCount">' + roster.count + ' shown</span></div></div>' +
       '<div class="table-wrap"><table id="rpRosterTable"><thead><tr>' +
-        '<th>Student</th><th>Student number</th><th>Class</th><th>Supervisor</th><th>Account</th><th>Status</th>' +
+        '<th>Student</th><th>Student number</th><th>Class</th><th>Supervisor</th><th>Account</th>' +
+        '<th>Self-assessment</th><th>Status</th>' +
       '</tr></thead><tbody>' + studentRows + '</tbody></table></div></div>' +
     '<div class="card"><div class="row" style="align-items:flex-end">' +
       '<div style="min-width:220px"><label>Search reports</label>' +
@@ -2351,12 +2376,211 @@ async function renderReports() {
   });
   applyTableSearch('rpTable', 'rpSearch');
   applyTableSearch('rpRosterTable', 'rpRosterSearch');
+  v.onclick = function (e) {
+    const assess = e.target.closest('[data-assessment]');
+    if (!assess) return;
+    e.preventDefault();
+    openAssessmentModal(assess.dataset.assessment);
+  };
 }
+/* ================================================== self-assessment ====== */
+/* The learner form is generated from this definition, so edits here change
+   the pre/post assessment in every account immediately. */
+function assessmentCategoryAdminHtml(c) {
+  const editing = String(S.editAssessmentCategoryId) === String(c.id);
+  const statements = c.statements || [];
+  let h = '<div class="card assess-admin-cat"><div class="assess-admin-head">';
+  if (editing) {
+    h += '<form class="assess-cat-edit" data-id="' + esc(c.id) + '">' +
+      '<label>Category name</label><input type="text" name="title" required minlength="2" value="' + esc(c.title) + '">' +
+      '<div class="mt row"><div class="fixed"><button type="submit">Save category</button></div>' +
+      '<div class="fixed"><button type="button" class="ghost" data-act="as-cat-cancel">Cancel</button></div></div></form>';
+  } else {
+    h += '<div><h3>' + esc(c.title) + '</h3><p class="muted small">' + statements.length +
+      ' objective question' + (statements.length === 1 ? '' : 's') + ' · maximum ' + (statements.length * 5) +
+      ' points</p></div><div class="nowrap">' +
+      '<button type="button" class="small ghost" data-act="as-cat-edit" data-id="' + esc(c.id) + '">Edit</button> ' +
+      '<button type="button" class="small danger" data-act="as-cat-del" data-id="' + esc(c.id) + '">Delete</button></div>';
+  }
+  h += '</div>';
+  h += statements.length
+    ? '<div class="table-wrap"><table class="assess-table"><thead><tr><th>Objective question</th><th>Actions</th></tr></thead><tbody>' +
+      statements.map(function (s) {
+        if (String(S.editAssessmentStatementId) === String(s.id)) {
+          return '<tr><td colspan="2"><form class="assess-q-edit" data-id="' + esc(s.id) + '">' +
+            '<label>Objective question</label><input type="text" name="text" required minlength="5" value="' + esc(s.text) + '">' +
+            '<div class="mt row"><div class="fixed"><button type="submit">Save question</button></div>' +
+            '<div class="fixed"><button type="button" class="ghost" data-act="as-q-cancel">Cancel</button></div></div>' +
+            '</form></td></tr>';
+        }
+        return '<tr><td>' + esc(s.text) + '</td><td class="nowrap">' +
+          '<button type="button" class="small ghost" data-act="as-q-edit" data-id="' + esc(s.id) + '">Edit</button> ' +
+          '<button type="button" class="small danger" data-act="as-q-del" data-id="' + esc(s.id) + '">Delete</button>' +
+          '</td></tr>';
+      }).join('') + '</tbody></table></div>'
+    : '<p class="muted small">No objective questions in this category yet.</p>';
+  h += '<form class="assess-q-add mt" data-category="' + esc(c.id) + '">' +
+    '<label>Add an objective question</label>' +
+    '<div class="row"><div><input type="text" name="text" required minlength="5" placeholder="e.g. I keep my promises and commitments."></div>' +
+    '<div class="fixed"><button type="submit" class="small">Add question</button></div></div></form>';
+  return h + '</div>';
+}
+
+async function renderAssessment() {
+  const v = $('view-assessment');
+  v.innerHTML = loadMsg();
+  let def;
+  try {
+    const d = await API.get('/super/assessment');
+    def = d.assessment || {};
+  } catch (e) { v.innerHTML = errBox(e); return; }
+  S.assessmentDef = def;
+  S.assessmentCategories = (def.categories || []).map(function (c) {
+    return { id: c.id, title: c.title, max: c.max };
+  });
+  const cats = def.categories || [];
+  const editableCats = cats.filter(function (c) { return (c.statements || []).length; });
+  v.innerHTML = '<h2>Self-assessment</h2>' +
+    '<div class="grid cols-4">' +
+      statCardBox(cats.length, 'Categories', 'blue') +
+      statCardBox(def.statementCount || 0, 'Objective questions', 'violet') +
+      statCardBox(def.max || 0, 'Maximum score', 'green') +
+      statCardBox(editableCats.length, 'Active in reports', 'teal') +
+    '</div>' +
+    '<div class="card"><h3>Add a category</h3>' +
+      '<p class="muted small">Categories group the objective questions learners rate before and after the programme. ' +
+      'Empty categories are hidden from learners until they have at least one question.</p>' +
+      '<form class="assess-cat-add"><div class="row"><div><label>Category name</label>' +
+      '<input type="text" name="title" required minlength="2" placeholder="e.g. Faith &amp; Spiritual Life"></div>' +
+      '<div class="fixed" style="padding-bottom:10px"><button type="submit">Add category</button></div></div></form></div>' +
+    (cats.length ? cats.map(assessmentCategoryAdminHtml).join('')
+      : '<div class="card"><p class="muted">No categories yet. Add the first one above.</p></div>');
+}
+async function saveAssessmentCategory(e) {
+  e.preventDefault();
+  const form = e.target;
+  const input = form.querySelector('input[name="title"]');
+  const title = input ? input.value.trim() : '';
+  if (!title) { toast('Enter a category name', 'err'); return; }
+  try {
+    const id = form.dataset.id;
+    if (id) await API.put('/super/assessment/categories/' + encodeURIComponent(id), { title: title });
+    else await API.post('/super/assessment/categories', { title: title });
+    toast(id ? 'Category updated' : 'Category added', 'ok');
+    S.editAssessmentCategoryId = null;
+    renderAssessment();
+  } catch (err) { fail(err); }
+}
+async function saveAssessmentQuestion(e) {
+  e.preventDefault();
+  const form = e.target;
+  const input = form.querySelector('input[name="text"]');
+  const text = input ? input.value.trim() : '';
+  if (!text) { toast('Enter the objective question', 'err'); return; }
+  try {
+    const id = form.dataset.id;
+    if (id) await API.put('/super/assessment/statements/' + encodeURIComponent(id), { text: text });
+    else {
+      const category = form.dataset.category;
+      await API.post('/super/assessment/categories/' + encodeURIComponent(category) + '/statements', { text: text });
+    }
+    toast(id ? 'Objective question updated' : 'Objective question added', 'ok');
+    S.editAssessmentStatementId = null;
+    renderAssessment();
+  } catch (err) { fail(err); }
+}
+async function deleteAssessmentCategory(id) {
+  if (!confirm('Delete this category and its objective questions?')) return;
+  try {
+    await API.del('/super/assessment/categories/' + encodeURIComponent(id));
+    toast('Category deleted', 'ok');
+    S.editAssessmentCategoryId = null;
+    renderAssessment();
+  } catch (err) { fail(err); }
+}
+async function deleteAssessmentQuestion(id) {
+  if (!confirm('Delete this objective question?')) return;
+  try {
+    await API.del('/super/assessment/statements/' + encodeURIComponent(id));
+    toast('Objective question deleted', 'ok');
+    S.editAssessmentStatementId = null;
+    renderAssessment();
+  } catch (err) { fail(err); }
+}
+
 /* ======================================================= settings ======== */
 function selectOption(value, label, current, extraSelected) {
   const sel = String(value) === String(current) || extraSelected ? ' selected' : '';
   return '<option value="' + esc(String(value)) + '"' + sel + '>' + esc(label) + '</option>';
 }
+function lessonJoinUrl(value) {
+  const url = String(value || '').trim();
+  return /^https?:\/\/\S+$/i.test(url) ? url : '';
+}
+async function renderLessons() {
+  const el = document.getElementById('view-lessons');
+  if (!el) return;
+  let lessons = [];
+  try {
+    const r = await API.get('/live-lessons');
+    lessons = r.lessons || [];
+  } catch (e) {
+    el.innerHTML = '<div class="card"><p class="err-text">' + esc(e.message || 'Failed to load lessons') + '</p></div>';
+    return;
+  }
+  let html = '<div class="card"><h2>Live Lessons</h2>' +
+    '<p class="small muted">Schedule a meeting and share its link across every account.</p>' +
+    '<form id="lessonForm" class="form-row">' +
+    '<input name="title" placeholder="Lesson title" required maxlength="200">' +
+    '<input name="scheduledAt" type="datetime-local">' +
+    '<input name="joinUrl" type="url" placeholder="https://... meeting link (required)" required>' +
+    '<button type="submit">Schedule lesson</button></form>' +
+    '<div class="list">';
+  if (!lessons.length) html += '<p class="small muted">No live lessons scheduled yet.</p>';
+  lessons.forEach(function (l) {
+    const url = lessonJoinUrl(l.joinUrl);
+    html += '<div class="list-item"><b>' + esc(l.title || 'Lesson') + '</b> ' +
+      '<small>' + esc(l.scheduledAt ? fmtDate(l.scheduledAt) : 'Time to be announced') + '</small><br>' +
+      (url
+        ? '<button type="button" class="ghost small" data-join="' + esc(url) + '">Join</button>'
+        : '<span class="small muted">Meeting link not available</span>') +
+      '</div>';
+  });
+  html += '</div></div>';
+  el.innerHTML = html;
+  const form = document.getElementById('lessonForm');
+  if (form) form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    try {
+      const fd = new FormData(form);
+      const title = String(fd.get('title') || '').trim();
+      if (!title) throw new Error('Lesson title is required');
+      const joinUrl = lessonJoinUrl(fd.get('joinUrl'));
+      if (!joinUrl) throw new Error('Meeting link must start with http:// or https://');
+      const sched = fd.get('scheduledAt');
+      let scheduledAt = new Date().toISOString();
+      if (sched) {
+        const when = new Date(sched);
+        if (isNaN(when.getTime())) throw new Error('Enter a valid lesson date and time');
+        scheduledAt = when.toISOString();
+      }
+      await API.post('/live-lessons', { title: title, scheduledAt: scheduledAt, joinUrl: joinUrl });
+      toast('Lesson scheduled', 'ok');
+      renderLessons();
+    } catch (err) { toast(err.message || 'Failed to schedule lesson', 'err'); }
+  });
+  el.querySelectorAll('[data-join]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      const url = lessonJoinUrl(btn.getAttribute('data-join'));
+      if (!url) { toast('This lesson has no valid meeting link.', 'err'); return; }
+      const win = window.open(url, '_blank');
+      if (win) { try { win.opener = null; } catch (e) {} }
+      else toast('Allow pop-ups to join the lesson.', 'err');
+    });
+  });
+}
+
+
 async function renderSettings() {
   const v = $('view-settings');
   v.innerHTML = loadMsg();
@@ -2462,6 +2686,28 @@ async function saveCreds(e) {
     $('crUser').value = '';
   } catch (err) { fail(err); }
 }
+/* ==================================================== audio modal helper ====== */
+function openModal(html, wide) {
+  if (typeof stopAllNarrators === 'function') stopAllNarrators();
+  let root = document.getElementById('modalRoot');
+  if (!root) {
+    root = document.createElement('div');
+    root.id = 'modalRoot';
+    document.body.appendChild(root);
+  }
+  root.innerHTML = '<div class="modal-bg" id="modalBg"><div class="modal' + (wide ? ' wide' : '') +
+    '"><button type="button" class="x no-print" id="modalX" title="Close">&#10005;</button>' + html + '</div></div>';
+  if (typeof initNarrators === 'function') initNarrators(root);
+  const x = document.getElementById('modalX');
+  if (x) x.onclick = closeModal;
+  const bg = document.getElementById('modalBg');
+  if (bg) bg.onclick = function (e) { if (e.target.id === 'modalBg') closeModal(); };
+}
+function closeModal() {
+  if (typeof stopAllNarrators === 'function') stopAllNarrators();
+  const root = document.getElementById('modalRoot');
+  if (root) root.innerHTML = '';
+}
 /* ==================================================== event wiring ====== */
 async function onAction(btn, e) {
   const act = btn.dataset.act;
@@ -2524,7 +2770,64 @@ async function onAction(btn, e) {
       case 'm-del':
         deleteModule(id);
         break;
+      /* self-assessment */
+      case 'as-cat-edit':
+        S.editAssessmentCategoryId = id;
+        S.editAssessmentStatementId = null;
+        renderAssessment();
+        break;
+      case 'as-cat-cancel':
+        S.editAssessmentCategoryId = null;
+        renderAssessment();
+        break;
+      case 'as-cat-del':
+        deleteAssessmentCategory(id);
+        break;
+      case 'as-q-edit':
+        S.editAssessmentStatementId = id;
+        S.editAssessmentCategoryId = null;
+        renderAssessment();
+        break;
+      case 'as-q-cancel':
+        S.editAssessmentStatementId = null;
+        renderAssessment();
+        break;
+      case 'as-q-del':
+        deleteAssessmentQuestion(id);
+        break;
       /* library */
+      case 'l-play': {
+        const chosen = (S.library || []).filter(function (x) { return String(x.id) === String(id); })[0];
+        if (!chosen) break;
+        const type = chosen.type;
+        const media = (S.library || []).filter(function (x) { return x.type === type && x.url; });
+        let idx = media.findIndex(function (x) { return String(x.id) === String(chosen.id); });
+        if (idx < 0) idx = 0;
+        function renderMedia(i) {
+          const it = media[i];
+          const old = document.getElementById('supMedia');
+          if (old) { try { old.pause(); } catch (e) {} }
+          const player = type === 'video'
+            ? '<video id="supMedia" class="video-frame" controls autoplay playsinline src="' + esc(it.url) + '"></video>'
+            : '<audio id="supMedia" controls autoplay src="' + esc(it.url) + '" style="width:100%"></audio>';
+          openModal('<h3>' + esc(it.title) + '</h3>' + player +
+            '<div class="mt" style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">' +
+            '<button id="supMediaBack" class="ghost"' + (i > 0 ? '' : ' disabled') + '>Back</button>' +
+            '<button id="supMediaPlay">Play</button>' +
+            '<button id="supMediaPause" class="ghost">Pause</button>' +
+            '<button id="supMediaNext" class="ghost"' + (i < media.length - 1 ? '' : ' disabled') + '>Next</button>' +
+            '</div>', true);
+          const el = document.getElementById('supMedia');
+          if (el) el.onerror = function () { toast('Could not load this media file. Check the link or upload a supported audio/video file.', 'err'); };
+          const bp = document.getElementById('supMediaPlay');
+          if (bp) bp.onclick = function () { if (!el) return; const p = el.play(); if (p && p.catch) p.catch(function () { toast('The browser could not play this media file.', 'err'); }); };
+          const bpa = document.getElementById('supMediaPause'); if (bpa) bpa.onclick = function () { if (el) el.pause(); };
+          const bb = document.getElementById('supMediaBack'); if (bb) bb.onclick = function () { if (i > 0) renderMedia(i - 1); };
+          const bn = document.getElementById('supMediaNext'); if (bn) bn.onclick = function () { if (i < media.length - 1) renderMedia(i + 1); };
+        }
+        if (media.length) renderMedia(idx);
+        break;
+      }
       case 'l-edit':
         S.editLibraryId = id;
         renderLibrary();
@@ -2599,6 +2902,12 @@ function onSubmit(e) {
   if (f.classList.contains('ch-form')) { addChapter(e); return; }
   if (f.classList.contains('ch-edit-form')) { editChapter(e); return; }
   if (f.classList.contains('q-form')) { addQuestion(e); return; }
+  if (f.classList.contains('assess-cat-add') || f.classList.contains('assess-cat-edit')) {
+    saveAssessmentCategory(e); return;
+  }
+  if (f.classList.contains('assess-q-add') || f.classList.contains('assess-q-edit')) {
+    saveAssessmentQuestion(e); return;
+  }
   const map = {
     portalForm: savePortal,
     tenantForm: createTenant,
@@ -2707,18 +3016,3 @@ $('superLoginForm').addEventListener('submit', async function (e) {
 $('logoutBtn').addEventListener('click', function () { API.logout(); });
 
 init();
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

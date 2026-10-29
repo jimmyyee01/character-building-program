@@ -90,7 +90,15 @@ node tools/analytics-api-check.js http://127.0.0.1:3000 # analytics scope: each 
 
 Handy npm shortcuts: `npm run check:routes`, `npm run check:ui`, `npm run check:api`,
 `npm run check:api:php`, `npm run check:live`, `npm run check:pages`, `npm run check:keywords`,
-`npm run check:browser`, `npm run check:chapter-lock`, `npm run check:analytics`.
+`npm run check:browser`, `npm run check:chapter-lock`, `npm run check:analytics`,
+`npm run check:reading`.
+
+`npm run check:reading` covers the reading features on a throw-away database: the
+best-performer ribbon at the top of the students page (top 50 of ONE account, ranked
+by marks and coverage), the book-open counts behind the account's Reading activity
+card (opens, books opened at least once, most liked, one learner's own books), and
+the video alert a learner receives in their messages after every third finished
+chapter (never the same video twice for the same learner).
 
 If you are updating an **existing PHP database**, run the migration once after
 pulling (it adds missing fields and preserves existing records):
@@ -226,7 +234,7 @@ Then confirm the running build (this needs no browser):
 
 ```bash
 curl -s http://127.0.0.1/api/health      # add -H 'Host: your-domain' if the vhost needs it
-curl -s https://your-site/api/health     # build 2026-10-18-messaging-alerts and messaging/notifications
+curl -s https://your-site/api/health     # build 2026-10-29-reading-ribbon and public.top-performers
 curl -s https://your-site/build.json     # must show the same build
 ```
 
@@ -277,6 +285,13 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
   add more, set certificate names, summary prompts/colours and completion video.
 - **Top performers** — dropdown views for the top 10 learners in each module
   and the top 10 graduates who completed the full programme.
+- **Login-page top performers** — every `/t/<slug>` login shows a live top-10
+  strip of small learner portraits on its left panel. It is rebuilt from the
+  latest scored objective answers and written-answer key-word coverage, uses
+  the uploaded profile photo (or coloured initials when there is no photo), and
+  automatically leaves out suspended learners and anyone who already holds a
+  module certificate for every module. It therefore changes as new work is
+  scored — no separate list to maintain.
 - **Library** — upload every book (PDF), letter and video; modules *pick* their
   content from this library. A PDF stays shut until it is clicked: listings and
   previews show a small cover card ("Open book"), and only then does the reader

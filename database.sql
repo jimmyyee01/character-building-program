@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS settings (
   program_logo LONGTEXT NULL,
   letter_id VARCHAR(64) NULL,
   letter_video_id VARCHAR(64) NULL,
+  assessment_json LONGTEXT NULL,
   super_username VARCHAR(100) NOT NULL DEFAULT 'superadmin',
   super_salt VARCHAR(128) NOT NULL DEFAULT '',
   super_hash VARCHAR(255) NOT NULL DEFAULT '',
@@ -88,6 +89,21 @@ CREATE TABLE IF NOT EXISTS library (
   file_name VARCHAR(255) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX (type), INDEX (scope)
+) ENGINE=InnoDB;
+
+/* One row per book open: the reading analytics counts opens, the books (and the
+   learners) opened at least once, and how often one learner opened one book. */
+CREATE TABLE IF NOT EXISTS book_opens (
+  id VARCHAR(64) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  user_id VARCHAR(64) NOT NULL,
+  kind VARCHAR(20) NOT NULL DEFAULT 'module',
+  book_id VARCHAR(64) NULL,
+  library_id VARCHAR(64) NULL,
+  title VARCHAR(255) NOT NULL,
+  opened_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX (tenant_id, opened_at), INDEX (user_id, opened_at),
+  INDEX (book_id), INDEX (library_id)
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS modules (
   id VARCHAR(64) PRIMARY KEY,
@@ -225,7 +241,41 @@ CREATE TABLE IF NOT EXISTS notifications (
   conversation_id VARCHAR(64) NULL,
   student_id VARCHAR(64) NULL,
   submission_id VARCHAR(64) NULL,
+  library_id VARCHAR(64) NULL,
+  video_url VARCHAR(1000) NULL,
   read_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX (user_id, created_at), INDEX (user_id, read_at), INDEX (conversation_id)
+) ENGINE=InnoDB;
+
+/* Every third finished chapter earns one library video. The milestone is stored
+   with it so a learner is never rewarded twice for the same chapter, and no video
+   is ever sent to the same learner again. */
+CREATE TABLE IF NOT EXISTS video_alerts (
+  id VARCHAR(64) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  user_id VARCHAR(64) NOT NULL,
+  library_id VARCHAR(64) NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  video_url VARCHAR(1000) NULL,
+  milestone VARCHAR(64) NOT NULL,
+  chapters_completed INT NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_video_alert_milestone (user_id, milestone),
+  INDEX (user_id, created_at), INDEX (library_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS live_lessons (
+  id VARCHAR(64) PRIMARY KEY,
+  tenant_id VARCHAR(64) NULL,
+  title VARCHAR(255) NOT NULL,
+  scheduled_at DATETIME NOT NULL,
+  creator_id VARCHAR(64) NOT NULL,
+  recipient_ids_json LONGTEXT NOT NULL,
+  join_url VARCHAR(1000) NOT NULL,
+  notified TINYINT(1) NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_live_lessons_tenant (tenant_id),
+  INDEX idx_live_lessons_creator (creator_id),
+  INDEX idx_live_lessons_scheduled (scheduled_at)
 ) ENGINE=InnoDB;

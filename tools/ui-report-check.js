@@ -174,6 +174,44 @@ checks.push(['graduation top 10 includes graduates only and ranks certificates',
   graduationRanking.indexOf('Learner 0') < graduationRanking.indexOf('Learner 1') &&
   graduationRanking.indexOf('Unfinished learner') === -1]);
 
+/* Self-assessment report cells, popup and super-admin editor. */
+const assessCats = [{ id: 'faith', title: 'Faith & Spiritual Life', max: 20 }];
+const assessSummary = {
+  pre: { total: 16, max: 20, categories: [{ id: 'faith', title: 'Faith & Spiritual Life', total: 16, max: 20 }] },
+  post: { total: 18, max: 20, categories: [{ id: 'faith', title: 'Faith & Spiritual Life', total: 18, max: 20 }] }
+};
+const assessMini = vm.runInContext('assessmentMiniHtml', ctx)(assessSummary, assessCats);
+checks.push(['report cell shows each self-assessment category pre and post totals',
+  assessMini.indexOf('Faith &amp; Spiritual Life') !== -1 &&
+  assessMini.indexOf('16/20') !== -1 && assessMini.indexOf('18/20') !== -1]);
+checks.push(['report cell says when the learner has not taken the assessment',
+  vm.runInContext('assessmentMiniHtml', ctx)({}, assessCats).indexOf('Not taken') !== -1]);
+const assessAttempt = vm.runInContext('assessmentAttemptHtml', ctx)({
+  student: { fullName: 'Grace Graduate', className: 'Grade 12A' },
+  pre: assessSummary.pre, post: assessSummary.post, growth: 2,
+  scale: [{ value: 4, label: 'Agree' }, { value: 5, label: 'Strongly Agree' }],
+  categories: [{ id: 'faith', title: 'Faith & Spiritual Life', max: 20, preTotal: 16, postTotal: 18,
+    statements: [{ id: 'faith-1', text: 'I spend time in prayer.', pre: 4, post: 5 }] }]
+});
+checks.push(['self-assessment popup shows each objective question and pre/post choice',
+  assessAttempt.indexOf('I spend time in prayer.') !== -1 &&
+  assessAttempt.indexOf('Pre 16 / 20') !== -1 && assessAttempt.indexOf('Post 18 / 20') !== -1 &&
+  assessAttempt.indexOf('Strongly Agree') !== -1 && assessAttempt.indexOf('+1') !== -1]);
+const assessEditor = vm.runInContext('assessmentCategoryAdminHtml', superCtx)({
+  id: 'faith', title: 'Faith & Spiritual Life', max: 20,
+  statements: [{ id: 'faith-1', text: 'I spend time in prayer.' }]
+});
+checks.push(['super admin can edit/delete categories and add/edit/delete objective questions',
+  assessEditor.indexOf('data-act="as-cat-edit"') !== -1 &&
+  assessEditor.indexOf('data-act="as-cat-del"') !== -1 &&
+  assessEditor.indexOf('assess-q-add') !== -1 &&
+  assessEditor.indexOf('data-act="as-q-edit"') !== -1 &&
+  assessEditor.indexOf('data-act="as-q-del"') !== -1]);
+const superHtml = fs.readFileSync(path.join(base, '..', 'super.html'), 'utf8');
+checks.push(['super console exposes the self-assessment management view',
+  superHtml.indexOf('data-view="assessment"') !== -1 &&
+  superHtml.indexOf('id="view-assessment"') !== -1]);
+
 let bad = 0;
 checks.forEach(function (c) {
   console.log((c[1] ? 'PASS  ' : 'FAIL  ') + c[0]);

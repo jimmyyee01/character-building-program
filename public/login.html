@@ -4,13 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Portal Login</title>
-<link rel="stylesheet" href="/css/style.css?v=30">
+<link rel="stylesheet" href="/css/style.css?v=44">
 </head>
 <body>
 <div class="auth-wrap">
   <div class="auth-side">
     <h2 id="portalTitle">Portal</h2>
     <p id="portalDesc">Sign in to continue with the Character Building Program.</p>
+    <div id="loginPerformers" class="login-performers hidden" aria-live="polite">
+      <div class="login-performers-head">
+        <h3>Best performers</h3>
+        <span>Live top 10</span>
+      </div>
+      <div id="loginPerformersGrid" class="login-performers-grid"></div>
+      <p class="login-performers-note">Updated after every scored activity. Learners who have completed every module are not shown.</p>
+    </div>
     <ul>
       <li>Your account shows only your own data.</li>
       <li>Accounts are created by your administrator — no self-registration.</li>
@@ -39,7 +47,7 @@
   </div>
 </div>
 
-<script src="/js/common.js?v=30"></script>
-<script src="/js/login.js?v=30"></script>
+<script src="/js/common.js?v=44"></script>
+<script src="/js/login.js?v=44"></script>
 </body>
 </html>

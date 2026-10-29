@@ -13,16 +13,17 @@ require_once __DIR__ . '/engine.php';
 require_once __DIR__ . '/routes_public.php';
 require_once __DIR__ . '/routes_flow.php';
 require_once __DIR__ . '/routes_admin.php';
+require_once __DIR__ . '/routes_lessons.php';
 
 $PARTICIPANTS = ['student', 'teacher', 'member', 'supervisor'];
 $ADMINS = ['super', 'tenant_admin'];
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-define('APP_BUILD', '2026-10-19-self-assessment');
-define('APP_FEATURES', 'health,super.analytics,admin.analytics,reports.students,reports.student-roster,reports.student-detail,reports.module-performers,'
-    . 'users.supervisor-auto-assignment,messaging,notifications,keywords,'
-    . 'reader.book,library.lock,certificates,chapter.pages,exports,assessment');
+define('APP_BUILD', '2026-10-29-reading-ribbon');
+define('APP_FEATURES', 'health,super.analytics,admin.analytics,reports.students,reports.student-roster,reports.student-detail,reports.student-assessment,reports.module-performers,reports.top-performers,'
+    . 'public.top-performers,users.supervisor-auto-assignment,messaging,notifications,keywords,reading.activity,reading.video-alerts,'
+    . 'reader.book,library.lock,certificates,chapter.pages,exports,assessment,assessment.admin,read-aloud');
 
 /* Public: which backend and which build is answering. */
 function r_health($user, $body, $params, $token, $query): array {
@@ -51,6 +52,7 @@ function route(string $method, string $pattern, string $fn): void {
 route('GET',  '/api/health', 'r_health');
 route('GET',  '/api/public/portals', 'r_public_portals');
 route('GET',  '/api/public/tenant/([a-z0-9-]+)', 'r_public_tenant');
+route('GET',  '/api/public/top-performers', 'r_public_top_performers');
 route('POST', '/api/auth/register', 'r_auth_register');
 route('POST', '/api/auth/login', 'r_auth_login');
 route('POST', '/api/auth/super-login', 'r_auth_superlogin');
@@ -79,6 +81,7 @@ route('POST', '/api/thoughts', 'r_thoughts_post');
 route('GET',  '/api/final', 'r_final');
 route('GET',  '/api/dashboard', 'r_dashboard');
 route('GET',  '/api/library', 'r_library_get');
+route('POST', '/api/reading/open', 'r_reading_open');
 
 /* Content management (super + tenant admin) */
 route('POST',   '/api/library', 'r_library_create');
@@ -106,14 +109,18 @@ route('GET',    '/api/admin/submissions', 'r_admin_submissions');
 route('GET',    '/api/admin/certificates', 'r_admin_certificates');
 route('GET',    '/api/reports/students', 'r_reports_students');
 route('GET',    '/api/reports/student-detail', 'r_reports_student_detail');
+route('GET',    '/api/reports/student-assessment', 'r_reports_student_assessment');
 route('GET',    '/api/reports/student-roster', 'r_reports_student_roster');
 route('GET',    '/api/messages', 'r_messages_list');
 route('POST',   '/api/messages', 'r_messages_send');
 route('GET',    '/api/messages/([a-zA-Z0-9_-]+)', 'r_messages_thread_get');
 route('POST',   '/api/messages/([a-zA-Z0-9_-]+)', 'r_messages_reply');
+route('GET',    '/api/live-lessons', 'r_live_lessons_list');
+route('POST',   '/api/live-lessons', 'r_live_lessons_create');
 route('GET',    '/api/notifications', 'r_notifications_list');
 route('PUT',    '/api/notifications/([a-zA-Z0-9_-]+)/read', 'r_notification_read');
 route('GET',    '/api/reports/module-performers', 'r_reports_module_performers');
+route('GET',    '/api/reports/top-performers', 'r_reports_top_performers');
 route('GET',    '/api/super/analytics', 'r_super_analytics');
 route('GET',    '/api/admin/analytics', 'r_admin_analytics');
 
@@ -131,6 +138,13 @@ route('GET',    '/api/super/modules', 'r_super_modules');
 route('POST',   '/api/super/modules', 'r_super_module_create');
 route('PUT',    '/api/super/modules/([a-zA-Z0-9_-]+)', 'r_super_module_update');
 route('DELETE', '/api/super/modules/([a-zA-Z0-9_-]+)', 'r_super_module_delete');
+route('GET',    '/api/super/assessment', 'r_super_assessment_get');
+route('POST',   '/api/super/assessment/categories', 'r_super_assessment_category_create');
+route('PUT',    '/api/super/assessment/categories/([a-zA-Z0-9_-]+)', 'r_super_assessment_category_update');
+route('DELETE', '/api/super/assessment/categories/([a-zA-Z0-9_-]+)', 'r_super_assessment_category_delete');
+route('POST',   '/api/super/assessment/categories/([a-zA-Z0-9_-]+)/statements', 'r_super_assessment_statement_create');
+route('PUT',    '/api/super/assessment/statements/([a-zA-Z0-9_-]+)', 'r_super_assessment_statement_update');
+route('DELETE', '/api/super/assessment/statements/([a-zA-Z0-9_-]+)', 'r_super_assessment_statement_delete');
 route('GET',    '/api/super/settings', 'r_super_settings_get');
 route('PUT',    '/api/super/settings', 'r_super_settings');
 route('GET',    '/api/super/submissions', 'r_super_submissions');

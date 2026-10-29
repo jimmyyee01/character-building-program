@@ -60,6 +60,19 @@ check('reader markup: turn arrows both sides + bar buttons',
 check('reader markup: page counter + full page + fallback link',
   html.indexOf('data-book-page') !== -1 && html.indexOf('data-book-total') !== -1 &&
   html.indexOf('data-book-full') !== -1 && html.indexOf('target="_blank"') !== -1);
+check('reader markup: read-aloud controls under the page',
+  html.indexOf('data-book-narrator') !== -1 &&
+  html.indexOf('data-narrate="play"') !== -1 &&
+  html.indexOf('data-narrate="pause"') !== -1 &&
+  html.indexOf('data-narrate="stop"') !== -1);
+const narrated = narratedTextHtml('One two three', { className: 'letter-box' });
+check('text narrator: one span per word + Play/Pause/Stop + raw text',
+  (narrated.match(/class="narrate-word"/g) || []).length === 3 &&
+  narrated.indexOf('data-narrate-raw="One two three"') !== -1 &&
+  narrated.indexOf('data-narrate="play"') !== -1 &&
+  narrated.indexOf('data-narrate="pause"') !== -1 &&
+  narrated.indexOf('data-narrate="stop"') !== -1);
+
 check('non-PDF urls still fall back to a link',
   pdfHtml('/uploads/img/photo.jpg').indexOf('book-reader') === -1 &&
   pdfHtml('/uploads/img/photo.jpg').indexOf('Open') !== -1);

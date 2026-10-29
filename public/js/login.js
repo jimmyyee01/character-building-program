@@ -30,6 +30,56 @@ async function init() {
   }
   const closed = !tenantInfo.portal.active;
   document.getElementById('closedBanner').classList.toggle('hidden', !closed);
+  loadTopPerformers();
+}
+
+/* Small live ranking on the left of the account login card. Profile photos
+   are used when the server exposes one; otherwise we paint initials. */
+function performerInitials(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
+}
+function renderTopPerformers(rows) {
+  const box = document.getElementById('loginPerformers');
+  const grid = document.getElementById('loginPerformersGrid');
+  if (!box || !grid) return;
+  if (!Array.isArray(rows) || !rows.length) {
+    box.classList.add('hidden');
+    return;
+  }
+  grid.innerHTML = rows.slice(0, 10).map(function (performer, index) {
+    const rank = Number(performer.rank) || index + 1;
+    const score = performer.score == null ? '' : performer.score + '%';
+    const title = (performer.name || 'Learner') +
+      (score ? ' — ' + score + ' performance' : '') +
+      (performer.className ? ' — ' + performer.className : '');
+    return '<div class="login-performer rank-' + rank + '" title="' + esc(title) + '">' +
+      '<span class="lp-avatar-wrap">' +
+        '<span class="lp-avatar"><span class="lp-initials">' +
+          esc(performerInitials(performer.name)) + '</span>' +
+          (performer.photo ? '<img src="' + esc(performer.photo) + '" alt="">' : '') +
+        '</span>' +
+        '<span class="lp-rank">' + rank + '</span>' +
+      '</span>' +
+      '<span class="lp-name">' + esc(performer.displayName || performer.name || 'Learner') + '</span>' +
+      (score ? '<span class="lp-score">' + esc(score) + '</span>' : '') +
+    '</div>';
+  }).join('');
+  grid.querySelectorAll('img').forEach(function (img) {
+    img.onerror = function () { img.remove(); };
+  });
+  box.classList.remove('hidden');
+}
+async function loadTopPerformers() {
+  try {
+    const data = await API.get('/public/top-performers?slug=' + encodeURIComponent(slug) +
+      '&_=' + Date.now());
+    renderTopPerformers(data.performers || []);
+  } catch (e) {
+    /* The login form must stay usable even if the ranking cannot load. */
+  }
 }
 
 document.getElementById('loginForm').addEventListener('submit', async function (e) {

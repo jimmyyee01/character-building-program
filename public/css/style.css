@@ -217,6 +217,7 @@ tr:hover td { background: #f8faff; }
 .cbp-comms-item small { color: var(--muted); font-weight: 400; }
 .cbp-comms-item.unread { border-left: 4px solid var(--brand); }
 .cbp-comms-item i { color: var(--brand); font-size: 11px; font-style: normal; }
+.cbp-comms-item i.cbp-comms-play { color: var(--ok); font-weight: 800; }
 .cbp-comms-empty { padding: 18px 6px; text-align: center; }
 .cbp-comms-form { display: grid; gap: 10px; margin-top: 12px; }
 .cbp-comms-form select[multiple] { min-height: 116px; }
@@ -266,6 +267,140 @@ tr:hover td { background: #f8faff; }
 .auth-panel .tabs button.active { color: var(--brand); border-bottom: 3px solid var(--brand); background: none; }
 .auth-logos { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 .auth-logos img { height: 52px; border-radius: 10px; background: #fff; border: 1px solid var(--line); padding: 3px; }
+
+/* Live top-10 portraits on the left of an account login page. */
+.login-performers {
+  margin: 18px 0 20px; padding: 15px 16px 13px; border-radius: 18px;
+  background: rgba(7, 20, 45, .18); border: 1px solid rgba(255, 255, 255, .2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12);
+}
+.login-performers-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.login-performers-head h3 { margin: 0; color: #fff; font-size: 15px; letter-spacing: .01em; }
+.login-performers-head span {
+  white-space: nowrap; padding: 4px 8px; border-radius: 999px;
+  background: rgba(255, 217, 121, .16); color: #ffd979;
+  font-size: 9px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase;
+}
+.login-performers-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 11px 7px; }
+.login-performer { min-width: 0; text-align: center; }
+.lp-avatar-wrap { position: relative; display: block; width: 46px; height: 46px; margin: 0 auto 5px; }
+.lp-avatar {
+  position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden;
+  border-radius: 50%; border: 2px solid rgba(255, 255, 255, .72);
+  background: linear-gradient(145deg, #fff, #dce9ff); color: var(--brand-2);
+  font-size: 13px; font-weight: 800; letter-spacing: .02em;
+  box-shadow: 0 4px 11px rgba(9, 22, 46, .26);
+}
+.lp-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.lp-initials { line-height: 1; }
+.lp-rank {
+  position: absolute; top: -3px; right: -3px; min-width: 17px; height: 17px; padding: 0 4px;
+  display: grid; place-items: center; border-radius: 999px;
+  background: #ffd979; color: #1d2c49; border: 1px solid rgba(255, 255, 255, .9);
+  font-size: 9px; font-weight: 900; line-height: 1;
+  box-shadow: 0 2px 5px rgba(9, 22, 46, .22);
+}
+.lp-name {
+  display: block; overflow: hidden; color: #fff; font-size: 10.5px; font-weight: 700;
+  line-height: 1.2; white-space: nowrap; text-overflow: ellipsis;
+}
+.lp-score {
+  display: inline-block; margin-top: 2px; padding: 1px 5px; border-radius: 999px;
+  background: rgba(0, 0, 0, .16); color: #ffd979; font-size: 9px; font-weight: 800;
+}
+.login-performer.rank-1 .lp-avatar {
+  border-color: #ffd979; box-shadow: 0 0 0 2px rgba(255, 217, 121, .22), 0 4px 11px rgba(9, 22, 46, .26);
+}
+.login-performer.rank-2 .lp-avatar { border-color: #dbe6f5; }
+.login-performer.rank-3 .lp-avatar { border-color: #e8b48a; }
+.login-performers-note { margin: 10px 0 0; font-size: 10.5px; line-height: 1.45; opacity: .72; }
+@media (max-width: 620px) {
+  .login-performers { padding: 13px 12px 11px; }
+  .lp-avatar-wrap { width: 42px; height: 42px; }
+  .login-performers-grid { gap: 9px 4px; }
+  .lp-name { font-size: 9.5px; }
+}
+
+/* ---- best-performer ribbon on top of the students page ------------------ */
+.pp-ribbon {
+  margin: 0 0 18px; padding: 14px 16px 10px; border-radius: 16px; overflow: hidden;
+  background: linear-gradient(120deg, var(--brand-2), #2c5a9b 60%, var(--brand));
+  border: 1px solid rgba(255, 255, 255, .16);
+  box-shadow: 0 10px 26px rgba(23, 32, 58, .18);
+}
+.pp-ribbon-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px;
+}
+.pp-ribbon-head h3 { margin: 0; color: #fff; font-size: 15px; letter-spacing: .01em; }
+.pp-ribbon-note {
+  white-space: nowrap; padding: 3px 9px; border-radius: 999px;
+  background: rgba(255, 217, 121, .16); color: #ffd979;
+  font-size: 9.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
+}
+/* the belt clips its content and fades both ends, so chips drift in and out */
+.pp-ribbon-view {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 26px, #000 calc(100% - 26px), transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 26px, #000 calc(100% - 26px), transparent);
+}
+.pp-ribbon-track { display: flex; width: max-content; animation: ppDrift var(--pp-duration, 40s) linear infinite; }
+.pp-ribbon:hover .pp-ribbon-track,
+.pp-ribbon:focus-within .pp-ribbon-track { animation-play-state: paused; }
+.pp-ribbon-group { display: flex; gap: 10px; padding-right: 10px; }
+/* the belt travels from left to right: the track holds two identical groups, so
+   shifting it by exactly one group width loops without a gap at the seam */
+@keyframes ppDrift { from { transform: translateX(-50%); } to { transform: translateX(0); } }
+/* an account with no marks yet keeps the belt and says what it is waiting for */
+.pp-ribbon.is-empty { padding-bottom: 14px; }
+.pp-ribbon-empty {
+  margin: 2px 0 0; max-width: 62ch; color: rgba(255, 255, 255, .84);
+  font-size: 11.5px; line-height: 1.45;
+}
+/* a short list stands still and wraps instead of repeating the same few faces */
+.pp-ribbon-track.is-static { animation: none; flex-wrap: wrap; width: auto; }
+.pp-ribbon-track.is-static .pp-ribbon-group { flex-wrap: wrap; width: 100%; row-gap: 8px; }
+.pp-ribbon-track.is-static .pp-ribbon-group[aria-hidden="true"] { display: none; }
+.pp-chip {
+  display: flex; align-items: center; gap: 8px; flex: 0 0 auto; min-width: 168px;
+  padding: 7px 12px 7px 8px; border-radius: 999px;
+  background: rgba(255, 255, 255, .1); border: 1px solid rgba(255, 255, 255, .16);
+}
+.pp-face { position: relative; width: 38px; height: 38px; flex: 0 0 auto; }
+.pp-initials {
+  position: absolute; inset: 0; display: grid; place-items: center; border-radius: 50%;
+  background: linear-gradient(145deg, #fff, #dce9ff);
+  border: 2px solid rgba(255, 255, 255, .8);
+  color: var(--brand-2); font-size: 11px; font-weight: 800;
+}
+.pp-face img {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 50%;
+}
+.pp-rank {
+  position: absolute; top: -3px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px;
+  display: grid; place-items: center; border-radius: 999px;
+  background: #ffd979; color: #1d2c49; border: 1px solid rgba(255, 255, 255, .9);
+  font-size: 9px; font-weight: 900; line-height: 1;
+}
+.pp-who { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.pp-who b {
+  color: #fff; font-size: 11.5px; font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 108px;
+}
+.pp-marks { color: #ffd979; font-size: 10px; font-weight: 700; }
+.pp-cover { color: rgba(255, 255, 255, .72); font-size: 9.5px; }
+.pp-chip.rank-1 .pp-initials { border-color: #ffd979; box-shadow: 0 0 0 2px rgba(255, 217, 121, .3); }
+.pp-chip.rank-2 .pp-initials { border-color: #dbe6f5; }
+.pp-chip.rank-3 .pp-initials { border-color: #e8b48a; }
+.pp-ribbon-foot { margin: 8px 0 0; font-size: 10px; color: rgba(255, 255, 255, .66); }
+/* a reader's own books, opened inside the analytics table */
+table.nested { margin: 4px 0 6px; background: #fff; }
+table.nested th { font-size: 11px; }
+table.nested td { font-size: 12px; }
+@media (prefers-reduced-motion: reduce) {
+  .pp-ribbon-view { overflow-x: auto; }
+  .pp-ribbon-track { animation: none; }
+  .pp-ribbon-group[aria-hidden="true"] { display: none; }
+}
 
 /* Faint account/portal logo watermark inside the right-hand login card.
    It sits behind the form (z-index -1, above the card's white background) and
@@ -446,6 +581,37 @@ tr:hover td { background: #f8faff; }
    end turns the leaf. */
 .book-frame-wrap { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; background: #fff; will-change: transform; transition: transform .08s linear; }
 .book-frame-wrap .pdf-frame { width: 100%; height: 100%; }
+/* PDF.js rendering of the open page (canvas + transparent text layer) is only
+   switched on for read-aloud, so the native viewer remains the default. */
+.book-frame-wrap.pdf-rendered .pdf-frame { display: none; }
+.pdf-render { position: absolute; top: 0; left: 0; z-index: 2; background: #fff; }
+.pdf-canvas { display: block; width: 100%; height: 100%; }
+.pdf-text-layer { position: absolute; top: 0; left: 0; overflow: hidden; line-height: 1; }
+.pdf-text-item {
+  position: absolute; white-space: pre; color: transparent;
+  transform-origin: 0 0; pointer-events: none;
+}
+.pdf-text-layer .narrate-word { color: transparent; border-radius: 2px; }
+.pdf-text-layer .narrate-word.narrating {
+  background: rgba(255, 236, 92, .48);
+  box-shadow: 0 0 0 1px rgba(255, 226, 70, .30);
+}
+/* read-aloud controls under the page/text */
+.book-narrator { margin: 10px 0 0; }
+.narrator { margin: 10px 0 0; }
+.narrator-text { position: relative; white-space: pre-wrap; }
+.narrator-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 10px;
+}
+.narrator-bar button { min-width: 76px; }
+.narrator-status { font-size: 12.5px; color: var(--muted); }
+.narrate-word { border-radius: 2px; transition: background-color .08s linear; }
+.narrate-word.narrating {
+  background: rgba(255, 239, 118, .50);
+  box-shadow: 0 0 0 1px rgba(255, 226, 70, .24);
+}
+.book-reader.book-full .narrator-status { color: #cbd5e1; }
 .book-reader { overflow-y: visible; }
 .book-shield { position: absolute; inset: 0; z-index: 3; cursor: ew-resize; }
 .book-page.turning { animation: bookTurn .2s ease; }
@@ -483,7 +649,7 @@ tr:hover td { background: #f8faff; }
   .book-hint { display: none; }
 }
 @media print {
-  .page-turn, .book-bar { display: none !important; }
+  .page-turn, .book-bar, .narrator-bar, .book-narrator { display: none !important; }
   .book-reader { background: none; border: 0; padding: 0; }
   .book-page { aspect-ratio: auto; height: 900px; box-shadow: none; border: 0; }
 }
@@ -737,6 +903,56 @@ tr:hover td { background: #f8faff; }
 .assess-growth { color: #15803d; font-weight: 700; }
 .assess-totals span { white-space: nowrap; }
 .assess-table tbody tr:hover { background: #f8fafc; }
+
+/* Category totals in the supervisor / super-admin progress reports */
+.student-assess-link { color: inherit; text-decoration: none; }
+.student-assess-link:hover b { color: var(--brand); text-decoration: underline; }
+.assessment-cell { min-width: 230px; max-width: 320px; vertical-align: top; }
+.assess-mini { font-size: 11px; line-height: 1.35; }
+.assess-mini-head {
+  text-transform: uppercase; letter-spacing: .03em; color: #64748b;
+  font-size: 9px; font-weight: 700; margin-bottom: 3px;
+}
+.assess-mini-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 2px 0; border-bottom: 1px dashed #e2e8f0; }
+.assess-mini-row:last-child { border-bottom: 0; }
+.assess-mini-name { color: #475569; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
+.assess-mini-total { white-space: nowrap; color: #334155; }
+.assess-mini-total b { font-weight: 700; color: var(--brand-dark); }
+.assess-mini-total span { color: #94a3b8; margin: 0 3px; }
+
+/* Statement-level self-assessment popup */
+.assessment-detail-card {
+  display: block; overflow-y: auto; padding: 20px; position: relative;
+}
+.assessment-detail-card > .sd-close { position: absolute; top: 12px; right: 16px; z-index: 2; }
+.assess-popup-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+  border-bottom: 1px solid var(--line); padding: 0 36px 14px 0; margin-bottom: 12px;
+}
+.assess-popup-head h2 { margin: 0 0 3px; }
+.assess-popup-totals { display: flex; gap: 8px; flex-wrap: wrap; flex-shrink: 0; }
+.assess-popup-totals .stat { min-width: 100px; padding: 8px 12px; }
+.assess-popup-totals .stat .n { font-size: 16px; }
+.assess-popup-totals .stat .l { font-size: 10px; }
+.assess-popup-cat { padding: 14px; }
+.assess-popup-cat h3 { margin-bottom: 8px; }
+.assess-cat-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.assess-cat-head h3 { margin: 0; flex: 1; min-width: 180px; }
+.assess-score-label { font-size: 10px; color: #64748b; margin-top: 1px; }
+.assess-up { color: #15803d; }
+.assess-down { color: #b91c1c; }
+
+/* Super-admin definition editor */
+.assess-admin-cat { padding: 16px; }
+.assess-admin-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.assess-admin-head h3 { margin: 0 0 2px; }
+.assess-admin-head form { flex: 1; min-width: 240px; }
+.assess-admin-cat .assess-table { margin-top: 8px; }
+.assess-admin-cat .assess-table td:first-child { max-width: none; }
+.assess-admin-cat .assess-table input { margin: 0; }
+.assess-q-add { border-top: 1px solid var(--line); padding-top: 10px; }
+.assess-q-add .row, .assess-q-edit .row, .assess-cat-edit .row { align-items: flex-end; }
+
 /* User photo styling */
 .user-photo-sm {
   width: 32px; height: 32px; border-radius: 50%;
@@ -769,3 +985,15 @@ tr:hover td { background: #f8faff; }
 .rank-badge.rank-3 { background: #fcd34d; color: #422006; }
 .rank-badge.rank-4 { background: #bfdbfe; color: #1e3a8a; }
 .rank-badge.rank-5 { background: #cffafe; color: #0f766e; }
+
+
+/* Responsive */
+@media (max-width: 768px) {
+  .shell, .app, .layout { flex-direction: column !important; }
+  aside, .sidebar { width: 100% !important; max-height: 40vh; overflow: auto; }
+  .topbar { flex-wrap: wrap; gap: 8px; }
+  table { display: block; overflow-x: auto; white-space: nowrap; }
+  .grid, .cards { grid-template-columns: 1fr !important; }
+  input, select, textarea, button { max-width: 100%; }
+  .cbp-comms-panel, .cbp-comms-toggle { max-width: 95vw; }
+}

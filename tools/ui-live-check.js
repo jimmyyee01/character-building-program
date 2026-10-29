@@ -426,6 +426,17 @@ function cleanSlice(s) {
             out.indexOf('id="accountRankingTo"') !== -1 &&
             out.indexOf('id="accountRankingMarks"') !== -1 &&
             out.indexOf('Top 10 — All modules completed') !== -1);
+          check('the student progress page carries the best-performer belt',
+            out.indexOf('pp-ribbon') !== -1 && out.indexOf('pp-chip') !== -1,
+            out.slice(0, 140));
+        }
+        if (label === 'admin console' && key === 'users') {
+          /* the belt must sit on the page that actually lists the students, not
+             only on the progress report */
+          check('the students page opens with the best-performer belt',
+            out.indexOf('pp-ribbon') !== -1 && out.indexOf('pp-chip') !== -1 &&
+              out.indexOf('Marks') !== -1 && out.indexOf('Coverage') !== -1,
+            out.slice(0, 200));
         }
         dirty(label + ' - ' + key, out);
       }
@@ -433,10 +444,10 @@ function cleanSlice(s) {
     };
     await renderEach(superCtx, 'RENDERERS["%s"]',
       ['dashboard', 'portals', 'accounts', 'modules', 'library', 'books', 'users', 'reports',
-        'progress', 'analytics', 'settings'], 'super console', sup);
+        'progress', 'analytics', 'lessons', 'settings'], 'super console', sup);
     await renderEach(adminCtx, 'RENDER["%s"]',
       ['dashboard', 'users', 'supervisors', 'library', 'books', 'submissions', 'certificates',
-        'progress', 'analytics', 'branding'], 'admin console', admin);
+        'progress', 'analytics', 'lessons', 'branding'], 'admin console', admin);
 
     /* the learner's own screens, with the student's token */
     run(appCtx, 'API.setToken', [stu]);
@@ -448,13 +459,22 @@ function cleanSlice(s) {
     const learnerCap = captureHtml(appCtx);
     const LEARNER = [['renderHome', 'view-home'], ['renderModules', 'view-modules'],
       ['renderLibrary', 'view-library'], ['renderCertificates', 'view-certificates'],
-      ['renderFinal', 'view-final'], ['renderThoughts', 'view-thoughts']];
+      ['renderFinal', 'view-final'], ['renderThoughts', 'view-thoughts'],
+      ['renderLessonsView', 'view-lessons']];
     for (const pair of LEARNER) {
       let err = '';
       try { await run(appCtx, pair[0]); } catch (e) { err = (e && e.message) || String(e); }
       const html = learnerCap.html[pair[1]] || '';
       check('learner view renders with live data: ' + pair[0].replace('render', ''),
         !err && html.length > 40, err ? 'threw: ' + err : 'html ' + html.length + ' chars');
+      /* the belt is the very first block of the learner's dashboard */
+      if (pair[0] === 'renderHome') {
+        check('the learner dashboard opens with the best-performer belt',
+          html.trim().indexOf('<div class="pp-ribbon') === 0 &&
+            html.indexOf('pp-chip') !== -1 && html.indexOf('Marks') !== -1 &&
+            html.indexOf('Coverage') !== -1,
+          html.slice(0, 180));
+      }
       dirty('learner view - ' + pair[0], html);
     }
     learnerCap.restore();
@@ -563,6 +583,128 @@ function cleanSlice(s) {
     dirty('account individuals table', run(adminCtx, 'astatLearnersHtml', [aa]));
     dirty('account module/book/chapter analysis', run(adminCtx, 'astatModulesHtml', [aa]));
     dirty('account copy flags', run(adminCtx, 'astatFlagsHtml', [aa]));
+    /* reading activity: opens, books opened at least once, most liked, one learner */
+    const readCard = run(adminCtx, 'astatReadingHtml', [aa]);
+    dirty('account reading activity card', readCard);
+    /* a brand-new account legitimately has no opens yet: then the card explains
+       that instead of drawing the tables */
+    const readEmpty = readCard.indexOf('Times a book was opened') !== -1 &&
+      readCard.indexOf('Books opened at least once') !== -1;
+    check('the reading card reports opens, books opened at least once and a search area',
+      readEmpty && (readCard.indexOf('asReaderSearch') !== -1 ||
+        readCard.indexOf('No book has been opened yet') !== -1),
+      readCard.slice(0, 200));
+    /* once there are opens, the card must be able to answer "how often did one
+       learner open one book" for the learner picked in the search box */
+    const reading = aa.reading || {};
+    if ((reading.readersTotal || 0) > 0) {
+      const bookBits = run(adminCtx, 'asReadingBooksHtml', [reading.books]);
+      dirty('opens per book table', bookBits);
+      check('the opens-per-book table is searchable and counts distinct readers',
+        bookBits.indexOf('data-search=') !== -1 &&
+          bookBits.indexOf('Opened at least once by') !== -1,
+        bookBits.slice(0, 160));
+      const readerBits = run(adminCtx, 'asReaderBooksHtml', [reading.readers[0]]);
+      dirty('one reader inside the reading card', readerBits);
+      check('one learner inside the reading card lists every book and its times opened',
+        readerBits.indexOf('Times opened') !== -1 && readerBits.indexOf('nested') !== -1 &&
+          readerBits.indexOf('Last opened') !== -1,
+        readerBits.slice(0, 180));
+      check('the reader rows are searchable by name, class and book',
+        run(adminCtx, 'asReadingReadersHtml', [reading.readers])
+          .indexOf('data-reader-detail=') !== -1);
+      /* each learner is a row plus a hidden row with their books: the badge under
+         the search box must count learners, not both rows */
+      const counted = run(adminCtx, '(function (rows) {' +
+        'var table = { querySelectorAll: function () { return rows; } };' +
+        'var input = { value: "" }; var count = { textContent: "" };' +
+        'applyTableSearch(table, input, count); return count.textContent; })',
+      [[{ dataset: { search: 'jane student' }, style: {} },
+        { dataset: { search: 'jane student', readerDetail: 'u_jane' }, style: {} }]]);
+      check('the reader search counts one line per learner', counted === '1 shown', counted);
+      /* when the server had to cut the list, say so instead of pretending it is all */
+      const cut = run(adminCtx, 'asReadingReadersHtml',
+        [reading.readers, reading.readers.length + 5]);
+      check('the reading card says when it only shows the learners who read most',
+        cut.indexOf('learners who read most') !== -1 && cut.indexOf('in all') !== -1,
+        cut.slice(0, 160));
+      check('the reading card claims no cut when every learner is shown',
+        run(adminCtx, 'asReadingReadersHtml', [reading.readers, reading.readers.length])
+          .indexOf('learners who read most') === -1);
+      /* and it must say that a picked module narrows the numbers to that module */
+      const firstModule = ((aa.filters || {}).modules || [])[0];
+      if (firstModule) {
+        vm.runInContext('ASTAT.moduleId = ' + JSON.stringify(String(firstModule.id)), adminCtx);
+        const scoped = run(adminCtx, 'astatReadingHtml', [aa]);
+        vm.runInContext('ASTAT.moduleId = "";', adminCtx);
+        check('the reading card says a module filter counts that module only',
+          scoped.indexOf('are counted while that module is selected') !== -1,
+          scoped.slice(0, 200));
+      }
+    }
+    /* a learner reads the same account's belt on their own dashboard */
+    const stuRibbon = await api('/reports/top-performers?limit=50', stu);
+    check('a learner reads the belt of their own account',
+      stuRibbon.ok === true && Array.isArray(stuRibbon.performers) &&
+        stuRibbon.performers.length > 0,
+      JSON.stringify(stuRibbon).slice(0, 160));
+    /* the super admin has no single account, so there is no belt to read */
+    const supRibbon = await api('/reports/top-performers?limit=50', sup);
+    check('the super admin gets no single-account belt',
+      supRibbon.ok !== true || !(supRibbon.performers || []).length,
+      JSON.stringify(supRibbon).slice(0, 160));
+    /* the ribbon at the top of the students page */
+    const ribbonData = await api('/reports/top-performers?limit=50', admin);
+    check('the students page ribbon payload arrives', ribbonData.ok &&
+      Array.isArray(ribbonData.performers) && ribbonData.performers.length > 0);
+    if (ribbonData.ok && (ribbonData.performers || []).length) {
+      const ribbon = run(adminCtx, 'ribbonHtml', [ribbonData.performers]);
+      dirty('best-performer ribbon', ribbon);
+      check('the ribbon shows faces, marks and coverage for the best learners',
+        ribbon.indexOf('pp-chip') !== -1 && ribbon.indexOf('Marks') !== -1 &&
+          ribbon.indexOf('Coverage') !== -1 &&
+          ribbon.indexOf(ribbonData.performers[0].name.split(' ')[0]) !== -1,
+        ribbon.slice(0, 220));
+      /* a long list drifts and repeats the block so the loop has no gap */
+      check('a full ribbon drifts and repeats its block for a seamless loop',
+        ribbon.indexOf('pp-ribbon-track"') !== -1 && ribbon.indexOf('is-static') === -1 &&
+          ribbon.indexOf('aria-hidden="true"') !== -1 &&
+          (ribbon.match(/pp-chip/g) || []).length > ribbonData.performers.length,
+        'chips=' + (ribbon.match(/pp-chip/g) || []).length);
+      /* a handful of learners would only repeat the same faces: stand still */
+      const quiet = run(adminCtx, 'ribbonHtml', [[
+        { rank: 1, name: 'Solo One', displayName: 'Solo One', marks: 88, coverage: 60, photo: null },
+        { rank: 2, name: 'Solo Two', displayName: 'Solo Two', marks: 74, coverage: 45, photo: null }]]);
+      dirty('best-performer ribbon for a small account', quiet);
+      check('a small account shows each learner once, without repeating faces',
+        quiet.indexOf('is-static') !== -1 &&
+          (quiet.match(/pp-chip/g) || []).length === 4 &&
+          quiet.indexOf('Hover to pause') === -1,
+        'chips=' + (quiet.match(/pp-chip/g) || []).length);
+      /* the belt drifts from left to right, as the students page asks */
+      const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'css', 'style.css'), 'utf8');
+      check('the belt drifts from left to right',
+        /@keyframes ppDrift\s*\{\s*from\s*\{\s*transform:\s*translateX\(-50%\)\s*;?\s*\}\s*to\s*\{\s*transform:\s*translateX\(0\)\s*;?\s*\}\s*\}/.test(css),
+        'ppDrift must run -50% -> 0 so the faces travel left to right');
+      /* an account with no marks yet must still see the belt, never a blank gap */
+      const bare = run(adminCtx, 'ribbonHtml', [[]]);
+      dirty('best-performer belt before any mark', bare);
+      check('an account with nothing to rank yet still shows the belt and says why',
+        bare.indexOf('pp-ribbon is-empty') !== -1 && bare.indexOf('Nothing to rank yet') !== -1,
+        bare.slice(0, 160));
+      check('a role that may not read the ranking draws no belt at all',
+        run(adminCtx, 'ribbonHtml', [null]) === '', 'a null ranking must draw nothing');
+      /* never more than the best 50 of the account, however long the ranking is */
+      const many = [];
+      for (let i = 1; i <= 60; i++) {
+        many.push({ rank: i, name: 'L' + i + ' Learner', displayName: 'L' + i,
+          marks: 90 - i, coverage: 100 - i, photo: null });
+      }
+      const capped = run(adminCtx, 'ribbonHtml', [many]);
+      check('the belt never carries more than the best 50',
+        capped.indexOf('L50 Learner') !== -1 && capped.indexOf('L51 Learner') === -1,
+        'chips=' + (capped.match(/pp-chip/g) || []).length);
+    }
     check('account scope never leaves this account',
       (aa.filters.tenants || []).length === 1 && (aa.accounts || []).length === 1,
       JSON.stringify((aa.accounts || []).map(a => a.name)));
