@@ -217,6 +217,16 @@ async function boot() {
   if (S.me.user.role === 'tenant_admin') { location.href = '/admin'; return; }
   if (S.me.user.role === 'super') { location.href = '/super'; return; }
   API.setUser(S.me.user);
+  /* Voice typing: a mic on every textarea (student/teacher/supervisor). Installed
+     first so an unrelated widget failure can never take it down. Wire the ones on
+     the page now, and catch any added later by the flows/modals. */
+  if (typeof wireSpeechInputs === 'function') {
+    wireSpeechInputs(document);
+    if (typeof MutationObserver !== 'undefined') {
+      new MutationObserver(function () { wireSpeechInputs(document); })
+        .observe(document.body, { childList: true, subtree: true });
+    }
+  }
   if (typeof initCommunicationWidget === 'function') initCommunicationWidget();
   const b = S.me.branding;
   applyThemeColor(b.themeColor);

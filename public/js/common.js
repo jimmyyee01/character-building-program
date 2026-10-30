@@ -204,11 +204,94 @@ function fmtBytes(n) {
 }
 /* The upload cap the JSON/base64 transport allows (see filePayload). */
 const LIB_MAX_UPLOAD = 40 * 1024 * 1024;
-/* Prevents paste/cut/drop into "own words" boxes (server also enforces length). */
-function blockPaste(el) {
+/* Prevents paste/cut/drop into "own words" boxes (server also enforces length).
+   The optional message lets the letter editor use its own wording. */
+function blockPaste(el, message) {
+  const msg = message || 'Please type your own words.';
   ['paste', 'cut', 'drop', 'copy'].forEach(function (evt) {
-    el.addEventListener(evt, function (e) { e.preventDefault(); toast('Please type your own words.', 'err'); });
+    el.addEventListener(evt, function (e) { e.preventDefault(); toast(msg, 'err'); });
   });
+}
+
+/* ------------------------------------------------- speech-to-text (mic) -- */
+/* A mic button on a textarea that types whatever you say (Web Speech API).
+   Click to start dictating, click again to stop; normal manual typing keeps
+   working throughout. Only one field can dictate at a time. */
+const SPEECH_SUPPORTED = (function () {
+  try {
+    return typeof window !== 'undefined' &&
+      !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  } catch (e) { return false; }
+})();
+let speechRec = null, speechField = null;
+
+function micIcon() {
+  return '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false">' +
+    '<path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/>' +
+    '<path fill="currentColor" d="M17 11a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 0 0-2 0 7 7 0 0 0 6 6.92V21a1 1 0 0 0 2 0v-3.08A7 7 0 0 0 17 11z"/>' +
+    '</svg>';
+}
+function stopSpeech() {
+  if (speechRec) { try { speechRec.stop(); } catch (e) {} }
+  if (speechField) {
+    const b = speechField.parentNode && speechField.parentNode.querySelector('.speech-mic');
+    if (b) b.classList.remove('listening');
+  }
+  speechRec = null; speechField = null;
+}
+function wireSpeechInput(ta) {
+  if (!ta || ta.tagName !== 'TEXTAREA' || ta.dataset.speechWired) return;
+  ta.dataset.speechWired = '1';
+  if (!SPEECH_SUPPORTED) return;               /* no button where unsupported */
+  const wrap = document.createElement('div');
+  wrap.className = 'speech-field';
+  ta.parentNode.insertBefore(wrap, ta);
+  wrap.appendChild(ta);
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'speech-mic';
+  btn.title = 'Speak to type';
+  btn.setAttribute('aria-label', 'Speak to type');
+  btn.innerHTML = micIcon();
+  wrap.appendChild(btn);
+  btn.addEventListener('click', function () {
+    if (speechField === ta) { stopSpeech(); return; }   /* toggle off */
+    stopSpeech();
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.lang = navigator.language || 'en-US';
+    rec.onresult = function (e) {
+      let txt = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) txt += e.results[i][0].transcript;
+      }
+      if (txt) {
+        ta.value = (ta.value ? ta.value.replace(/\s*$/, ' ') : '') + txt.trim() + ' ';
+        ta.focus();
+        ta.selectionStart = ta.selectionEnd = ta.value.length;
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    };
+    rec.onerror = function (e) {
+      if (e && (e.error === 'no-speech' || e.error === 'aborted')) return; /* keep listening */
+      stopSpeech();
+    };
+    rec.onend = function () {
+      /* the browser stops on silence — restart while the mic is still "on" */
+      if (speechField === ta) { try { rec.start(); } catch (e) {} }
+    };
+    try { rec.start(); } catch (e) { return; }
+    speechRec = rec; speechField = ta;
+    btn.classList.add('listening');
+    toast('Listening… click the mic again to stop.', 'ok');
+  });
+}
+/* Wire every textarea under `scope` (defaults to the whole document). */
+function wireSpeechInputs(scope) {
+  const root = scope && scope.querySelectorAll ? scope : document;
+  root.querySelectorAll('textarea').forEach(function (ta) { wireSpeechInput(ta); });
 }
 /* A chosen file, playable right there in the form: player + name + size.
    Falls back to a plain panel when the browser cannot decode that container. */

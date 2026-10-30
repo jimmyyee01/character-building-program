@@ -481,6 +481,26 @@ table.nested td { font-size: 12px; }
 .chapter-body { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; }
 .chapter-body .content { white-space: pre-wrap; font-size: 16px; line-height: 1.7; }
 .no-paste { background: #fffdf3; border: 1px dashed var(--gold); }
+
+/* Voice typing: a mic button tucked into the corner of every textarea. */
+.speech-field { position: relative; }
+.speech-field textarea { padding-right: 40px; }
+.speech-mic {
+  position: absolute; top: 8px; right: 8px;
+  width: 28px; height: 28px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line, #dbe3ef); border-radius: 50%;
+  background: #fff; color: var(--muted, #64748b); cursor: pointer; line-height: 1;
+}
+.speech-mic:hover { color: var(--brand, #24508c); border-color: var(--brand, #24508c); }
+.speech-mic.listening {
+  background: var(--brand, #24508c); border-color: var(--brand, #24508c); color: #fff;
+  animation: speech-pulse 1.2s ease-in-out infinite;
+}
+@keyframes speech-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(36, 80, 140, 0.35); }
+  50% { box-shadow: 0 0 0 6px rgba(36, 80, 140, 0); }
+}
 .obj { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; background: #fff; }
 .obj .q { font-weight: 700; margin-bottom: 8px; }
 .obj .opt { display: flex; gap: 9px; align-items: flex-start; padding: 7px 9px; border-radius: 8px; cursor: pointer; }

@@ -1604,6 +1604,12 @@ async function renderLibrary() {
     : null;
   if (S.editLibraryId && !el) S.editLibraryId = null;
 
+  /* the attached clip — a video that plays above the letter text (Node stores
+     mediaUrl/… flat, PHP nests it under media; accept either) */
+  const elMedia = (el && (el.media || (el.mediaUrl
+    ? { url: el.mediaUrl, kind: el.mediaKind || 'video', name: el.mediaName || null, size: el.mediaSize || null }
+    : null))) || null;
+
   S.library = items;
   const scopeOpts = '<option value="global">Global</option>' +
     tenants.map(function (t) {
@@ -1664,6 +1670,10 @@ async function renderLibrary() {
         '</div>' +
         richTextEditorHtml('lfText', el && el.text ? el.text : '') +
       '</div>' +
+      '<div id="lfMediaWrap"' + ((el ? el.type : 'book') === 'letter' ? '' : ' class="hidden"') + '>' +
+        mediaPickerHtml('lfMedia', elMedia,
+          'Video for the Letter of Christ (optional) — plays above the text') +
+      '</div>' +
       '<div>' +
         '<label>File upload (max 40MB — plays right here while it uploads)' +
           (el && el.fileName ? ' — current: ' + esc(el.fileName) +
@@ -1689,6 +1699,9 @@ async function renderLibrary() {
     if (prog) prog.checked = !!(S.settings && S.settings.letterId === el.id);
   }
   wireRichTextEditor(document.querySelector('[data-rte-root="lfText"]'));
+  wireMediaPicker('lfMedia');
+  /* the Letter of Christ must be typed/edited here, never pasted in */
+  blockPaste($('lfText'), 'The Letter of Christ cannot be copied or pasted. Please type or edit it here.');
   wireLibFileInput($('lfFile'), $('lfFileBox'));
 }
 async function saveLibrary(e) {
@@ -1707,6 +1720,12 @@ async function saveLibrary(e) {
     if (plainFromHtml(text)) body.text = text;
     const file = await filePayload($('lfFile'));
     if (file) body.file = file;
+    /* the Letter of Christ clip — uploaded via the picker, so just the link travels */
+    const med = mediaPickerValue('lfMedia');
+    body.mediaUrl = med ? med.url : '';
+    body.mediaKind = med ? med.kind : '';
+    body.mediaName = med ? med.name : '';
+    body.mediaSize = med ? med.size : '';
     /* video, audio and books are browsed and saved on the server, not linked */
     if (body.type !== 'letter' && !file && !(el && el.url)) {
       throw new Error('Choose a file to upload');
@@ -2973,6 +2992,12 @@ function onSubmit(e) {
 }
 function onChange(e) {
   const id = e.target.id;
+  if (id === 'lfType') {
+    /* the clip only belongs on the Letter of Christ */
+    const w = $('lfMediaWrap');
+    if (w) w.classList.toggle('hidden', e.target.value !== 'letter');
+    return;
+  }
   if (id === 'pfMode') {
     const w = $('pfWinsWrap');
     if (w) w.classList.toggle('hidden', e.target.value === 'always');
