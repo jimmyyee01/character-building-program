@@ -51,9 +51,14 @@ function renderTopPerformers(rows) {
   }
   grid.innerHTML = rows.slice(0, 10).map(function (performer, index) {
     const rank = Number(performer.rank) || index + 1;
+    /* the chip carries the number the ranking uses; the tooltip spells out the
+       marks and the coverage behind it (a mark is a dash until written work is
+       scored, so coverage alone can earn a place on this list) */
+    const marks = performer.marks == null ? '—' : performer.marks + '%';
+    const coverage = performer.coverage == null ? '—' : performer.coverage + '%';
     const score = performer.score == null ? '' : performer.score + '%';
     const title = (performer.name || 'Learner') +
-      (score ? ' — ' + score + ' performance' : '') +
+      ' — marks ' + marks + ' · coverage ' + coverage +
       (performer.className ? ' — ' + performer.className : '');
     return '<div class="login-performer rank-' + rank + '" title="' + esc(title) + '">' +
       '<span class="lp-avatar-wrap">' +

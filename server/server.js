@@ -37,6 +37,19 @@ function safeJoin(base, target) {
   return p;
 }
 
+/* Cache policy. The page a browser is holding is the page that names the
+   versioned assets, so a stale page keeps loading stale scripts and a deployed
+   update looks like it never arrived. A page is therefore never stored by the
+   browser. A versioned asset (?v=NN) may be kept for a year, because the version
+   changes with every build. Anything else (uploaded photos, PDFs, videos) is
+   kept for an hour and revalidated with an ETag after that. */
+function cacheHeaders(file, url) {
+  const ext = path.extname(file).toLowerCase();
+  if (ext === '.html') return { 'Cache-Control': 'no-store, must-revalidate' };
+  if (url && /[?&]v=/.test(url)) return { 'Cache-Control': 'public, max-age=31536000, immutable' };
+  return { 'Cache-Control': 'public, max-age=3600' };
+}
+
 function serveFile(req, res, file) {
   // The Node backend cannot execute PHP, so never hand out PHP sources (the PHP
   // build serves those paths itself when it is the backend in use).
@@ -51,6 +64,16 @@ function serveFile(req, res, file) {
     if (err || !st.isFile()) return sendJSON(res, 404, { ok: false, error: 'Not found' });
     const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
     const range = req && req.headers ? /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '') : null;
+    const cache = cacheHeaders(file, req && req.url);
+    /* A page is never stored, so it needs no validator; anything a browser may
+       keep is tagged, so the next request can be answered with a cheap 304. */
+    if (cache['Cache-Control'].indexOf('no-store') === -1) {
+      cache.ETag = '"' + st.size.toString(16) + '-' + Math.floor(st.mtimeMs).toString(16) + '"';
+      cache['Last-Modified'] = st.mtime.toUTCString();
+      if (!range && req.headers['if-none-match'] === cache.ETag) {
+        return res.writeHead(304, cache).end();
+      }
+    }
     if (range && st.size > 0) {
       let start = range[1] ? parseInt(range[1], 10) : 0;
       let end = range[2] ? parseInt(range[2], 10) : st.size - 1;
@@ -59,19 +82,19 @@ function serveFile(req, res, file) {
         return res.end();
       }
       end = Math.min(end, st.size - 1);
-      res.writeHead(206, {
+      res.writeHead(206, Object.assign({
         'Content-Type': type,
         'Content-Length': end - start + 1,
         'Content-Range': 'bytes ' + start + '-' + end + '/' + st.size,
         'Accept-Ranges': 'bytes'
-      });
+      }, cache));
       return fs.createReadStream(file, { start: start, end: end }).pipe(res);
     }
-    res.writeHead(200, {
+    res.writeHead(200, Object.assign({
       'Content-Type': type,
       'Content-Length': st.size,
       'Accept-Ranges': 'bytes'
-    });
+    }, cache));
     fs.createReadStream(file).pipe(res);
   });
 }

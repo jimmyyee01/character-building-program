@@ -189,7 +189,9 @@ route('GET', '/api/public/tenant/([a-z0-9-]+)', ({ params }) => {
 });
 
 /* Small, public ranking for an account's login page. It is rebuilt on every
-   request, so a newly scored activity can change the order immediately. Only
+   request, so a newly scored activity can change the order immediately. A
+   learner who has covered part of the programme is listed even when their
+   written work carries no score yet — their marks simply show as a dash. Only
    profile photos that are already small enough for a login page are exposed;
    everything else falls back to the learner's initials in the browser. */
 function loginPhoto(value) {
@@ -248,18 +250,37 @@ function loginTopPerformers(tenantId, limit) {
     marks.set(submission.userId, mark);
   });
 
+  /* work handed in, scored or not — a learner answering a chapter whose key
+     words are not set yet still deserves their place on the list */
+  const work = new Map();
+  dbm.db.submissions.forEach(submission => {
+    if (!eligible.has(submission.userId) || submission.flagged) return;
+    if (!moduleIds.has(submission.moduleId)) return;
+    work.set(submission.userId, (work.get(submission.userId) || 0) + 1);
+  });
+
   return learners.map(learner => {
     const mark = marks.get(learner.id) || { sum: 0, count: 0 };
+    const statuses = moduleStatuses(learner);
+    const coverage = meanOf(statuses.map(status => status.progress.percent));
+    const cover = coverage == null ? 0 : coverage;
+    const scored = mark.count ? Math.round(mark.sum / mark.count) : null;
     return {
       name: learner.fullName,
       displayName: loginDisplayName(learner.fullName),
       className: learner.className || null,
       photo: loginPhoto(learner.photo),
-      score: mark.count ? Math.round(mark.sum / mark.count) : null,
-      activityCount: mark.count
+      marks: scored, coverage: cover,
+      /* the same number the belt ranks by: marks and coverage weigh the same, so
+         a learner who has covered the programme is listed before their written
+         work carries a score */
+      score: scored == null ? cover : Math.round((scored + cover) / 2),
+      activityCount: mark.count, work: work.get(learner.id) || 0
     };
-  }).filter(learner => learner.activityCount > 0)
-    .sort((a, b) => b.score - a.score || b.activityCount - a.activityCount ||
+  }).filter(learner => learner.activityCount > 0 || learner.coverage > 0 || learner.work > 0)
+    .sort((a, b) => b.score - a.score ||
+      (b.marks == null ? -1 : b.marks) - (a.marks == null ? -1 : a.marks) ||
+      b.coverage - a.coverage || b.activityCount - a.activityCount ||
       String(a.name).localeCompare(String(b.name)))
     .slice(0, limit)
     .map((learner, index) => Object.assign(learner, { rank: index + 1 }));
@@ -3033,6 +3054,15 @@ route('GET', '/api/reports/top-performers', ({ req, user }) => {
     marks.set(submission.userId, mark);
   });
 
+  /* every piece of work a learner handed in, scored or not: a learner can be
+     working through a chapter whose answers carry no key words yet, and that
+     work must not make them vanish from the belt */
+  const work = new Map();
+  dbm.db.submissions.forEach(submission => {
+    if (!eligible.has(submission.userId) || submission.flagged) return;
+    work.set(submission.userId, (work.get(submission.userId) || 0) + 1);
+  });
+
   const performers = learners.map(learner => {
     const mark = marks.get(learner.id) || { sum: 0, count: 0 };
     const statuses = moduleStatuses(learner);
@@ -3045,14 +3075,15 @@ route('GET', '/api/reports/top-performers', ({ req, user }) => {
       className: learner.className || null, studentNumber: learner.studentNumber || null,
       photo: loginPhoto(learner.photo),
       marks: scored, coverage: cover,
-      submissions: mark.count,
+      submissions: mark.count, work: work.get(learner.id) || 0,
       /* Marks and coverage weigh the same. A learner who has moved through the
          programme but whose typed answers carry no score yet (a chapter with no
          key words, for example) is still ranked on their coverage — their marks
          simply show as a dash instead of hiding them from the belt. */
       score: scored == null ? cover : Math.round((scored + cover) / 2)
     };
-  }).filter(performer => performer.marks != null || performer.coverage > 0 || performer.submissions > 0)
+  }).filter(performer => performer.marks != null || performer.coverage > 0 ||
+    performer.work > 0)
     .sort((a, b) => b.score - a.score ||
       (b.marks == null ? -1 : b.marks) - (a.marks == null ? -1 : a.marks) ||
       b.coverage - a.coverage ||

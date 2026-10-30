@@ -76,6 +76,8 @@ function prepareDatabase() {
 
 const CHAPTER_TEXT = 'This chapter showed me that character grows through small honest choices ' +
   'made daily, especially when nobody is watching and no reward is offered.';
+const UNCOMMON_TEXT = 'Quiet persistence turns ordinary practice into reliable habits, ' +
+  'and honest reflection keeps those habits from drifting into comfortable excuses.';
 
 async function main() {
   const seedData = prepareDatabase();
@@ -109,7 +111,7 @@ async function main() {
       typeof p.coverage === 'number' && p.rank >= 1));
   /* a learner whose written work carries no score yet is still ranked on coverage */
   check('a learner with coverage but no scored work is still on the belt',
-    performers.every(p => p.marks != null || p.coverage > 0 || p.submissions > 0));
+    performers.every(p => p.marks != null || p.coverage > 0 || p.submissions > 0 || p.work > 0));
   check('the ribbon is ranked by marks and coverage, best first',
     performers.every((p, i) => i === 0 || performers[i - 1].score >= p.score));
   const capped = await call(base, '/reports/top-performers?limit=500', admin);
@@ -274,6 +276,40 @@ async function main() {
   const otherInbox = await call(base, '/notifications', otherStudent);
   check('video alerts are kept for one learner only',
     ((otherInbox.data || {}).notifications || []).filter(n => n.type === 'video_alert').length === 0);
+
+  /* ------------- 6. work that carries no score must still be ranked ------ */
+  /* The live account looked empty for exactly this reason: its chapters carried
+     no key words, so every typed answer scored nothing (marks = null) even
+     though the learners had done the work. Such a learner must still hold a
+     place on the belt and on the account's own login page. */
+  const plainBook = await call(base, '/books', admin,
+    { method: 'POST', body: { title: 'A book whose chapters carry no key words', moduleId: 'mod_gamma' } });
+  const plainChapter = await call(base, '/books/' + (plainBook.data.book || {}).id + '/chapters', admin,
+    { method: 'POST', body: { title: 'Chapter one', content: '', keywords: [] } });
+  check('an admin can add a chapter that carries no key words',
+    plainBook.status === 200 && plainChapter.status === 200,
+    plainBook.status + '/' + plainChapter.status);
+  const unscored = await call(base, '/submissions', otherStudent,
+    { method: 'POST', body: { type: 'chapter_summary',
+      chapterId: (plainChapter.data.chapter || {}).id, text: UNCOMMON_TEXT } });
+  check('an answer to a chapter with no key words is accepted but scores nothing',
+    unscored.status === 200 && !unscored.data.assessment && !unscored.data.warning,
+    unscored.status + ' ' + JSON.stringify(unscored.data));
+  const beltAfter = await call(base, '/reports/top-performers?limit=50', admin);
+  const otherMe = await call(base, '/me', otherStudent);
+  const workerName = otherMe.data.user.fullName;
+  const worker = ((beltAfter.data || {}).performers || []).find(p => p.name === workerName);
+  check('a learner whose answers carry no score still holds a place on the belt',
+    !!worker && worker.marks === null && worker.submissions === 0 && worker.work >= 1,
+    JSON.stringify(worker));
+  const loginAfter = await call(base, '/public/top-performers?slug=greenfield-academy');
+  const loginWorker = ((loginAfter.data || {}).performers || []).find(p => p.name === workerName);
+  check('the account login page lists a learner whose work is not scored yet',
+    !!loginWorker && loginWorker.marks === null && typeof loginWorker.coverage === 'number',
+    JSON.stringify(loginWorker));
+  check('unscored learners are ranked on their coverage alone',
+    !!loginWorker && loginWorker.score === loginWorker.coverage,
+    JSON.stringify(loginWorker));
 
   console.log('\n' + (failures ? failures + ' reading check(s) failed' : 'Reading checks passed'));
   if (failures) process.exitCode = 1;

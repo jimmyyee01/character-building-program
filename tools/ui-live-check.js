@@ -705,6 +705,49 @@ function cleanSlice(s) {
         capped.indexOf('L50 Learner') !== -1 && capped.indexOf('L51 Learner') === -1,
         'chips=' + (capped.match(/pp-chip/g) || []).length);
     }
+
+    /* ------------------------- the account's own login page (/t/<slug>) ---- */
+    /* The page a learner lands on must show the same ranking the belt shows, so
+       the account is never a blank page for a visitor. */
+    {
+      const loginCtx = ctxFor(['common.js', 'login.js']);
+      const box = makeEl('div');
+      box.classList = {
+        hidden: true,
+        add(c) { if (c === 'hidden') this.hidden = true; },
+        remove(c) { if (c === 'hidden') this.hidden = false; },
+        toggle(c, v) { if (c === 'hidden') this.hidden = v === undefined ? !this.hidden : !!v; },
+        contains(c) { return c === 'hidden' ? this.hidden : false; }
+      };
+      const grid = makeEl('div');
+      loginCtx.document.getElementById = function (id) {
+        if (id === 'loginPerformers') return box;
+        if (id === 'loginPerformersGrid') return grid;
+        return makeEl('div');
+      };
+      const loginRows = await api('/public/top-performers?slug=greenfield-academy&limit=10', null);
+      check('the account login page has a ranking to show',
+        loginRows.ok && Array.isArray(loginRows.performers) && loginRows.performers.length > 0,
+        JSON.stringify(loginRows).slice(0, 140));
+      const shown = loginRows.performers || [];
+      run(loginCtx, 'renderTopPerformers', [shown]);
+      check('the login page draws the account ranking',
+        grid.innerHTML.indexOf('login-performer') !== -1 && box.classList.hidden === false,
+        'hidden=' + box.classList.hidden + ' html=' + String(grid.innerHTML).length);
+      check('the login page ranking is never longer than its live top 10',
+        (grid.innerHTML.match(/class="login-performer /g) || []).length <= 10);
+      dirty('login page ranking', grid.innerHTML);
+      /* a learner with coverage but no scored work still earns a place there */
+      run(loginCtx, 'renderTopPerformers', [[{ rank: 1, name: 'Cover Only Learner',
+        displayName: 'Cover C.', marks: null, coverage: 12, score: 12, photo: null }]]);
+      check('the login page lists a learner who has covered work without a mark',
+        grid.innerHTML.indexOf('Cover C.') !== -1 && box.classList.hidden === false,
+        String(grid.innerHTML).slice(0, 140));
+      dirty('login page ranking without marks', grid.innerHTML);
+      run(loginCtx, 'renderTopPerformers', [[]]);
+      check('an account with nothing to rank hides the login ranking',
+        box.classList.hidden === true);
+    }
     check('account scope never leaves this account',
       (aa.filters.tenants || []).length === 1 && (aa.accounts || []).length === 1,
       JSON.stringify((aa.accounts || []).map(a => a.name)));

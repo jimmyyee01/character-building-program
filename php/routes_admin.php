@@ -1739,6 +1739,7 @@ function r_reports_top_performers(array $user, array $body, array $params, ?stri
     $learners = $st->fetchAll();
 
     $marks = [];
+    $work = [];
     if ($learners) {
         $ph = implode(',', array_fill(0, count($learners), '?'));
         $st = $pdo->prepare("SELECT user_id,type,score,total,`text`,keyword_score,keywords_used,
@@ -1764,6 +1765,16 @@ function r_reports_top_performers(array $user, array $body, array $params, ?stri
             $marks[$studentId]['sum'] += $percent;
             $marks[$studentId]['count']++;
         }
+
+        /* every piece of work a learner handed in, scored or not: a learner can
+           be working through a chapter whose answers carry no key words yet, and
+           that work must not make them vanish from the belt */
+        $st = $pdo->prepare("SELECT user_id FROM submissions WHERE flagged=0 AND user_id IN ($ph)");
+        $st->execute(array_column($learners, 'id'));
+        foreach ($st->fetchAll() as $row) {
+            $studentId = (string)$row['user_id'];
+            $work[$studentId] = ($work[$studentId] ?? 0) + 1;
+        }
     }
 
     $performers = [];
@@ -1777,7 +1788,7 @@ function r_reports_top_performers(array $user, array $body, array $params, ?stri
            programme but whose typed answers carry no score yet (a chapter with no
            key words, for example) is still ranked on their coverage — their marks
            simply show as a dash instead of hiding them from the belt. */
-        if (!$mark['count'] && $coverage <= 0) continue;
+        if (!$mark['count'] && $coverage <= 0 && !($work[$learner['id']] ?? 0)) continue;
         $scored = $mark['count'] ? (int)round($mark['sum'] / $mark['count']) : null;
         $performers[] = [
             'id' => $learner['id'], 'name' => $learner['full_name'],
@@ -1786,7 +1797,7 @@ function r_reports_top_performers(array $user, array $body, array $params, ?stri
             'studentNumber' => $learner['student_number'] ?: null,
             'photo' => public_login_photo($learner['photo'] ?? null),
             'marks' => $scored, 'coverage' => $coverage,
-            'submissions' => $mark['count'],
+            'submissions' => $mark['count'], 'work' => (int)($work[$learner['id']] ?? 0),
             'score' => $scored === null ? $coverage : (int)round(($scored + $coverage) / 2),
         ];
     }

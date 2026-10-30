@@ -82,7 +82,7 @@ function public_login_display_name(?string $fullName): string {
 function public_login_top_performers(string $tenantId, int $limit): array {
     $limit = max(1, min(10, $limit));
     $moduleIds = array_values(array_map(fn($m) => (string)$m['id'], all_modules()));
-    $st = db()->prepare("SELECT id,full_name,class_name,photo FROM users
+    $st = db()->prepare("SELECT id,full_name,class_name,student_number,role,photo FROM users
         WHERE tenant_id=? AND role IN ('student','member') AND suspended=0");
     $st->execute([$tenantId]);
     $learners = $st->fetchAll();
@@ -104,6 +104,7 @@ function public_login_top_performers(string $tenantId, int $limit): array {
     }
 
     $scores = [];
+    $work = [];
     if ($moduleIds && $learners) {
         $userPh = implode(',', array_fill(0, count($learners), '?'));
         $modulePh = implode(',', array_fill(0, count($moduleIds), '?'));
@@ -131,25 +132,49 @@ function public_login_top_performers(string $tenantId, int $limit): array {
             $scores[$studentId]['sum'] += $percent;
             $scores[$studentId]['count']++;
         }
+
+        /* work handed in, scored or not — a learner answering a chapter whose key
+           words are not set yet still deserves their place on the list */
+        $st = db()->prepare("SELECT user_id FROM submissions
+            WHERE flagged=0 AND user_id IN ($userPh) AND module_id IN ($modulePh)");
+        $st->execute(array_merge(array_column($learners, 'id'), $moduleIds));
+        foreach ($st->fetchAll() as $row) {
+            $studentId = (string)$row['user_id'];
+            $work[$studentId] = ($work[$studentId] ?? 0) + 1;
+        }
     }
 
     $ranked = [];
     foreach ($learners as $learner) {
         $marks = $scores[$learner['id']] ?? ['sum' => 0, 'count' => 0];
-        if (!$marks['count']) continue;
+        $statuses = module_statuses(['id' => $learner['id'], 'tenant_id' => $tenantId,
+            'role' => $learner['role'], 'full_name' => $learner['full_name'],
+            'class_name' => $learner['class_name'], 'student_number' => $learner['student_number']]);
+        $percents = array_map(fn($m) => (int)$m['progress']['percent'], $statuses);
+        $coverage = $percents ? (int)round(array_sum($percents) / count($percents)) : 0;
+        /* Marks and coverage weigh the same, so a learner who has covered the
+           programme is listed even before their written work carries a score —
+           their marks simply show as a dash. */
+        if (!$marks['count'] && $coverage <= 0 && !($work[$learner['id']] ?? 0)) continue;
+        $scored = $marks['count'] ? (int)round($marks['sum'] / $marks['count']) : null;
         $ranked[] = [
             'name' => $learner['full_name'],
             'displayName' => public_login_display_name($learner['full_name']),
             'className' => $learner['class_name'] ?: null,
             'photo' => public_login_photo($learner['photo'] ?? null),
-            'score' => (int)round($marks['sum'] / $marks['count']),
-            'activityCount' => $marks['count'],
+            'marks' => $scored, 'coverage' => $coverage,
+            'score' => $scored === null ? $coverage : (int)round(($scored + $coverage) / 2),
+            'activityCount' => $marks['count'], 'work' => (int)($work[$learner['id']] ?? 0),
         ];
     }
     usort($ranked, function ($a, $b) {
-        return ($b['score'] <=> $a['score']) ?:
-            (($b['activityCount'] <=> $a['activityCount']) ?:
-            strcasecmp((string)$a['name'], (string)$b['name']));
+        if ($b['score'] !== $a['score']) return $b['score'] <=> $a['score'];
+        $am = $a['marks'] === null ? -1 : $a['marks'];
+        $bm = $b['marks'] === null ? -1 : $b['marks'];
+        if ($bm !== $am) return $bm <=> $am;
+        if ($b['coverage'] !== $a['coverage']) return $b['coverage'] <=> $a['coverage'];
+        if ($b['activityCount'] !== $a['activityCount']) return $b['activityCount'] <=> $a['activityCount'];
+        return strcasecmp((string)$a['name'], (string)$b['name']);
     });
     $ranked = array_slice($ranked, 0, $limit);
     foreach ($ranked as $index => &$row) $row['rank'] = $index + 1;
