@@ -1038,6 +1038,10 @@ table.nested td { font-size: 12px; }
 }
 .rte-btn:hover { background: #e8eefb; }
 .rte-body { min-height: 200px; max-height: 420px; overflow: auto; padding: 12px; outline: none; color: #000; }
+/* Letter text is often pasted from Word or Docs, which arrives carrying inline
+   colour attributes. Inline styles beat normal rules, so force the editor — and
+   every node inside it — back to black. */
+.rte-body, .rte-body * { color: #000 !important; }
 .rte-body p { margin: 0 0 10px; }
 .rte-body h3 { margin: 6px 0 10px; }
 .rte-body blockquote {
