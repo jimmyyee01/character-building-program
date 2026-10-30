@@ -36,11 +36,11 @@ const API = {
   /* Upload with a real progress percentage. fetch() cannot report upload
      progress, so this uses XMLHttpRequest; onProgress gets 0–100 and the promise
      resolves only once the server confirms the whole file is stored — nothing is
-     "uploaded" before that. */
-  upload(p, body, onProgress) {
+     "uploaded" before that. `method` defaults to POST so callers can PUT too. */
+  upload(p, body, onProgress, method) {
     return new Promise(function (resolve, reject) {
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api' + p);
+      xhr.open(method || 'POST', '/api' + p);
       xhr.setRequestHeader('Content-Type', 'application/json');
       const t = API.token();
       if (t) xhr.setRequestHeader('Authorization', 'Bearer ' + t);
@@ -65,6 +65,26 @@ const API = {
     location.href = '/';
   }
 };
+
+/* Drive the shared upload-progress bar while a file saves, so the admin sees a
+   live percentage instead of a frozen form. Returns the API.upload promise;
+   `barId` is the id of the .upload-progress container. */
+function uploadWithProgress(path, body, barId, method) {
+  const bar = document.getElementById(barId);
+  const span = bar ? bar.querySelector('.upload-progress-bar span') : null;
+  const lbl = bar ? bar.querySelector('.upload-progress-label') : null;
+  if (bar) bar.classList.remove('hidden');
+  return API.upload(path, body, function (pct) {
+    if (span) span.style.width = pct + '%';
+    if (lbl) lbl.textContent = pct + '%';
+  }, method).then(function (res) {
+    if (bar) bar.classList.add('hidden');
+    return res;
+  }, function (err) {
+    if (bar) bar.classList.add('hidden');
+    throw err;
+  });
+}
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {

@@ -740,6 +740,7 @@ async function renderLibrary() {
     '<label class="mt">File (optional — max 40MB, plays right here while it uploads)</label>' +
     '<input type="file" id="lfFile" accept="' + esc(LIB_ACCEPT) + '">' +
     '<div id="lfFileBox"></div>' +
+    '<div class="upload-progress hidden" id="lfProgress"><div class="upload-progress-bar"><span style="width:0%"></span></div><span class="upload-progress-label">0%</span></div>' +
     '<div class="mt"><button type="submit">Upload</button></div></form></div>';
 
   html += '<div class="card"><h3>Library <span class="badge info">' + items.length + '</span></h3>';
@@ -813,7 +814,9 @@ async function renderLibrary() {
       if (!file) { toast('Choose a file to upload', 'err'); return; }
     }
     if (file) body.file = file;
-    await API.post('/library', body);
+    /* a real file saves through the progress bar; text-only letters stay instant */
+    if (file) await uploadWithProgress('/library', body, 'lfProgress');
+    else await API.post('/library', body);
     toast(type === 'letter' && body.useAsAccountLetter
       ? 'Letter saved — your learners will read it as their Letter of Christ.'
       : 'Library entry added', 'ok');
@@ -888,6 +891,7 @@ function openLibEdit(it) {
     '<label>Replace file (optional — max 40MB, previewed here while it uploads)</label>' +
     '<input type="file" id="leFile" accept="' + esc(LIB_ACCEPT) + '">' +
     '<div id="leFileBox"></div>' +
+    '<div class="upload-progress hidden" id="leProgress"><div class="upload-progress-bar"><span style="width:0%"></span></div><span class="upload-progress-label">0%</span></div>' +
     '<div class="mt"><button type="submit">Save changes</button></div></form>');
   wireRichTextEditor(document.querySelector('[data-rte-root="leText"]'));
   wireLibFileInput(document.getElementById('leFile'), document.getElementById('leFileBox'));
@@ -902,7 +906,9 @@ function openLibEdit(it) {
     if (acct && it.type === 'letter') body.useAsAccountLetter = acct.checked;
     const f = await filePayload(document.getElementById('leFile'));
     if (f) body.file = f;
-    await API.put('/library/' + it.id, body);
+    /* replacing a file streams through the progress bar; a title-only edit is instant */
+    if (f) await uploadWithProgress('/library/' + it.id, body, 'leProgress', 'PUT');
+    else await API.put('/library/' + it.id, body);
     closeModal();
     toast('Entry updated', 'ok');
     ME = await API.get('/me').catch(function () { return ME; });

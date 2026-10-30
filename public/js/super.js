@@ -1669,7 +1669,8 @@ async function renderLibrary() {
           (el && el.fileName ? ' — current: ' + esc(el.fileName) +
             (fmtBytes(el.fileSize) ? ' (' + fmtBytes(el.fileSize) + ')' : '') : '') + '</label>' +
           '<input type="file" id="lfFile" accept="' + esc(LIB_ACCEPT) + '">' +
-          '<div id="lfFileBox"></div></div>' +
+          '<div id="lfFileBox"></div>' +
+          '<div class="upload-progress hidden" id="lfProgress"><div class="upload-progress-bar"><span style="width:0%"></span></div><span class="upload-progress-label">0%</span></div></div>' +
       '<div class="mt row">' +
         '<div class="fixed"><button type="submit">' +
           (el ? 'Save changes' : 'Add item') + '</button></div>' +
@@ -1711,11 +1712,16 @@ async function saveLibrary(e) {
       throw new Error('Choose a file to upload');
     }
     let saved = null;
+    /* a real file streams through the progress bar; text-only letters stay instant */
     if (el) {
-      saved = await API.put('/library/' + encodeURIComponent(el.id), body);
+      saved = file
+        ? await uploadWithProgress('/library/' + encodeURIComponent(el.id), body, 'lfProgress', 'PUT')
+        : await API.put('/library/' + encodeURIComponent(el.id), body);
       toast('Library item updated', 'ok');
     } else {
-      saved = await API.post('/library', body);
+      saved = file
+        ? await uploadWithProgress('/library', body, 'lfProgress')
+        : await API.post('/library', body);
       toast('Library item added', 'ok');
     }
     /* "Make this the program-wide Letter of Christ" — the settings pointer */

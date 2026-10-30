@@ -899,7 +899,7 @@ function cleanSlice(s) {
   check('the upload helper reports progress through XMLHttpRequest',
     (function () {
       const src = fs.readFileSync(path.join(dir, 'common.js'), 'utf8');
-      return /upload\(p, body, onProgress\)/.test(src) && src.indexOf('xhr.upload.onprogress') !== -1;
+      return /upload\(p, body, onProgress(, method)?\)/.test(src) && src.indexOf('xhr.upload.onprogress') !== -1;
     })());
   const richLetterHtml = run(appCtx, 'narratedTextHtml', ['<p>My Dear <b>Friend</b>,</p>']);
   dirty('rich learner letter', richLetterHtml);
