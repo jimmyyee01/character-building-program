@@ -868,6 +868,39 @@ function cleanSlice(s) {
     fn(adminCtx, 'CHRIST_LETTER_TITLE') === 'The Letter from Christ' &&
       run(adminCtx, 'plainFromHtml', [fn(adminCtx, 'CHRIST_LETTER_HTML')])
         .indexOf('Jesus Christ') !== -1);
+
+  /* ---------------- attach a video or audio to a letter or a book -------- */
+  const picker = run(adminCtx, 'mediaPickerHtml', ['lfMedia', null, 'Video or audio']);
+  dirty('media picker', picker);
+  check('the media picker offers a file dialog and a progress bar',
+    picker.indexOf('lfMediaInput') !== -1 && picker.indexOf('upload-progress') !== -1 &&
+      picker.indexOf('lfMediaProgress') !== -1);
+  check('an attached clip renders as a real player with a close button',
+    (function () {
+      const out = run(adminCtx, 'attachedMediaHtml',
+        [{ url: '/uploads/x.mp4', kind: 'video' }, 'clip']);
+      return /<video[\s>]/.test(out) && out.indexOf('data-attached-close') !== -1 &&
+        out.indexOf('/uploads/x.mp4') !== -1;
+    })());
+  check('an attached audio clip renders as an audio player',
+    /<audio[\s>]/.test(run(adminCtx, 'attachedMediaHtml',
+      [{ url: '/uploads/y.mp3', kind: 'audio' }, 'clip'])));
+  check('the letter flow places an attached clip above the letter',
+    (function () {
+      const src = fs.readFileSync(path.join(dir, 'app.js'), 'utf8');
+      return src.indexOf('attachedMediaHtml(letter.media') !== -1 &&
+        src.indexOf('attachedMediaHtml(d.letter.media') !== -1;
+    })());
+  check('a book opens its clip in a popup with a close button',
+    (function () {
+      const src = fs.readFileSync(path.join(dir, 'app.js'), 'utf8');
+      return src.indexOf('bookPlayClip') !== -1 && src.indexOf('mediaTag(d.book.media') !== -1;
+    })());
+  check('the upload helper reports progress through XMLHttpRequest',
+    (function () {
+      const src = fs.readFileSync(path.join(dir, 'common.js'), 'utf8');
+      return /upload\(p, body, onProgress\)/.test(src) && src.indexOf('xhr.upload.onprogress') !== -1;
+    })());
   const richLetterHtml = run(appCtx, 'narratedTextHtml', ['<p>My Dear <b>Friend</b>,</p>']);
   dirty('rich learner letter', richLetterHtml);
   check('the learner letter view shows formatting and word highlights',

@@ -12,12 +12,14 @@ function lib_row(array $r): array {
     return ['id'=>$r['id'],'type'=>(($r['type'] ?? '') === 'mp3' ? 'audio' : ($r['type'] ?? null)),'title'=>$r['title'],'scope'=>$r['scope'],
         'text'=>$r['text'],'url'=>$r['url'],'fileName'=>$r['file_name'],
         'fileSize'=>isset($r['file_size']) && $r['file_size'] !== null ? (int)$r['file_size'] : null,
+        'media'=>media_out($r),
         'createdAt'=>iso($r['created_at'] ?? null)];
 }
 function book_row(array $r): array {
     return ['id'=>$r['id'],'moduleId'=>$r['module_id'],'scope'=>$r['scope'],
         'order'=>(int)$r['order'],'title'=>$r['title'],
         'libraryId'=>$r['library_id'],'letterId'=>$r['letter_id'],
+        'media'=>media_out($r),
         'createdAt'=>iso($r['created_at'] ?? null)];
 }
 function chap_row(array $r): array {
@@ -2183,8 +2185,10 @@ function r_books_create(array $user, array $body, array $params, ?string $token,
     $st = db()->prepare('SELECT COUNT(*) FROM books WHERE module_id=?'); $st->execute([$mid]);
     $ord = $body['order'] ?? ((int)$st->fetchColumn() + 1);
     $id = uid('bok');
-    db()->prepare('INSERT INTO books (id,module_id,scope,`order`,title,library_id,letter_id,created_at) VALUES (?,?,?,?,?,?,?,?)')
-        ->execute([$id, $mid, $scope, $ord, $title, $body['libraryId'] ?? $body['library_id'] ?? null, $body['letterId'] ?? $body['letter_id'] ?? null, now_dt()]);
+    $media = media_fields_from($body);
+    db()->prepare('INSERT INTO books (id,module_id,scope,`order`,title,library_id,letter_id,media_url,media_name,media_size,media_kind,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+        ->execute([$id, $mid, $scope, $ord, $title, $body['libraryId'] ?? $body['library_id'] ?? null, $body['letterId'] ?? $body['letter_id'] ?? null,
+            $media['media_url'] ?? null, $media['media_name'] ?? null, $media['media_size'] ?? null, $media['media_kind'] ?? null, now_dt()]);
     $st = db()->prepare('SELECT * FROM books WHERE id=?'); $st->execute([$id]);
     $br = book_row($st->fetch()); $br['canEdit'] = true; $br['chapters'] = []; return $br;
 }
@@ -2199,6 +2203,7 @@ function r_books_update(array $user, array $body, array $params, ?string $token,
     if (isset($body['moduleId']) || isset($body['module_id'])) { $set[] = 'module_id=?'; $args[] = $body['moduleId'] ?? $body['module_id']; }
     if (array_key_exists('libraryId', $body) || array_key_exists('library_id', $body)) { $set[] = 'library_id=?'; $args[] = $body['libraryId'] ?? $body['library_id']; }
     if (array_key_exists('letterId', $body) || array_key_exists('letter_id', $body)) { $set[] = 'letter_id=?'; $args[] = $body['letterId'] ?? $body['letter_id']; }
+    foreach (media_fields_from($body) as $col => $val) { $set[] = $col . '=?'; $args[] = $val; }
     if (count($set)) { $args[] = $id; db()->prepare('UPDATE books SET ' . implode(',', $set) . ' WHERE id=?')->execute($args); }
     $st = db()->prepare('SELECT * FROM books WHERE id=?'); $st->execute([$id]);
     $br = book_row($st->fetch()); $br['canEdit'] = true; return $br;
@@ -2319,8 +2324,11 @@ function r_library_create(array $user, array $body, array $params, ?string $toke
         if ($u) { $url = $u['url']; $fname = $body['file']['name'] ?? null; $size = $u['size']; }
     }
     $id = uid('lib');
-    db()->prepare('INSERT INTO library (id,type,title,scope,`text`,url,file_name,file_size,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-        ->execute([$id, $type, $title, $scope, $text, $url, $fname, $size, now_dt()]);
+    $media = media_fields_from($body);
+    db()->prepare('INSERT INTO library (id,type,title,scope,`text`,url,file_name,file_size,media_url,media_name,media_size,media_kind,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        ->execute([$id, $type, $title, $scope, $text, $url, $fname, $size,
+            $media['media_url'] ?? null, $media['media_name'] ?? null,
+            $media['media_size'] ?? null, $media['media_kind'] ?? null, now_dt()]);
     /* an account admin may point their own learners at this letter straight away */
     if ($type === 'letter' && !empty($body['useAsAccountLetter']) && $user['role'] === 'tenant_admin') {
         set_tenant_letter($user['tenant_id'], $id);
@@ -2343,6 +2351,7 @@ function r_library_update(array $user, array $body, array $params, ?string $toke
         $u = save_upload_meta($body['file']);
         if ($u) { $set[] = 'url=?'; $args[] = $u['url']; $set[] = 'file_name=?'; $args[] = $body['file']['name'] ?? null; $set[] = 'file_size=?'; $args[] = $u['size']; }
     }
+    foreach (media_fields_from($body) as $col => $val) { $set[] = $col . '=?'; $args[] = $val; }
     if (array_key_exists('useAsAccountLetter', $body) && $user['role'] === 'tenant_admin') {
         $isLetter = strtolower(trim((string)($body['type'] ?? $r['type']))) === 'letter'
             || (($r['type'] ?? '') === 'letter');
@@ -2355,6 +2364,18 @@ function r_library_update(array $user, array $body, array $params, ?string $toke
     if (count($set)) { $args[] = $id; db()->prepare('UPDATE library SET ' . implode(',', $set) . ' WHERE id=?')->execute($args); }
     $st = db()->prepare('SELECT * FROM library WHERE id=?'); $st->execute([$id]);
     $lr = lib_row($st->fetch()); $lr['canEdit'] = true; return $lr;
+}
+/* Save one uploaded file and hand back its link. The media pickers call this so
+   a progress bar can report the real transfer. */
+function r_upload(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super','tenant_admin']);
+    $file = $body['file'] ?? null;
+    need(is_array($file) && !empty($file['base64']) && !empty($file['name']), 'Choose a file');
+    $saved = save_upload_meta($file);
+    need($saved, 'Upload failed');
+    $kind = ($body['kind'] ?? '') === 'audio' || ($body['kind'] ?? '') === 'video'
+        ? $body['kind'] : media_kind_from_name($file['name']);
+    return ['ok' => true, 'url' => $saved['url'], 'name' => $file['name'], 'size' => $saved['size'], 'kind' => $kind];
 }
 function r_library_delete(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin']);
@@ -2380,6 +2401,25 @@ function tenant_letter(array $tenant): ?array {
 function set_tenant_letter(?string $tenantId, ?string $letterId): void {
     if (!$tenantId) return;
     db()->prepare('UPDATE tenants SET letter_id=? WHERE id=?')->execute([$letterId, $tenantId]);
+}
+/* The letter a learner actually reads: the account's own, then the program one,
+   and — when a pointer has gone stale — the newest readable letter, so a learner
+   never sees "not configured yet" while a letter exists. */
+function resolve_letter_for(?array $tenant): ?array {
+    $own = tenant_letter($tenant ?? []);
+    if ($own) return $own;
+    $s = get_settings();
+    $configured = get_library($s['letter_id'] ?? null);
+    if ($configured && ($configured['type'] ?? '') === 'letter') return $configured;
+    $tid = $tenant['id'] ?? null;
+    if ($tid) {
+        $st = db()->prepare("SELECT * FROM library WHERE type='letter' AND scope=? ORDER BY created_at DESC LIMIT 1");
+        $st->execute([$tid]); $row = $st->fetch();
+        if ($row) return $row;
+    }
+    $st = db()->query("SELECT * FROM library WHERE type='letter' AND scope='global' ORDER BY created_at DESC LIMIT 1");
+    $row = $st->fetch();
+    return $row ?: null;
 }
 function r_tenant_settings_update(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin']);

@@ -235,6 +235,35 @@ function save_upload_meta($file): ?array {
     return ['url' => '/uploads/' . $name, 'size' => $size];
 }
 
+/* ---------------------------------------------- attached video or audio --- */
+/* A letter or a book may carry one optional video or audio. The kind is read
+   from the file name so the learner's player knows <video> from <audio>. */
+function media_kind_from_name($name): string {
+    $ext = strtolower((string)pathinfo((string)$name, PATHINFO_EXTENSION));
+    $audio = ['mp3','m4a','aac','wav','flac','ogg','oga','opus','weba','amr','mid','midi','aif','aiff','wma'];
+    return in_array($ext, $audio, true) ? 'audio' : 'video';
+}
+/* The attached media a form may send (an already-uploaded link or a cleared one).
+   Files travel through save_upload_meta first, so only the URL lands here. */
+function media_fields_from(array $body): array {
+    $out = [];
+    if (!array_key_exists('mediaUrl', $body) && !array_key_exists('media_url', $body)) return $out;
+    $url = $body['mediaUrl'] ?? $body['media_url'] ?? null;
+    $url = $url ? (string)$url : null;
+    $out['media_url'] = $url;
+    $out['media_name'] = $url ? ($body['mediaName'] ?? $body['media_name'] ?? null) : null;
+    $out['media_size'] = $url ? (int)($body['mediaSize'] ?? $body['media_size'] ?? 0) ?: null : null;
+    $out['media_kind'] = $url ? (($body['mediaKind'] ?? $body['media_kind'] ?? '') === 'audio' ? 'audio' : 'video') : null;
+    return $out;
+}
+/* The media a learner may play, or null when nothing is attached. */
+function media_out(?array $row): ?array {
+    if (!$row || empty($row['media_url'])) return null;
+    return ['url' => $row['media_url'],
+        'kind' => ($row['media_kind'] ?? '') === 'audio' ? 'audio' : 'video',
+        'name' => $row['media_name'] ?? null, 'size' => isset($row['media_size']) ? (int)$row['media_size'] : null];
+}
+
 /* ------------------------------------------------------------ rich text -- */
 /* Letters are written in a small editor on the admin pages. Only this allow-list
    of formatting tags survives a save — the same rule the Node backend and the

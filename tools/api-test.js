@@ -380,6 +380,48 @@ async function part2(r, tok, check) {
   check('clearing it falls back to the program-wide letter',
     r.ok && !!r.data.letter && r.data.letter.id !== null &&
       r.data.letter.id !== (letterItem || {}).id, JSON.stringify(r.data.letter).slice(0, 140));
+
+  /* --------------------- an optional clip on a letter and a book --------- */
+  const clipBytes = Buffer.from('fake-mp4-bytes-for-the-media-picker');
+  r = await call('/upload', { method: 'POST', body: {
+    file: { name: 'clip.mp4', base64: clipBytes.toString('base64'), size: clipBytes.length } } },
+    tok.schools);
+  const clip = r.data || {};
+  check('the media picker upload returns a stored link, size and kind',
+    r.ok && /^\/uploads\//.test(clip.url || '') && clip.size === clipBytes.length &&
+      clip.kind === 'video' && clip.name === 'clip.mp4', JSON.stringify(clip).slice(0, 200));
+  check('an audio upload is reported as audio',
+    (await call('/upload', { method: 'POST', body: { file: {
+      name: 'song.mp3', base64: clipBytes.toString('base64'), size: clipBytes.length } } },
+      tok.schools)).data.kind === 'audio');
+  r = await call('/library', { method: 'POST', body: { type: 'letter',
+    title: 'Letter with a clip', text: '<p>Read me.</p>', useAsAccountLetter: true,
+    mediaUrl: clip.url, mediaKind: clip.kind, mediaName: clip.name, mediaSize: clip.size } },
+    tok.schools);
+  const mediaLetter = r.data && (r.data.item || r.data);
+  check('a letter stores its attached clip',
+    r.ok && !!mediaLetter && mediaLetter.mediaUrl === clip.url &&
+      mediaLetter.mediaKind === 'video', JSON.stringify(mediaLetter).slice(0, 200));
+  r = await call('/me', null, tok.schools);
+  check('the learner letter payload carries the attached clip',
+    r.ok && !!r.data.letter && !!r.data.letter.media && r.data.letter.media.url === clip.url,
+    JSON.stringify(r.data.letter && r.data.letter.media));
+  const modId = ((await call('/modules', null, tok.schools)).data.modules || [{}])[0].id;
+  r = await call('/books', { method: 'POST', body: { moduleId: modId, title: 'Book with a clip',
+    mediaUrl: clip.url, mediaKind: 'video', mediaName: clip.name, mediaSize: clip.size } },
+    tok.schools);
+  const mediaBook = r.data && (r.data.book || r.data);
+  check('a book stores its attached clip', r.ok && !!mediaBook && mediaBook.mediaUrl === clip.url,
+    JSON.stringify(mediaBook).slice(0, 200));
+  /* a stale pointer (the linked letter was deleted) must not show "not configured" */
+  await call('/tenant/settings', { method: 'PUT', body: { letterId: 'lib_deleted_letter' } }, tok.schools);
+  r = await call('/me', null, tok.schools);
+  check('a stale letter pointer still resolves to a readable letter',
+    r.ok && !!r.data.letter && r.data.letter.id !== null && !!(r.data.letter.text || '').length,
+    JSON.stringify(r.data.letter).slice(0, 140));
+  await call('/tenant/settings', { method: 'PUT', body: { letterId: null } }, tok.schools);
+  await call('/library/' + (mediaLetter || {}).id, { method: 'DELETE' }, tok.schools);
+  if (mediaBook && mediaBook.id) await call('/books/' + mediaBook.id, { method: 'DELETE' }, tok.schools);
   await call('/library/' + (letterItem || {}).id, { method: 'DELETE' }, tok.schools);
   if (sizeLibId) await call('/library/' + sizeLibId, { method: 'DELETE' }, tok.schools);
 

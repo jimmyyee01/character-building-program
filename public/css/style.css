@@ -1000,6 +1000,30 @@ table.nested td { font-size: 12px; }
 .lib-preview-name { margin: 6px 0; word-break: break-all; }
 .lib-preview-media { width: 100%; max-height: 260px; border-radius: 8px; background: #000; }
 .audio .lib-preview-media, audio.lib-preview-media { background: transparent; }
+
+/* Uploading a clip: a live percentage bar, only full once the file is stored. */
+.media-picker { margin-top: 10px; }
+.media-picker .audio-frame { width: 100%; background: transparent; }
+.upload-progress { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.upload-progress-bar {
+  flex: 1; height: 10px; border-radius: 999px; overflow: hidden;
+  background: #e6ebf5; border: 1px solid var(--line, #dbe3ef);
+}
+.upload-progress-bar span {
+  display: block; height: 100%; width: 0;
+  background: linear-gradient(90deg, var(--brand, #24508c), var(--brand-2, #16345f));
+  transition: width .15s ease;
+}
+.upload-progress-label { font-size: 12px; font-weight: 700; color: var(--muted); min-width: 38px; text-align: right; }
+/* A clip attached to a letter or a book, played inline with a close button. */
+.attached-media { position: relative; margin: 0 0 14px; }
+.attached-media .attached-media-close {
+  position: absolute; top: 8px; right: 8px; z-index: 2;
+  background: rgba(12, 18, 36, .72); color: #fff; border: 0; border-radius: 50%;
+  width: 34px; height: 34px; font-size: 18px; line-height: 1; cursor: pointer;
+}
+.attached-media .audio-frame { width: 100%; background: #f3f6fb; border-radius: 12px; }
+
 .lib-size { font-variant-numeric: tabular-nums; }
 
 /* Basic rich-text editor (letters): toolbar + writing area. */

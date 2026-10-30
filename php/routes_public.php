@@ -282,8 +282,10 @@ function r_me($user, $body, $params, $token, $query): array {
         $portalRow = $st->fetch() ?: null;
     }
     $s = get_settings();
-    /* the account's own Letter of Christ first, then the program-wide one */
-    $lib = tenant_letter($tenant ?? []) ?: get_library($s['letter_id'] ?? null);
+    /* the account's own Letter of Christ first, then the program-wide one — but a
+       pointer can go stale, so fall back to the newest readable letter rather than
+       showing "not configured yet" */
+    $lib = resolve_letter_for($tenant);
     $vid = get_library($s['letter_video_id'] ?? null);
     return [
         'user' => public_user($fresh),
@@ -298,6 +300,7 @@ function r_me($user, $body, $params, $token, $query): array {
             'id' => $lib['id'] ?? null,
             'title' => $lib['title'] ?? '',
             'text' => $lib['text'] ?? '',
+            'media' => media_out($lib),
             'done' => (bool)($fresh['letter_feedback_at'] ?? null),
             'feedbackAt' => iso($fresh['letter_feedback_at'] ?? null),
         ],

@@ -33,6 +33,32 @@ const API = {
   post(p, body) { return API.call(p, { method: 'POST', body: body || {} }); },
   put(p, body) { return API.call(p, { method: 'PUT', body: body || {} }); },
   del(p) { return API.call(p, { method: 'DELETE' }); },
+  /* Upload with a real progress percentage. fetch() cannot report upload
+     progress, so this uses XMLHttpRequest; onProgress gets 0–100 and the promise
+     resolves only once the server confirms the whole file is stored — nothing is
+     "uploaded" before that. */
+  upload(p, body, onProgress) {
+    return new Promise(function (resolve, reject) {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api' + p);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      const t = API.token();
+      if (t) xhr.setRequestHeader('Authorization', 'Bearer ' + t);
+      if (xhr.upload && typeof onProgress === 'function') {
+        xhr.upload.onprogress = function (e) {
+          if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+        };
+      }
+      xhr.onload = function () {
+        let data = {};
+        try { data = JSON.parse(xhr.responseText || '{}'); } catch (e) {}
+        if (xhr.status >= 200 && xhr.status < 300 && data.ok !== false) resolve(data);
+        else reject(new Error(data.error || ('Upload failed (' + xhr.status + ')')));
+      };
+      xhr.onerror = function () { reject(new Error('Network error during upload')); };
+      xhr.send(JSON.stringify(body));
+    });
+  },
   async logout() {
     try { await API.post('/auth/logout'); } catch (e) {}
     API.setToken(null); API.setUser(null);
@@ -211,6 +237,140 @@ function wireLibFileInput(input, box) {
       box.innerHTML += '<p class="err-text small">This file is ' + fmtBytes(f.size) +
         ' — the limit is 40 MB. Choose a smaller file.</p>';
     }
+  });
+}
+
+/* ============================================ attach a video or audio ====== */
+/* A playable <video>/<audio> tag for an attached media object. */
+function mediaTag(media, id) {
+  if (!media || !media.url) return '';
+  const kind = media.kind === 'audio' ? 'audio' : 'video';
+  const cls = kind === 'video' ? 'video-frame' : 'audio-frame';
+  return '<' + kind + (id ? ' id="' + esc(id) + '"' : '') + ' class="' + cls +
+    '" controls playsinline preload="metadata" src="' + esc(media.url) + '"></' + kind + '>';
+}
+/* The media currently chosen in a picker, or null when empty/cleared. */
+function mediaPickerValue(id) {
+  const url = (document.getElementById(id + 'Url') || {}).value || '';
+  if (!url) return null;
+  return { url: url,
+    kind: (document.getElementById(id + 'Kind') || {}).value || 'video',
+    name: (document.getElementById(id + 'Name') || {}).value || null,
+    size: Number((document.getElementById(id + 'Size') || {}).value) || null };
+}
+/* The picker markup: browse a file, watch a live percentage, and only see
+   "UPLOADED" once the server has the whole file. Read it with mediaPickerValue. */
+function mediaPickerHtml(id, media, label) {
+  const cur = media || null;
+  return '<div class="media-picker" data-media-root="' + esc(id) + '">' +
+    '<label>' + esc(label || 'Video or audio (optional)') + '</label>' +
+    '<p class="muted small" style="margin:2px 0 8px">Attach a short clip that plays ' +
+      'when a learner opens this. Leave empty for none.</p>' +
+    '<input type="file" id="' + esc(id) + 'Input" accept="' + esc(LIB_ACCEPT) + '">' +
+    '<div class="upload-progress hidden" id="' + esc(id) + 'Progress">' +
+      '<div class="upload-progress-bar"><span style="width:0%"></span></div>' +
+      '<span class="upload-progress-label">0%</span></div>' +
+    '<div id="' + esc(id) + 'Status">' + (cur
+      ? '<span class="badge ok">UPLOADED</span> <span class="mono small">' +
+        esc(cur.name || cur.url) + (cur.size ? ' (' + fmtBytes(cur.size) + ')' : '') + '</span>' +
+        ' <button type="button" class="ghost small" data-media-clear="' + esc(id) + '">Remove</button>'
+      : '<span class="muted small">No clip attached.</span>') + '</div>' +
+    '<div id="' + esc(id) + 'Preview">' + (cur ? mediaTag(cur, esc(id) + 'Cur') : '') + '</div>' +
+    '<input type="hidden" id="' + esc(id) + 'Url" value="' + esc(cur ? cur.url : '') + '">' +
+    '<input type="hidden" id="' + esc(id) + 'Kind" value="' + esc(cur ? (cur.kind || 'video') : '') + '">' +
+    '<input type="hidden" id="' + esc(id) + 'Name" value="' + esc(cur ? (cur.name || '') : '') + '">' +
+    '<input type="hidden" id="' + esc(id) + 'Size" value="' + esc(cur && cur.size ? cur.size : '') + '">' +
+    '</div>';
+}
+/* Wire a picker: browse → upload with a live percentage → preview + "UPLOADED".
+   The percentage only reaches 100 and the badge only flips once the server
+   responds, so an admin never sees "uploaded" for a half-sent file. */
+function wireMediaPicker(id, opts) {
+  opts = opts || {};
+  const input = document.getElementById(id + 'Input');
+  if (!input) return;
+  const bar = document.getElementById(id + 'Progress');
+  const status = document.getElementById(id + 'Status');
+  const preview = document.getElementById(id + 'Preview');
+  const set = function (field, value) {
+    const el = document.getElementById(id + field);
+    if (el) el.value = value == null ? '' : value;
+  };
+  const root = document.querySelector('[data-media-root="' + id + '"]');
+  if (root && root.addEventListener) {
+    root.addEventListener('click', function (e) {
+      const t = e.target.closest ? e.target.closest('[data-media-clear]') : null;
+      if (!t) return;
+      set('Url', ''); set('Kind', ''); set('Name', ''); set('Size', '');
+      if (status) status.innerHTML = '<span class="muted small">No clip attached.</span>';
+      if (preview) preview.innerHTML = '';
+      if (input) input.value = '';
+    });
+  }
+  input.addEventListener('change', function () {
+    const f = input.files && input.files[0];
+    if (!f) return;
+    if (f.size > LIB_MAX_UPLOAD) {
+      toast('That file is ' + fmtBytes(f.size) + ' — the limit is 40 MB.', 'err');
+      input.value = '';
+      return;
+    }
+    const kind = mediaKindByUrl(f.name) === 'audio' ? 'audio' : 'video';
+    /* preview straight away from the local file, so the admin sees what they
+       picked while the real upload runs */
+    if (preview && typeof URL !== 'undefined' && URL.createObjectURL) {
+      preview.innerHTML = '<' + kind + ' class="' + (kind === 'video' ? 'video-frame' : 'audio-frame') +
+        '" controls playsinline preload="metadata" src="' + esc(URL.createObjectURL(f)) + '"></' + kind + '>';
+    }
+    if (bar) bar.classList.remove('hidden');
+    if (status) status.innerHTML = '<span class="badge warn">UPLOADING… 0%</span>';
+    fileToBase64(f).then(function (b64) {
+      return API.upload('/upload', { file: { name: f.name, base64: b64, size: f.size }, kind: kind },
+        function (pct) {
+          if (bar) {
+            const span = bar.querySelector('span');
+            if (span) span.style.width = pct + '%';
+            const lbl = bar.querySelector('.upload-progress-label');
+            if (lbl) lbl.textContent = pct + '%';
+          }
+          if (status) status.innerHTML = '<span class="badge warn">UPLOADING… ' + pct + '%</span>';
+        });
+    }).then(function (res) {
+      if (bar) bar.classList.add('hidden');
+      set('Url', res.url); set('Kind', res.kind || kind);
+      set('Name', res.name || f.name); set('Size', res.size || f.size);
+      if (status) status.innerHTML = '<span class="badge ok">UPLOADED</span> ' +
+        '<span class="mono small">' + esc(res.name || f.name) +
+        (res.size ? ' (' + fmtBytes(res.size) + ')' : '') + '</span>' +
+        ' <button type="button" class="ghost small" data-media-clear="' + esc(id) + '">Remove</button>';
+      if (preview) preview.innerHTML = mediaTag({ url: res.url, kind: res.kind || kind }, id + 'Cur');
+      toast('Clip uploaded — ' + (res.name || f.name), 'ok');
+      if (typeof opts.onUploaded === 'function') opts.onUploaded(res);
+    }).catch(function (err) {
+      if (bar) bar.classList.add('hidden');
+      if (status) status.innerHTML = '<span class="badge bad">UPLOAD FAILED</span> ' +
+        '<span class="small">' + esc(err.message) + '</span>';
+      toast(err.message, 'err');
+    });
+  });
+}
+/* A clip attached to a letter or a book, shown with a close button. Closing hides
+   only the clip — the letter or book underneath stays exactly where it was. */
+function attachedMediaHtml(media, id) {
+  if (!media || !media.url) return '';
+  return '<div class="attached-media" data-attached-media="' + esc(id) + '">' +
+    '<button type="button" class="attached-media-close" data-attached-close="' + esc(id) +
+      '" aria-label="Close the clip" title="Close">&times;</button>' +
+    mediaTag(media, id + 'Player') + '</div>';
+}
+/* Wire the close button so it hides just the clip, never the content. */
+function wireAttachedMedia(root) {
+  if (!root || !root.querySelectorAll) return;
+  root.querySelectorAll('[data-attached-close]').forEach(function (btn) {
+    btn.onclick = function () {
+      const box = btn.closest ? btn.closest('[data-attached-media]') : null;
+      if (box) box.classList.add('hidden');
+    };
   });
 }
 

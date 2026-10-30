@@ -352,6 +352,9 @@ function startLetterFlow() {
   const video = S.me.letterVideo;
   modal(
     '<h3>' + esc(letter.title || 'The Letter from Christ') + '</h3>' +
+    /* a clip the admin attached to this letter sits at the very top; its close
+       button hides only the clip — the letter stays right where it is */
+    attachedMediaHtml(letter.media, 'letterMedia') +
     (video && video.url ?
       '<div id="letterVideoBox">' +
         '<video id="letterVideo" class="video-frame" controls playsinline src="' + esc(video.url) + '"></video>' +
@@ -365,6 +368,7 @@ function startLetterFlow() {
     '<div class="mt"><button id="submitLetter">Submit feedback &amp; continue</button></div>',
     { sticky: true, noClose: true });
 
+  wireAttachedMedia(document.getElementById('modalRoot'));
   const closeVid = document.getElementById('closeLetterVideo');
   if (closeVid) {
     closeVid.onclick = function () {
@@ -638,10 +642,23 @@ function renderBook() {
       '<div><h3 style="margin:0">' + esc(d.book.title) + '</h3>' +
       '<span class="muted small">' + esc(d.module.title) + '</span></div>' +
       /* no full-book PDF is offered on this page — only the chapter's own pages */
-      '<div><button class="ghost small" id="backToBooks3">← Books</button></div>' +
+      '<div>' +
+        (d.book.media && d.book.media.url
+          ? '<button class="ghost small" id="bookPlayClip">▶ Play clip</button> ' : '') +
+        '<button class="ghost small" id="backToBooks3">← Books</button></div>' +
     '</div></div>' +
     '<div class="reader">' + listHtml + '<div id="chapterBody">' + body + '</div></div>';
 
+  /* a clip attached to this book opens in a popup with its own close button */
+  const playClip = $('bookPlayClip');
+  if (playClip) {
+    playClip.onclick = function () {
+      modal('<h3>' + esc(d.book.title) + '</h3>' +
+        mediaTag(d.book.media, 'bookClipPlayer') +
+        '<div class="mt"><button data-close class="ghost">Close</button></div>',
+        { wide: true });
+    };
+  }
   $('backToBooks').onclick = backToModule;
   $('backToBooks3').onclick = backToModule;
   const b2 = $('backToBooks2'); if (b2) b2.onclick = backToModule;
@@ -658,6 +675,7 @@ function renderBook() {
   wireChapterPanel(d, chapter);
   if (d.stage === 'letter') wireLetterPanel(d);
   if (d.stage === 'summaries') wireSummariesPanel(d);
+  wireAttachedMedia($('view-book'));
   if (typeof initNarrators === 'function') initNarrators($('view-book'));
 }
 
@@ -834,11 +852,13 @@ function letterPanel(d) {
   }
   if (d.letterSubmission) {
     return '<div class="chapter-body"><h3>' + esc(d.letter.title) + '</h3>' +
+      attachedMediaHtml(d.letter.media, 'blMedia') +
       narratedTextHtml(d.letter.text, { className: 'letter-box', status: 'Press Play to hear this letter.' }) +
       '<p class="timestamp mt">Submitted: ' + fmtDate(d.letterSubmission.submittedAt || d.letterSubmission.createdAt) + '</p></div>';
   }
   return '<div class="chapter-body">' +
     '<h3>' + esc(d.letter.title) + '</h3>' +
+    attachedMediaHtml(d.letter.media, 'blMedia') +
     '<p class="muted small">Read the whole letter, then write your summary to unlock the next book.</p>' +
     narratedTextHtml(d.letter.text, { className: 'letter-box', status: 'Press Play to hear this letter.' }) +
     '<h4 class="mt">Summary of the letter</h4>' +

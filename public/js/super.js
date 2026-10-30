@@ -1674,6 +1674,8 @@ async function renderLibrary() {
           '<input type="file" id="lfFile" accept="' + esc(LIB_ACCEPT) + '">' +
           '<div id="lfFileBox"></div></div>' +
       '</div>' +
+      mediaPickerHtml('lfMedia', el && el.type === 'letter' ? el.media : null,
+        'Video or audio for this letter (optional)') +
       '<div class="mt row">' +
         '<div class="fixed"><button type="submit">' +
           (el ? 'Save changes' : 'Add item') + '</button></div>' +
@@ -1693,6 +1695,7 @@ async function renderLibrary() {
   }
   wireRichTextEditor(document.querySelector('[data-rte-root="lfText"]'));
   wireLibFileInput($('lfFile'), $('lfFileBox'));
+  wireMediaPicker('lfMedia');
 }
 async function saveLibrary(e) {
   e.preventDefault();
@@ -1708,6 +1711,11 @@ async function saveLibrary(e) {
     if (!body.title) throw new Error('Enter a title');
     const text = richTextGet('lfText');
     if (plainFromHtml(text)) body.text = text;
+    const med = mediaPickerValue('lfMedia');
+    body.mediaUrl = med ? med.url : '';
+    body.mediaKind = med ? med.kind : '';
+    body.mediaName = med ? med.name : '';
+    body.mediaSize = med ? med.size : '';
     const url = val('lfUrl');
     if (url) body.url = url;
     const file = await filePayload($('lfFile'));
@@ -1808,6 +1816,7 @@ async function renderBooks() {
         '<div' + (isSummary ? '' : ' class="hidden"') + '><label>Letter (summary modules)</label>' +
           '<select id="bkLetter">' + letterOpts + '</select></div>' +
       '</div>' +
+      mediaPickerHtml('bkMedia', null, 'Video or audio for this book (optional)') +
       '<div class="mt"><button type="submit">Add book</button></div>' +
     '</form></div>' +
     '<div id="bookList">' +
@@ -1817,6 +1826,7 @@ async function renderBooks() {
     '</div>';
   /* size every page picker (and read the linked PDF so all pages appear) */
   v.querySelectorAll('[data-pg]').forEach(function (p) { pgInit(p); });
+  wireMediaPicker('bkMedia');
 }
 function chapterFieldsHTML(ch) {
   const sel = pageSelection(ch);
@@ -1999,6 +2009,11 @@ async function createBook(e) {
     if (lib) body.libraryId = lib;
     const letter = val('bkLetter');
     if (letter) body.letterId = letter;
+    const med = mediaPickerValue('bkMedia');
+    body.mediaUrl = med ? med.url : '';
+    body.mediaKind = med ? med.kind : '';
+    body.mediaName = med ? med.name : '';
+    body.mediaSize = med ? med.size : '';
     await API.post('/books', body);
     toast('Book added', 'ok');
     renderBooks();

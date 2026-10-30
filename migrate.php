@@ -43,6 +43,18 @@ $wanted = [
     'library' => [
         /* how big an uploaded video/audio/file is, shown while it uploads */
         'file_size' => 'BIGINT NULL',
+        /* an optional video or audio attached to a letter */
+        'media_url' => 'VARCHAR(1000) NULL',
+        'media_name' => 'VARCHAR(255) NULL',
+        'media_size' => 'BIGINT NULL',
+        'media_kind' => 'VARCHAR(10) NULL',
+    ],
+    'books' => [
+        /* an optional video or audio attached to a book */
+        'media_url' => 'VARCHAR(1000) NULL',
+        'media_name' => 'VARCHAR(255) NULL',
+        'media_size' => 'BIGINT NULL',
+        'media_kind' => 'VARCHAR(10) NULL',
     ],
     'tenants' => [
         /* an account's own Letter of Christ (falls back to the program letter) */

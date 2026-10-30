@@ -89,6 +89,10 @@ CREATE TABLE IF NOT EXISTS library (
   url TEXT NULL,
   file_name VARCHAR(255) NULL,
   file_size BIGINT NULL,
+  media_url VARCHAR(1000) NULL,
+  media_name VARCHAR(255) NULL,
+  media_size BIGINT NULL,
+  media_kind VARCHAR(10) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX (type), INDEX (scope)
 ) ENGINE=InnoDB;
@@ -129,6 +133,10 @@ CREATE TABLE IF NOT EXISTS books (
   title VARCHAR(255) NOT NULL,
   library_id VARCHAR(64) NULL,
   letter_id VARCHAR(64) NULL,
+  media_url VARCHAR(1000) NULL,
+  media_name VARCHAR(255) NULL,
+  media_size BIGINT NULL,
+  media_kind VARCHAR(10) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX (module_id), INDEX (scope)
 ) ENGINE=InnoDB;

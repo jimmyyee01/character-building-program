@@ -129,6 +129,51 @@ function saveUpload(file) {
   return { url: '/uploads/' + name, size: Number(file.size) || buf.length };
 }
 
+/* ---------------------------------------------- attached video or audio --- */
+/* A letter or a book may carry one optional video or audio. The kind is read
+   from the file name so the learner's player knows <video> from <audio>. */
+const AUDIO_MEDIA_EXTS = ['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'oga', 'opus',
+  'weba', 'amr', 'mid', 'midi', 'aif', 'aiff', 'wma'];
+function mediaKindFromName(name) {
+  const m = /\.([a-z0-9]+)$/i.exec(String(name || ''));
+  const ext = m ? m[1].toLowerCase() : '';
+  return AUDIO_MEDIA_EXTS.indexOf(ext) !== -1 ? 'audio' : 'video';
+}
+/* The attached media a form may send. Files are uploaded first via POST
+   /api/upload, so only the finished link travels here — that keeps the progress
+   bar honest and nothing is "uploaded" until the bytes are on the server. */
+function mediaFieldsFrom(body) {
+  const out = {};
+  if (body && body.mediaUrl !== undefined) {
+    const url = body.mediaUrl ? String(body.mediaUrl) : null;
+    out.mediaUrl = url;
+    out.mediaName = url ? (body.mediaName || null) : null;
+    out.mediaSize = url ? (Number(body.mediaSize) || null) : null;
+    out.mediaKind = url ? (body.mediaKind === 'audio' ? 'audio' : 'video') : null;
+  }
+  return out;
+}
+/* The media a learner may play, or null when nothing is attached. */
+function mediaOut(obj) {
+  return obj && obj.mediaUrl
+    ? { url: obj.mediaUrl, kind: obj.mediaKind === 'audio' ? 'audio' : 'video',
+        name: obj.mediaName || null, size: obj.mediaSize || null }
+    : null;
+}
+/* Save one uploaded file and hand back its link. The media pickers call this so
+   a progress bar can report the real transfer. The route is registered below,
+   once the router exists. */
+function handleUpload({ user, body }) {
+  requireRole(user, ADMINS);
+  body = body || {};
+  need(body.file && body.file.base64 && body.file.name, 'Choose a file');
+  const saved = saveUpload(body.file);
+  need(saved, 'Upload failed');
+  const kind = body.kind === 'audio' || body.kind === 'video'
+    ? body.kind : mediaKindFromName(body.file.name);
+  return { ok: true, url: saved.url, name: body.file.name, size: saved.size, kind };
+}
+
 /* ------------------------------------------------------------- rich text -- */
 /* Letters are written in a small editor on the admin pages. Only this allow-list
    of formatting tags survives a save — the same rule the browser runs before it
@@ -166,6 +211,9 @@ const routes = [];
 function route(method, pattern, handler) {
   routes.push({ method, re: new RegExp('^' + pattern + '$'), handler });
 }
+/* The media pickers upload one file here so a progress bar can report the real
+   transfer; registered after the router exists. */
+route('POST', '/api/upload', handleUpload);
 
 async function handle(req, res, p, body) {
   const user = auth.currentUser(req);
@@ -413,7 +461,7 @@ route('GET', '/api/me', ({ user }) => {
   need(user, 'Sign in required', 401);
   const tenant = tenantOf(user);
   const portal = tenant ? dbm.byId('portals', tenant.portalId) : null;
-  const letter = tenantLetterOf(tenant) || dbm.byId('library', dbm.db.settings.letterId);
+  const letter = resolveLetterFor(tenant);
   const video = dbm.byId('library', dbm.db.settings.letterVideoId);
   return {
     ok: true,
@@ -422,7 +470,7 @@ route('GET', '/api/me', ({ user }) => {
     portal: portal ? { name: portal.name, active: portalActive(portal),
       scheduleMode: portal.scheduleMode, windows: portal.windows || [] } : null,
     letter: { id: letter ? letter.id : null, title: letter ? letter.title : null,
-      text: letter ? letter.text : null,
+      text: letter ? letter.text : null, media: mediaOut(letter),
       done: !!user.letterFeedbackAt, feedbackAt: user.letterFeedbackAt || null },
     letterVideo: video ? { id: video.id, title: video.title, url: video.url } : null,
     optionalVideoSeen: !!user.optionalVideoSeen
@@ -512,7 +560,7 @@ function bookProgress(user, module, book) {
       const lsub = findSub(user.id, 'letter_summary', { bookId: book.id });
       letterSubmission = subMeta(lsub);
       const lib = dbm.byId('library', book.letterId);
-      letter = lib ? { id: lib.id, title: lib.title, text: lib.text } : null;
+      letter = lib ? { id: lib.id, title: lib.title, text: lib.text, media: mediaOut(lib) } : null;
       if (!letter) stage = 'complete';           // no letter configured -> book finished
       else stage = lsub ? 'complete' : 'letter';
     } else {
@@ -1069,7 +1117,7 @@ route('GET', '/api/book/([a-z0-9_-]+)', ({ user, params }) => {
   return { ok: true, moduleStatus: st.status, pdfUnlocked: allModulesComplete(user),
     module: { id: module.id, mode: module.mode, title: module.title },
     book: Object.assign({}, progress.book, { pdf: lib && lib.type === 'book' ? (lib.url || null) : null,
-      pdfTitle: lib ? lib.title : null }),
+      pdfTitle: lib ? lib.title : null, media: mediaOut(book) }),
     chapters: progress.chapters, stage: progress.stage, summaries: progress.summaries,
     letter: progress.letter, letterSubmission: progress.letterSubmission };
 });
@@ -2267,6 +2315,22 @@ function setTenantLetter(tenantId, letterId) {
   dbm.save();
   return tenant;
 }
+/* The letter a learner actually reads. Order: the account's own letter, then the
+   program letter — but a pointer can go stale (the linked letter was deleted), so
+   when neither resolves, fall back to the newest letter this learner may read
+   rather than showing "not configured yet". */
+function resolveLetterFor(tenant) {
+  const own = tenantLetterOf(tenant);
+  if (own) return own;
+  const configured = dbm.byId('library', dbm.db.settings.letterId);
+  if (configured && configured.type === 'letter') return configured;
+  const tid = tenant ? tenant.id : null;
+  const letters = dbm.where('library', l => l.type === 'letter' &&
+    (l.scope === 'global' || l.scope === tid));
+  if (!letters.length) return null;
+  return letters.slice().sort((a, b) =>
+    String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0];
+}
 
 route('POST', '/api/library', ({ user, body }) => {
   requireRole(user, ADMINS);
@@ -2279,6 +2343,7 @@ route('POST', '/api/library', ({ user, body }) => {
   const item = { id: dbm.uid('lib'), type, title: String(body.title).trim(), scope,
     text: body.text ? sanitizeRichHtml(body.text) : null, url: body.url || null,
     fileName: null, fileSize: null, createdAt: dbm.nowISO() };
+  Object.assign(item, mediaFieldsFrom(body));
   if (body.file) {
     const saved = saveUpload(body.file);
     need(saved, 'File upload failed');
@@ -2313,6 +2378,7 @@ route('PUT', '/api/library/([a-z0-9_-]+)', ({ user, params, body }) => {
     const saved = saveUpload(body.file);
     if (saved) { item.url = saved.url; item.fileSize = saved.size; item.fileName = body.file.name; }
   }
+  Object.assign(item, mediaFieldsFrom(body));
   if (body.useAsAccountLetter !== undefined && user.role === 'tenant_admin' && item.type === 'letter') {
     setTenantLetter(user.tenantId, body.useAsAccountLetter ? item.id : null);
   }
@@ -2362,6 +2428,7 @@ route('POST', '/api/books', ({ user, body }) => {
     title: String(body.title).trim(),
     libraryId: body.libraryId || null, letterId: body.letterId || null,
     createdAt: dbm.nowISO() };
+  Object.assign(book, mediaFieldsFrom(body));
   dbm.collection('books').push(book);
   dbm.save();
   return { ok: true, book };
@@ -2378,6 +2445,7 @@ route('PUT', '/api/books/([a-z0-9_-]+)', ({ user, params, body }) => {
   if (body.moduleId && dbm.byId('modules', body.moduleId)) book.moduleId = body.moduleId;
   if (body.libraryId !== undefined) book.libraryId = body.libraryId || null;
   if (body.letterId !== undefined) book.letterId = body.letterId || null;
+  Object.assign(book, mediaFieldsFrom(body));
   dbm.save();
   return { ok: true, book };
 });

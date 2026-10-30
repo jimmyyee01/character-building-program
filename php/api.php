@@ -84,6 +84,7 @@ route('GET',  '/api/library', 'r_library_get');
 route('POST', '/api/reading/open', 'r_reading_open');
 
 /* Content management (super + tenant admin) */
+route('POST',   '/api/upload', 'r_upload');
 route('POST',   '/api/library', 'r_library_create');
 route('PUT',    '/api/library/([a-zA-Z0-9_-]+)', 'r_library_update');
 route('DELETE', '/api/library/([a-zA-Z0-9_-]+)', 'r_library_delete');

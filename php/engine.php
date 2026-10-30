@@ -166,7 +166,7 @@ function book_progress(array $user, array $module, array $book): array {
             $lsub = find_sub($user['id'], 'letter_summary', ['book_id' => $book['id']]);
             $letterSubmission = sub_meta($lsub);
             $lib = $book['letterId'] ? get_library($book['letterId']) : null;
-            $letter = $lib ? ['id' => $lib['id'], 'title' => $lib['title'], 'text' => $lib['text']] : null;
+            $letter = $lib ? ['id' => $lib['id'], 'title' => $lib['title'], 'text' => $lib['text'], 'media' => media_out($lib)] : null;
             $stage = !$letter ? 'complete' : ($lsub ? 'complete' : 'letter');
         } else {
             $prompts = $module['summaryPrompts'] ?? [];
