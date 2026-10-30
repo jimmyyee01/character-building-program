@@ -1674,8 +1674,6 @@ async function renderLibrary() {
           '<input type="file" id="lfFile" accept="' + esc(LIB_ACCEPT) + '">' +
           '<div id="lfFileBox"></div></div>' +
       '</div>' +
-      mediaPickerHtml('lfMedia', el && el.type === 'letter' ? el.media : null,
-        'Video or audio for this letter (optional)') +
       '<div class="mt row">' +
         '<div class="fixed"><button type="submit">' +
           (el ? 'Save changes' : 'Add item') + '</button></div>' +
@@ -1695,7 +1693,6 @@ async function renderLibrary() {
   }
   wireRichTextEditor(document.querySelector('[data-rte-root="lfText"]'));
   wireLibFileInput($('lfFile'), $('lfFileBox'));
-  wireMediaPicker('lfMedia');
 }
 async function saveLibrary(e) {
   e.preventDefault();
@@ -1711,11 +1708,6 @@ async function saveLibrary(e) {
     if (!body.title) throw new Error('Enter a title');
     const text = richTextGet('lfText');
     if (plainFromHtml(text)) body.text = text;
-    const med = mediaPickerValue('lfMedia');
-    body.mediaUrl = med ? med.url : '';
-    body.mediaKind = med ? med.kind : '';
-    body.mediaName = med ? med.name : '';
-    body.mediaSize = med ? med.size : '';
     const url = val('lfUrl');
     if (url) body.url = url;
     const file = await filePayload($('lfFile'));

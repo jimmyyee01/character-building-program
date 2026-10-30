@@ -869,12 +869,12 @@ function cleanSlice(s) {
       run(adminCtx, 'plainFromHtml', [fn(adminCtx, 'CHRIST_LETTER_HTML')])
         .indexOf('Jesus Christ') !== -1);
 
-  /* ---------------- attach a video or audio to a letter or a book -------- */
-  const picker = run(adminCtx, 'mediaPickerHtml', ['lfMedia', null, 'Video or audio']);
+  /* ---------------- attach a video or audio to a book ------------------- */
+  const picker = run(superCtx, 'mediaPickerHtml', ['bkMedia', null, 'Video or audio']);
   dirty('media picker', picker);
   check('the media picker offers a file dialog and a progress bar',
-    picker.indexOf('lfMediaInput') !== -1 && picker.indexOf('upload-progress') !== -1 &&
-      picker.indexOf('lfMediaProgress') !== -1);
+    picker.indexOf('bkMediaInput') !== -1 && picker.indexOf('upload-progress') !== -1 &&
+      picker.indexOf('bkMediaProgress') !== -1);
   check('an attached clip renders as a real player with a close button',
     (function () {
       const out = run(adminCtx, 'attachedMediaHtml',
