@@ -223,6 +223,14 @@ const SPEECH_SUPPORTED = (function () {
       !!(window.SpeechRecognition || window.webkitSpeechRecognition);
   } catch (e) { return false; }
 })();
+/* Browsers only allow the microphone in a secure context (HTTPS or localhost).
+   On a plain-http IP the mic is blocked by the browser itself, so we surface a
+   clear "use https" message instead of a silently dead button. */
+const SPEECH_INSECURE = (function () {
+  try {
+    return typeof window !== 'undefined' && window.isSecureContext === false;
+  } catch (e) { return false; }
+})();
 let speechRec = null, speechField = null;
 
 function micIcon() {
@@ -242,7 +250,7 @@ function stopSpeech() {
 function wireSpeechInput(ta) {
   if (!ta || ta.tagName !== 'TEXTAREA' || ta.dataset.speechWired) return;
   ta.dataset.speechWired = '1';
-  if (!SPEECH_SUPPORTED) return;               /* no button where unsupported */
+  if (!SPEECH_SUPPORTED && !SPEECH_INSECURE) return;   /* truly unsupported */
   const wrap = document.createElement('div');
   wrap.className = 'speech-field';
   ta.parentNode.insertBefore(wrap, ta);
@@ -256,6 +264,14 @@ function wireSpeechInput(ta) {
   wrap.appendChild(btn);
   btn.addEventListener('click', function () {
     if (speechField === ta) { stopSpeech(); return; }   /* toggle off */
+    /* Insecure origin (plain http on an IP): the browser blocks the mic here, so
+       explain the fix instead of appearing broken. */
+    if (SPEECH_INSECURE || !navigator.mediaDevices) {
+      const host = location.host || 'this address';
+      toast('Voice typing needs a secure connection. Please open https://' + host +
+        ' (and accept the certificate) to use the microphone.', 'err');
+      return;
+    }
     stopSpeech();
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { toast('Voice typing is not supported in this browser.', 'err'); return; }

@@ -1,7 +1,10 @@
 'use strict';
-/* HTTP server: static files, tenant pages and the JSON API. */
+/* HTTP server: static files, tenant pages and the JSON API. When TLS certs are
+   present it also serves HTTPS so browsers allow microphone access (voice
+   typing needs a secure context). */
 
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const dbm = require('./db');
@@ -137,7 +140,7 @@ const PAGES = {
   '/app': 'app.html'
 };
 
-const server = http.createServer(async (req, res) => {
+const handler = async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
     const p = decodeURIComponent(url.pathname);
@@ -165,7 +168,7 @@ const server = http.createServer(async (req, res) => {
       sendJSON(res, code, { ok: false, error: e.message || 'Server error' });
     }
   }
-});
+};
 
 process.on('exit', () => { try { dbm.flush(); } catch (e) {} });
 process.on('SIGINT', () => { try { dbm.flush(); } catch (e) {} process.exit(0); });
@@ -219,7 +222,9 @@ setInterval(() => {
 }, 60000);
 
 
-server.listen(PORT, () => {
+// Always serve plain HTTP (the existing live URL on :3000).
+const httpServer = http.createServer(handler);
+httpServer.listen(PORT, () => {
   console.log('-------------------------------------------------------------');
   console.log(' Character Building Program');
   console.log(' Super admin : http://localhost:' + PORT + '/super');
@@ -227,3 +232,23 @@ server.listen(PORT, () => {
   console.log(' Demo school : http://localhost:' + PORT + '/t/greenfield-academy');
   console.log('-------------------------------------------------------------');
 });
+
+// When TLS certs are present, also serve HTTPS so browsers allow microphone
+// access (voice typing needs a secure context). Without them, HTTP only.
+const TLS_CERT = process.env.TLS_CERT || path.join(ROOT, 'certs', 'server.crt');
+const TLS_KEY = process.env.TLS_KEY || path.join(ROOT, 'certs', 'server.key');
+const HTTPS_PORT = Number(process.env.HTTPS_PORT) || 443;
+if (fs.existsSync(TLS_CERT) && fs.existsSync(TLS_KEY)) {
+  try {
+    const tls = { cert: fs.readFileSync(TLS_CERT), key: fs.readFileSync(TLS_KEY) };
+    const httpsServer = https.createServer(tls, handler);
+    httpsServer.listen(HTTPS_PORT, () => {
+      console.log(' HTTPS       : https://localhost:' + HTTPS_PORT + '/ (microphone enabled)');
+    });
+    httpsServer.on('error', (e) => console.error('[https]', e.message));
+  } catch (e) {
+    console.error('[https] failed to start:', e.message);
+  }
+} else {
+  console.log(' HTTPS       : disabled (no TLS certs at ' + TLS_CERT + ') — voice typing needs HTTPS');
+}
