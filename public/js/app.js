@@ -379,6 +379,11 @@ function startLetterFlow() {
     { sticky: true, noClose: true });
 
   wireAttachedMedia(document.getElementById('modalRoot'));
+  /* The Letter of Christ is read-only for students: no copying the sacred text
+     out, and no pasting into the feedback box below it. */
+  const letterBox = document.querySelector('#modalRoot .letter-box');
+  if (letterBox) blockPaste(letterBox, 'The Letter of Christ cannot be copied or pasted.');
+  blockPaste(document.getElementById('letterFeedback'), 'Please write your own words.');
   const closeVid = document.getElementById('closeLetterVideo');
   if (closeVid) {
     closeVid.onclick = function () {
@@ -877,11 +882,14 @@ function letterPanel(d) {
 }
 
 function wireLetterPanel(d) {
+  /* The Letter of Christ is read-only for students: no copying the sacred text. */
+  const letterBox = document.querySelector('#view-book .letter-box');
+  if (letterBox) blockPaste(letterBox, 'The Letter of Christ cannot be copied or pasted.');
   const back = $('backToBooks4');
   if (back) { back.onclick = backToModule; return; }
   const t = $('letterSum');
   if (!t) return;
-  blockPaste(t);
+  blockPaste(t, 'Please write your own words.');
   $('letterSubmit').onclick = async function () {
     try {
       const r = await API.post('/submissions',

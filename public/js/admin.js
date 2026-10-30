@@ -787,8 +787,6 @@ async function renderLibrary() {
 
   const typeSel = document.getElementById('lfType');
   wireRichTextEditor(document.querySelector('[data-rte-root="lfText"]'));
-  /* the Letter of Christ must be typed/edited here, never pasted in */
-  blockPaste(document.getElementById('lfText'), 'The Letter of Christ cannot be copied or pasted. Please type or edit it here.');
   wireLibFileInput(document.getElementById('lfFile'), document.getElementById('lfFileBox'));
   /* the Letter of Christ, ready to edit word by word (title included) */
   const christ = document.getElementById('lfChrist');

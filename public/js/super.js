@@ -1700,8 +1700,6 @@ async function renderLibrary() {
   }
   wireRichTextEditor(document.querySelector('[data-rte-root="lfText"]'));
   wireMediaPicker('lfMedia');
-  /* the Letter of Christ must be typed/edited here, never pasted in */
-  blockPaste($('lfText'), 'The Letter of Christ cannot be copied or pasted. Please type or edit it here.');
   wireLibFileInput($('lfFile'), $('lfFileBox'));
 }
 async function saveLibrary(e) {

@@ -258,34 +258,53 @@ function wireSpeechInput(ta) {
     if (speechField === ta) { stopSpeech(); return; }   /* toggle off */
     stopSpeech();
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const rec = new SR();
-    rec.continuous = true;
-    rec.interimResults = false;
-    rec.lang = navigator.language || 'en-US';
-    rec.onresult = function (e) {
-      let txt = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) txt += e.results[i][0].transcript;
-      }
-      if (txt) {
-        ta.value = (ta.value ? ta.value.replace(/\s*$/, ' ') : '') + txt.trim() + ' ';
-        ta.focus();
-        ta.selectionStart = ta.selectionEnd = ta.value.length;
-        ta.dispatchEvent(new Event('input', { bubbles: true }));
-      }
+    if (!SR) { toast('Voice typing is not supported in this browser.', 'err'); return; }
+    /* Ask for the microphone up front so the browser shows its "allow microphone"
+       prompt, and tell the user what is happening either way. */
+    toast('Please allow microphone access to start voice typing.', 'ok');
+    const begin = function () {
+      const rec = new SR();
+      rec.continuous = true;
+      rec.interimResults = false;
+      rec.lang = navigator.language || 'en-US';
+      rec.onresult = function (e) {
+        let txt = '';
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          if (e.results[i].isFinal) txt += e.results[i][0].transcript;
+        }
+        if (txt) {
+          ta.value = (ta.value ? ta.value.replace(/\s*$/, ' ') : '') + txt.trim() + ' ';
+          ta.focus();
+          ta.selectionStart = ta.selectionEnd = ta.value.length;
+          ta.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      };
+      rec.onerror = function (e) {
+        if (e && (e.error === 'no-speech' || e.error === 'aborted')) return; /* keep listening */
+        stopSpeech();
+      };
+      rec.onend = function () {
+        /* the browser stops on silence — restart while the mic is still "on" */
+        if (speechField === ta) { try { rec.start(); } catch (e) {} }
+      };
+      try { rec.start(); } catch (e) { return; }
+      speechRec = rec; speechField = ta;
+      btn.classList.add('listening');
+      toast('Listening… click the mic again to stop.', 'ok');
     };
-    rec.onerror = function (e) {
-      if (e && (e.error === 'no-speech' || e.error === 'aborted')) return; /* keep listening */
-      stopSpeech();
-    };
-    rec.onend = function () {
-      /* the browser stops on silence — restart while the mic is still "on" */
-      if (speechField === ta) { try { rec.start(); } catch (e) {} }
-    };
-    try { rec.start(); } catch (e) { return; }
-    speechRec = rec; speechField = ta;
-    btn.classList.add('listening');
-    toast('Listening… click the mic again to stop.', 'ok');
+    const md = navigator.mediaDevices;
+    if (md && md.getUserMedia) {
+      /* this triggers the browser's permission prompt; on grant we free the
+         stream (the recognizer opens its own) and start dictating */
+      md.getUserMedia({ audio: true }).then(function (stream) {
+        try { stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
+        begin();
+      }).catch(function () {
+        toast('Microphone access was denied. Allow the microphone to use voice typing.', 'err');
+      });
+    } else {
+      begin();   /* older browser — recognition raises its own prompt */
+    }
   });
 }
 /* Wire every textarea under `scope` (defaults to the whole document). */
