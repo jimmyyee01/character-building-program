@@ -789,7 +789,6 @@ async function renderLibrary() {
   const typeSel = document.getElementById('lfType');
   const syncType = function () {
     const t = typeSel.value;
-    document.getElementById('lfTextRow').classList.toggle('hidden', t !== 'letter');
     document.getElementById('lfUrlRow').classList.toggle('hidden', t !== 'video' && t !== 'audio');
   };
   typeSel.onchange = syncType;

@@ -133,8 +133,10 @@ function saveUpload(file) {
 /* Letters are written in a small editor on the admin pages. Only this allow-list
    of formatting tags survives a save — the same rule the browser runs before it
    shows a letter, so nothing else can ride along into a learner's screen. */
-const RICH_TAGS = ['p', 'br', 'b', 'strong', 'i', 'em', 'u', 's', 'strike',
+const RICH_TAGS = ['p', 'div', 'br', 'b', 'strong', 'i', 'em', 'u', 's', 'strike',
   'h1', 'h2', 'h3', 'h4', 'ul', 'ol', 'li', 'blockquote'];
+/* Block-level tags that may carry a text alignment. */
+const RICH_ALIGN_TAGS = ['p', 'div', 'h1', 'h2', 'h3', 'h4', 'li', 'blockquote'];
 function sanitizeRichHtml(html) {
   let out = String(html == null ? '' : html);
   out = out.replace(/<!--[\s\S]*?-->/g, '');
@@ -142,13 +144,21 @@ function sanitizeRichHtml(html) {
     out = out.replace(new RegExp('<' + tag + '[^>]*>[\\s\\S]*?<\\/' + tag + '\\s*>', 'gi'), '');
     out = out.replace(new RegExp('<\\/?' + tag + '[^>]*>', 'gi'), '');
   });
-  /* every attribute goes — an allowed tag keeps its name only */
-  out = out.replace(/<([a-z][a-z0-9]*)\b[^>]*>/gi, (m, tag) =>
-    RICH_TAGS.indexOf(String(tag).toLowerCase()) !== -1 ? '<' + tag.toLowerCase() + '>' : '');
+  /* every attribute goes, except a safe text alignment on a block tag */
+  out = out.replace(/<([a-z][a-z0-9]*)\b([^>]*)>/gi, (m, tag, attrs) => {
+    const t = String(tag).toLowerCase();
+    if (RICH_TAGS.indexOf(t) === -1) return '';
+    const align = /text-align\s*:\s*(left|center|right|justify)/i.exec(attrs || '');
+    if (align && RICH_ALIGN_TAGS.indexOf(t) !== -1) {
+      return '<' + t + ' style="text-align:' + align[1].toLowerCase() + '">';
+    }
+    return '<' + t + '>';
+  });
   out = out.replace(/<\s*\/\s*([a-z][a-z0-9]*)\s*>/gi, (m, tag) =>
     RICH_TAGS.indexOf(String(tag).toLowerCase()) !== -1 ? '</' + tag.toLowerCase() + '>' : '');
-  /* a stray angle bracket could open a new tag later — write it out safely */
-  return out.replace(/</g, '&lt;').replace(/&lt;(\/?(?:[a-z][a-z0-9]*)\s*>)/gi, '<$1');
+  /* a stray angle bracket could open a new tag later — escape it, but never
+     disturb the allowed tags (with their optional alignment style) */
+  return out.replace(/<(?!\/?(?:p|div|br|b|strong|i|em|u|s|strike|h1|h2|h3|h4|ul|ol|li|blockquote)(?=[\s/>]))/gi, '&lt;');
 }
 
 /* -------------------------------------------------------------- routing --- */

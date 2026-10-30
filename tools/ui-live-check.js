@@ -844,6 +844,26 @@ function cleanSlice(s) {
         out.indexOf('data-rte="insertOrderedList"') !== -1 &&
         (out.indexOf('contenteditable="true"') !== -1 || out.indexOf('rte-fallback') !== -1);
     })());
+  check('the letter editor can align text left, centre, right and justified',
+    (function () {
+      const out = run(adminCtx, 'richTextEditorHtml', ['lfText', '']);
+      return ['alignLeft', 'alignCenter', 'alignRight', 'alignFull'].every(function (c) {
+        return out.indexOf('data-rte="' + c + '"') !== -1;
+      });
+    })());
+  check('a saved alignment survives the sanitizer on a block tag',
+    run(adminCtx, 'sanitizeRichHtml', ['<div style="text-align:center">Hi</div>']) ===
+      '<div style="text-align:center">Hi</div>');
+  check('an aligned letter still strips a handler or a dangerous style',
+    run(adminCtx, 'sanitizeRichHtml', ['<p style="color:red" onclick="x()">y</p>']) === '<p>y</p>' &&
+      run(adminCtx, 'sanitizeRichHtml', ['<p onclick="x()">y</p>']).indexOf('onclick') === -1);
+  check('the admin library form always shows the letter editor',
+    (function () {
+      /* the reveal must not depend on the Type dropdown any more: admin.js must
+         never re-hide the letter editor row */
+      const src = fs.readFileSync(path.join(dir, 'admin.js'), 'utf8');
+      return src.indexOf("lfTextRow').classList.toggle('hidden'") === -1;
+    })());
   check('the Letter of Christ preset carries its title and its words',
     fn(adminCtx, 'CHRIST_LETTER_TITLE') === 'The Letter from Christ' &&
       run(adminCtx, 'plainFromHtml', [fn(adminCtx, 'CHRIST_LETTER_HTML')])

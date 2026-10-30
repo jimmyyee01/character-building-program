@@ -246,12 +246,20 @@ function sanitize_rich_html($html): string {
         $out = preg_replace('/<' . $tag . '[^>]*>.*?<\/' . $tag . '\s*>/is', '', $out);
         $out = preg_replace('/<\/?' . $tag . '[^>]*>/i', '', $out);
     }
-    $allowed = ['p', 'br', 'b', 'strong', 'i', 'em', 'u', 's', 'strike',
+    $allowed = ['p', 'div', 'br', 'b', 'strong', 'i', 'em', 'u', 's', 'strike',
         'h1', 'h2', 'h3', 'h4', 'ul', 'ol', 'li', 'blockquote'];
-    /* every attribute goes — an allowed tag keeps its name only */
-    $out = preg_replace_callback('/<([a-z][a-z0-9]*)\b[^>]*>/i', function ($m) use ($allowed) {
+    /* block tags that may keep a safe text alignment */
+    $alignable = ['p', 'div', 'h1', 'h2', 'h3', 'h4', 'li', 'blockquote'];
+    /* every attribute goes, except a safe text alignment on a block tag */
+    $out = preg_replace_callback('/<([a-z][a-z0-9]*)\b([^>]*)>/i', function ($m) use ($allowed, $alignable) {
         $tag = strtolower($m[1]);
-        return in_array($tag, $allowed, true) ? '<' . $tag . '>' : '';
+        if (!in_array($tag, $allowed, true)) return '';
+        $attrs = $m[2] ?? '';
+        if (preg_match('/text-align\s*:\s*(left|center|right|justify)/i', $attrs, $a)
+            && in_array($tag, $alignable, true)) {
+            return '<' . $tag . ' style="text-align:' . strtolower($a[1]) . '">';
+        }
+        return '<' . $tag . '>';
     }, $out);
     $out = preg_replace_callback('/<\s*\/\s*([a-z][a-z0-9]*)\s*>/i', function ($m) use ($allowed) {
         $tag = strtolower($m[1]);
@@ -259,6 +267,6 @@ function sanitize_rich_html($html): string {
     }, $out);
     /* a stray angle bracket could open a new tag later — write it out safely */
     $out = str_replace('<', '&lt;', $out);
-    return preg_replace('/&lt;(\/?(?:[a-z][a-z0-9]*)\s*>)/i', '<$1', $out);
+    return preg_replace('/&lt;(\/?(?:p|div|br|b|strong|i|em|u|s|strike|h1|h2|h3|h4|ul|ol|li|blockquote)(?=[\s\/>]))/i', '<$1', $out);
 }
 

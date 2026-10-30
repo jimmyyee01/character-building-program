@@ -219,8 +219,10 @@ function wireLibFileInput(input, box) {
    formatting tags. Only this allow-list ever reaches a learner's screen: every
    other tag is dropped and every attribute is stripped, so no script, link or
    style can ride along. The PHP and Node backends run the same rule on save. */
-const RICH_TAGS = ['p', 'br', 'b', 'strong', 'i', 'em', 'u', 's', 'strike',
+const RICH_TAGS = ['p', 'div', 'br', 'b', 'strong', 'i', 'em', 'u', 's', 'strike',
   'h1', 'h2', 'h3', 'h4', 'ul', 'ol', 'li', 'blockquote'];
+/* Block-level tags that may carry a text alignment. */
+const RICH_ALIGN_TAGS = ['p', 'div', 'h1', 'h2', 'h3', 'h4', 'li', 'blockquote'];
 function sanitizeRichHtml(html) {
   let out = String(html == null ? '' : html);
   out = out.replace(/<!--[\s\S]*?-->/g, '');
@@ -228,15 +230,22 @@ function sanitizeRichHtml(html) {
     out = out.replace(new RegExp('<' + tag + '[^>]*>[\\s\\S]*?<\\/' + tag + '\\s*>', 'gi'), '');
     out = out.replace(new RegExp('<\\/?' + tag + '[^>]*>', 'gi'), '');
   });
-  /* every attribute goes — an allowed tag keeps its name only */
-  out = out.replace(/<([a-z][a-z0-9]*)\b[^>]*>/gi, function (m, tag) {
-    return RICH_TAGS.indexOf(String(tag).toLowerCase()) !== -1 ? '<' + tag.toLowerCase() + '>' : '';
+  /* every attribute goes, except a safe text alignment on a block tag */
+  out = out.replace(/<([a-z][a-z0-9]*)\b([^>]*)>/gi, function (m, tag, attrs) {
+    const t = String(tag).toLowerCase();
+    if (RICH_TAGS.indexOf(t) === -1) return '';
+    const align = /text-align\s*:\s*(left|center|right|justify)/i.exec(attrs || '');
+    if (align && RICH_ALIGN_TAGS.indexOf(t) !== -1) {
+      return '<' + t + ' style="text-align:' + align[1].toLowerCase() + '">';
+    }
+    return '<' + t + '>';
   });
   out = out.replace(/<\s*\/\s*([a-z][a-z0-9]*)\s*>/gi, function (m, tag) {
     return RICH_TAGS.indexOf(String(tag).toLowerCase()) !== -1 ? '</' + tag.toLowerCase() + '>' : '';
   });
-  /* a stray angle bracket could open a new tag later — write it out safely */
-  out = out.replace(/</g, '&lt;').replace(/&lt;(\/?(?:[a-z][a-z0-9]*)\s*>)/gi, '<$1');
+  /* a stray angle bracket could open a new tag later — escape it, but never
+     disturb the allowed tags (with their optional alignment style) */
+  out = out.replace(/<(?!\/?(?:p|div|br|b|strong|i|em|u|s|strike|h1|h2|h3|h4|ul|ol|li|blockquote)(?=[\s/>]))/gi, '&lt;');
   return out;
 }
 /* The same letter as plain words (for read-aloud and for editors without HTML). */
@@ -282,6 +291,8 @@ const RTE_BUTTONS = [
   ['bold', 'B', 'Bold'], ['italic', 'I', 'Italic'], ['underline', 'U', 'Underline'],
   ['h3', 'H', 'Heading'], ['quote', '“', 'Quote'],
   ['insertUnorderedList', '•', 'Bulleted list'], ['insertOrderedList', '1.', 'Numbered list'],
+  ['alignLeft', '⟸', 'Align left'], ['alignCenter', '↔', 'Align centre'],
+  ['alignRight', '⟹', 'Align right'], ['alignFull', '≡', 'Justify'],
   ['removeFormat', 'Tx', 'Clear formatting']
 ];
 function richTextEditorHtml(id, html) {
@@ -322,10 +333,14 @@ function wireRichTextEditor(root) {
       if (!body) return;
       if (body.focus) body.focus();
       const cmd = btn.getAttribute('data-rte');
+      /* the toolbar names map onto the browser's justify commands */
+      const justify = { alignLeft: 'justifyLeft', alignCenter: 'justifyCenter',
+        alignRight: 'justifyRight', alignFull: 'justifyFull' };
       try {
         if (cmd === 'h3') document.execCommand('formatBlock', false, 'h3');
         else if (cmd === 'quote') document.execCommand('formatBlock', false, 'blockquote');
         else if (cmd === 'removeFormat') document.execCommand('removeFormat');
+        else if (justify[cmd]) document.execCommand(justify[cmd]);
         else document.execCommand(cmd);
       } catch (err) { /* command unavailable in this browser */ }
       if (body.classList && body.classList.contains('rte-fallback')) return;
