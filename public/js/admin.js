@@ -737,8 +737,6 @@ async function renderLibrary() {
       '<input type="checkbox" id="lfAccountLetter"> Show this to my learners as the account letter</label>' : '') +
     '</div></div>' +
     richTextEditorHtml('lfText', '') + '</div>' +
-    '<div id="lfUrlRow" class="hidden mt"><label>Video / audio URL</label>' +
-    '<input type="text" id="lfUrl" placeholder="https://… or /uploads/…"></div>' +
     '<label class="mt">File (optional — max 40MB, plays right here while it uploads)</label>' +
     '<input type="file" id="lfFile" accept="' + esc(LIB_ACCEPT) + '">' +
     '<div id="lfFileBox"></div>' +
@@ -787,12 +785,6 @@ async function renderLibrary() {
   el.innerHTML = html;
 
   const typeSel = document.getElementById('lfType');
-  const syncType = function () {
-    const t = typeSel.value;
-    document.getElementById('lfUrlRow').classList.toggle('hidden', t !== 'video' && t !== 'audio');
-  };
-  typeSel.onchange = syncType;
-  syncType();
   wireRichTextEditor(document.querySelector('[data-rte-root="lfText"]'));
   wireLibFileInput(document.getElementById('lfFile'), document.getElementById('lfFileBox'));
   /* the Letter of Christ, ready to edit word by word (title included) */
@@ -809,7 +801,6 @@ async function renderLibrary() {
     const type = typeSel.value;
     const title = document.getElementById('lfTitle').value.trim();
     const text = type === 'letter' ? richTextGet('lfText') : '';
-    const url = document.getElementById('lfUrl').value.trim();
     const file = await filePayload(document.getElementById('lfFile'));
     const body = { type: type, title: title };
     if (type === 'letter') {
@@ -817,12 +808,9 @@ async function renderLibrary() {
       if (plainFromHtml(text)) body.text = text;
       const acct = document.getElementById('lfAccountLetter');
       if (acct && acct.checked) body.useAsAccountLetter = true;
-    } else if (type === 'video' || type === 'audio') {
-      if (!url && !file) { toast('Add a URL or choose a file', 'err'); return; }
-      if (url) body.url = url;
     } else {
-      if (!file && !url) { toast('Attach a file or provide a URL', 'err'); return; }
-      if (url) body.url = url;
+      /* video, audio and books are browsed and saved on the server, not linked */
+      if (!file) { toast('Choose a file to upload', 'err'); return; }
     }
     if (file) body.file = file;
     await API.post('/library', body);
@@ -897,7 +885,6 @@ function openLibEdit(it) {
       (isAdmin() ? '<label class="small" style="display:block;margin-top:8px">' +
         '<input type="checkbox" id="leAccountLetter"' + (currentLetter ? ' checked' : '') + '> ' +
         'Show this to my learners as the account letter</label>' : '') + '</div>' +
-    '<label>URL</label><input type="text" id="leUrl" value="' + esc(it.url || '') + '" placeholder="https://…">' +
     '<label>Replace file (optional — max 40MB, previewed here while it uploads)</label>' +
     '<input type="file" id="leFile" accept="' + esc(LIB_ACCEPT) + '">' +
     '<div id="leFileBox"></div>' +
@@ -907,8 +894,7 @@ function openLibEdit(it) {
   document.getElementById('libEditForm').onsubmit = wrap(async function (e) {
     e.preventDefault();
     const body = {
-      title: document.getElementById('leTitle').value.trim(),
-      url: document.getElementById('leUrl').value.trim()
+      title: document.getElementById('leTitle').value.trim()
     };
     /* only a letter carries editor text — anything else keeps its stored text */
     if (it.type === 'letter') body.text = richTextGet('leText');

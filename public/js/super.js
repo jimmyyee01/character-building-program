@@ -1664,16 +1664,12 @@ async function renderLibrary() {
         '</div>' +
         richTextEditorHtml('lfText', el && el.text ? el.text : '') +
       '</div>' +
-      '<div class="row">' +
-        '<div><label>URL (video / audio / external files)</label>' +
-          '<input type="text" id="lfUrl" placeholder="https://… or /uploads/…" value="' +
-            esc(el && el.url ? el.url : '') + '"></div>' +
-        '<div><label>File upload (max 40MB — plays right here while it uploads)' +
+      '<div>' +
+        '<label>File upload (max 40MB — plays right here while it uploads)' +
           (el && el.fileName ? ' — current: ' + esc(el.fileName) +
             (fmtBytes(el.fileSize) ? ' (' + fmtBytes(el.fileSize) + ')' : '') : '') + '</label>' +
           '<input type="file" id="lfFile" accept="' + esc(LIB_ACCEPT) + '">' +
           '<div id="lfFileBox"></div></div>' +
-      '</div>' +
       '<div class="mt row">' +
         '<div class="fixed"><button type="submit">' +
           (el ? 'Save changes' : 'Add item') + '</button></div>' +
@@ -1708,10 +1704,12 @@ async function saveLibrary(e) {
     if (!body.title) throw new Error('Enter a title');
     const text = richTextGet('lfText');
     if (plainFromHtml(text)) body.text = text;
-    const url = val('lfUrl');
-    if (url) body.url = url;
     const file = await filePayload($('lfFile'));
     if (file) body.file = file;
+    /* video, audio and books are browsed and saved on the server, not linked */
+    if (body.type !== 'letter' && !file && !(el && el.url)) {
+      throw new Error('Choose a file to upload');
+    }
     let saved = null;
     if (el) {
       saved = await API.put('/library/' + encodeURIComponent(el.id), body);
