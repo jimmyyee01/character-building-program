@@ -40,6 +40,14 @@ $wanted = [
         'library_id' => 'VARCHAR(64) NULL',
         'video_url' => 'VARCHAR(1000) NULL',
     ],
+    'library' => [
+        /* how big an uploaded video/audio/file is, shown while it uploads */
+        'file_size' => 'BIGINT NULL',
+    ],
+    'tenants' => [
+        /* an account's own Letter of Christ (falls back to the program letter) */
+        'letter_id' => 'VARCHAR(64) NULL',
+    ],
 ];
 
 $done = 0; $skipped = 0;

@@ -987,6 +987,50 @@ table.nested td { font-size: 12px; }
 .rank-badge.rank-5 { background: #cffafe; color: #0f766e; }
 
 
+/* ------------------------------------------------ library uploads + editor - */
+/* A chosen video/audio file, playable inside the form while it uploads. */
+.lib-preview {
+  margin: 8px 0 4px;
+  padding: 10px;
+  border: 1px solid var(--line, #dbe3ef);
+  border-radius: 10px;
+  background: #f8fafd;
+}
+.lib-preview-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lib-preview-name { margin: 6px 0; word-break: break-all; }
+.lib-preview-media { width: 100%; max-height: 260px; border-radius: 8px; background: #000; }
+.audio .lib-preview-media, audio.lib-preview-media { background: transparent; }
+.lib-size { font-variant-numeric: tabular-nums; }
+
+/* Basic rich-text editor (letters): toolbar + writing area. */
+.rte { border: 1px solid var(--line, #dbe3ef); border-radius: 10px; overflow: hidden; background: #fff; }
+.rte-bar {
+  display: flex; flex-wrap: wrap; gap: 4px; padding: 6px;
+  border-bottom: 1px solid var(--line, #dbe3ef); background: #f3f6fb;
+}
+.rte-btn {
+  min-width: 30px; padding: 4px 8px; border: 1px solid var(--line, #dbe3ef);
+  border-radius: 6px; background: #fff; cursor: pointer; font-weight: 700; font-size: 13px;
+}
+.rte-btn:hover { background: #e8eefb; }
+.rte-body { min-height: 200px; max-height: 420px; overflow: auto; padding: 12px; outline: none; }
+.rte-body p { margin: 0 0 10px; }
+.rte-body h3 { margin: 6px 0 10px; }
+.rte-body blockquote {
+  margin: 8px 0; padding: 6px 12px; border-left: 3px solid var(--line, #dbe3ef);
+  color: var(--muted, #5b6b84);
+}
+.rte-fallback { width: 100%; min-height: 200px; }
+
+/* Formatted letters shown to learners keep their paragraphs and lists. */
+.letter-rich p { margin: 0 0 12px; }
+.letter-rich ul, .letter-rich ol { margin: 8px 0 12px 22px; }
+.letter-rich blockquote {
+  margin: 8px 0; padding: 6px 12px; border-left: 3px solid var(--line, #dbe3ef);
+  color: var(--muted, #5b6b84);
+}
+.letter-rich h3, .letter-rich h4 { margin: 10px 0 8px; }
+
 /* Responsive */
 @media (max-width: 768px) {
   .shell, .app, .layout { flex-direction: column !important; }

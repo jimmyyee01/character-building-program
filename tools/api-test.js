@@ -35,7 +35,7 @@ async function main() {
     (r.data.features || []).indexOf('admin.analytics') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
   check('the login serves the live top-performers build and its features',
-    r.ok && r.data.build === '2026-10-29-reading-ribbon' &&
+    r.ok && r.data.build === '2026-10-30-library-media-letters' &&
       (r.data.features || []).indexOf('reports.module-performers') !== -1 &&
       (r.data.features || []).indexOf('reports.top-performers') !== -1 &&
       (r.data.features || []).indexOf('public.top-performers') !== -1 &&
@@ -44,6 +44,10 @@ async function main() {
       (r.data.features || []).indexOf('assessment') !== -1 &&
       (r.data.features || []).indexOf('assessment.admin') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
+  check('this deployment carries the library media and letter features',
+    r.ok && (r.data.features || []).indexOf('library.media') !== -1 &&
+      (r.data.features || []).indexOf('library.letters') !== -1,
+    'features ' + JSON.stringify(r.data.features || []));
   check('this deployment includes scoped student details',
     r.ok && (r.data.features || []).indexOf('reports.student-detail') !== -1,
     'features ' + JSON.stringify(r.data.features || []));
@@ -341,6 +345,43 @@ async function part2(r, tok, check) {
   check('GET /library', r.ok && Array.isArray(r.data.library), 'status ' + r.status);
   r = await call('/books?moduleId=mod_gamma', null, tok.schools);
   check('GET /books?moduleId=mod_gamma', r.ok && (r.data.books || []).length >= 3, 'count ' + (r.data.books || []).length);
+
+  /* ------------------------- library media size + the Letter of Christ --- */
+  const audioBytes = Buffer.from('ID3-not-really-audio-just-bytes-to-measure');
+  r = await call('/library', { method: 'POST', body: { type: 'audio',
+    title: 'Size check track',
+    file: { name: 'size-check.mp3', base64: audioBytes.toString('base64'), size: audioBytes.length } } },
+    tok.schools);
+  const sizeItem = r.data && (r.data.item || r.data);
+  check('an uploaded audio file is stored with its size',
+    r.ok && !!sizeItem && /^\/uploads\//.test(sizeItem.url || '') &&
+      sizeItem.fileSize === audioBytes.length && sizeItem.fileName === 'size-check.mp3',
+    JSON.stringify(sizeItem).slice(0, 200));
+  const sizeLibId = r.ok && sizeItem ? sizeItem.id : null;
+
+  const letterHtml = '<p>Dear learner,</p><p><b>Bold truth</b> and <i>italic grace</i>.</p>' +
+    '<script>alert(1)</script><p onclick="steal()">Plain ending</p>';
+  r = await call('/library', { method: 'POST', body: { type: 'letter',
+    title: 'A test letter', text: letterHtml, useAsAccountLetter: true } }, tok.schools);
+  const letterItem = r.data && (r.data.item || r.data);
+  check('a letter keeps its formatting but drops any script',
+    r.ok && !!letterItem && /<b>Bold truth<\/b>/.test(letterItem.text || '') &&
+      !/<script|onclick/i.test(letterItem.text || ''), JSON.stringify(letterItem.text).slice(0, 160));
+  check('the title of a letter stays editable',
+    !!letterItem && letterItem.title === 'A test letter');
+  r = await call('/me', null, tok.schools);
+  check('the account admin sees their own letter as the Letter of Christ',
+    r.ok && !!r.data.letter && r.data.letter.id === (letterItem || {}).id,
+    JSON.stringify(r.data.letter).slice(0, 140));
+  r = await call('/tenant/settings', { method: 'PUT', body: { letterId: null } }, tok.schools);
+  check('an account letter can be cleared again',
+    r.ok && (r.data.letterId === null || r.data.letterId === ''), JSON.stringify(r.data));
+  r = await call('/me', null, tok.schools);
+  check('clearing it falls back to the program-wide letter',
+    r.ok && !!r.data.letter && r.data.letter.id !== null &&
+      r.data.letter.id !== (letterItem || {}).id, JSON.stringify(r.data.letter).slice(0, 140));
+  await call('/library/' + (letterItem || {}).id, { method: 'DELETE' }, tok.schools);
+  if (sizeLibId) await call('/library/' + sizeLibId, { method: 'DELETE' }, tok.schools);
 
   const stu = await call('/auth/login', { method: 'POST', body: { slug: 'greenfield-academy', identifier: 'STU-001', password: 'Student@123' } });
   check('student login', stu.ok && stu.data.token, JSON.stringify(stu.data).slice(0, 120));

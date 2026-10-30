@@ -112,10 +112,225 @@ function fileToBase64(file) {
     r.readAsDataURL(file);
   });
 }
+/* ================================================ library media helpers ==== */
+/* Every video/audio container the server will serve with a proper MIME type.
+   A browser still decides what it can decode — anything else is offered as a
+   download instead of a broken player. */
+const MEDIA_TYPES = {
+  mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm',
+  ogv: 'video/ogg', mkv: 'video/x-matroska', avi: 'video/x-msvideo',
+  wmv: 'video/x-ms-wmv', mpeg: 'video/mpeg', mpg: 'video/mpeg',
+  m2ts: 'video/mp2t', ts: 'video/mp2t', vob: 'video/mpeg', '3gp': 'video/3gpp',
+  mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav',
+  flac: 'audio/flac', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/opus',
+  weba: 'audio/webm', amr: 'audio/amr', mid: 'audio/midi',
+  aif: 'audio/aiff', aiff: 'audio/aiff', wma: 'audio/x-ms-wma',
+  pdf: 'application/pdf',
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+  webp: 'image/webp', svg: 'image/svg+xml'
+};
+/* accept= string so the file dialog opens straight onto the media formats. */
+const LIB_ACCEPT = (function () {
+  const exts = Object.keys(MEDIA_TYPES);
+  return exts.map(function (e) { return '.' + e; }).join(',') + ',video/*,audio/*,application/pdf,image/*';
+})();
+function fileExt(name) {
+  const m = /\.([a-z0-9]+)$/i.exec(String(name || ''));
+  return m ? m[1].toLowerCase() : '';
+}
+/* 'video' | 'audio' | 'pdf' | 'image' | 'file' — how a link/upload should open. */
+function mediaKindByUrl(url) {
+  const ext = fileExt(String(url || '').split(/[?#]/)[0]);
+  const mime = MEDIA_TYPES[ext] || '';
+  if (mime.indexOf('video/') === 0) return 'video';
+  if (mime.indexOf('audio/') === 0) return 'audio';
+  if (mime === 'application/pdf') return 'pdf';
+  if (mime.indexOf('image/') === 0) return 'image';
+  return 'file';
+}
+function fmtBytes(n) {
+  const size = Number(n);
+  if (!isFinite(size) || size <= 0) return null;
+  if (size < 1024) return size + ' B';
+  if (size < 1024 * 1024) return (size / 1024).toFixed(1) + ' KB';
+  if (size < 1024 * 1024 * 1024) return (size / (1024 * 1024)).toFixed(1) + ' MB';
+  return (size / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+/* The upload cap the JSON/base64 transport allows (see filePayload). */
+const LIB_MAX_UPLOAD = 40 * 1024 * 1024;
 /* Prevents paste/cut/drop into "own words" boxes (server also enforces length). */
 function blockPaste(el) {
   ['paste', 'cut', 'drop', 'copy'].forEach(function (evt) {
     el.addEventListener(evt, function (e) { e.preventDefault(); toast('Please type your own words.', 'err'); });
+  });
+}
+/* A chosen file, playable right there in the form: player + name + size.
+   Falls back to a plain panel when the browser cannot decode that container. */
+function libFilePreviewHtml(file) {
+  if (!file) return '';
+  const kind = mediaKindByUrl(file.name);
+  const size = fmtBytes(file.size);
+  const type = MEDIA_TYPES[fileExt(file.name)] || '';
+  let body;
+  if ((kind === 'video' || kind === 'audio') && typeof URL !== 'undefined' && URL.createObjectURL) {
+    body = '<' + (kind === 'video' ? 'video class="lib-preview-media" controls playsinline'
+                                   : 'audio class="lib-preview-media" controls') +
+      ' preload="metadata" src="' + esc(URL.createObjectURL(file)) + '"></' + (kind === 'video' ? 'video' : 'audio') + '>';
+  } else {
+    body = '<p class="muted small">No in-browser preview for this file type — it will be stored as-is.</p>';
+  }
+  return '<div class="lib-preview">' +
+    '<div class="lib-preview-meta">' +
+      '<span class="badge ' + (kind === 'video' || kind === 'audio' ? 'ok' : 'info') + '">' +
+        esc(String(kind).toUpperCase()) + '</span>' +
+      (type ? '<span class="mono small"> ' + esc(type) + '</span>' : '') +
+      (size ? '<span class="badge info lib-preview-size">' + size + '</span>' : '') +
+    '</div>' +
+    '<p class="lib-preview-name mono small">' + esc(file.name || 'file') + '</p>' +
+    body +
+    '</div>';
+}
+/* Keeps the preview box in step with the file dialog (and revokes old blobs). */
+function wireLibFileInput(input, box) {
+  if (!input || !box) return;
+  let lastUrl = null;
+  input.addEventListener('change', function () {
+    const f = input.files && input.files[0];
+    box.innerHTML = '';
+    if (lastUrl) { try { URL.revokeObjectURL(lastUrl); } catch (e) {} lastUrl = null; }
+    if (!f) return;
+    box.innerHTML = libFilePreviewHtml(f);
+    const player = box.querySelector ? box.querySelector('.lib-preview-media') : null;
+    if (player && player.addEventListener) {
+      player.addEventListener('error', function () {
+        toast('This browser cannot play "' + f.name + '" — the file is still saved and can be downloaded.', 'err');
+      });
+      if (player.src && /^blob:/.test(String(player.src))) lastUrl = player.src;
+    }
+    if (f.size > LIB_MAX_UPLOAD) {
+      box.innerHTML += '<p class="err-text small">This file is ' + fmtBytes(f.size) +
+        ' — the limit is 40 MB. Choose a smaller file.</p>';
+    }
+  });
+}
+
+/* ================================================== letters & rich text ==== */
+/* Letters are written in a small editor, so the stored text may carry simple
+   formatting tags. Only this allow-list ever reaches a learner's screen: every
+   other tag is dropped and every attribute is stripped, so no script, link or
+   style can ride along. The PHP and Node backends run the same rule on save. */
+const RICH_TAGS = ['p', 'br', 'b', 'strong', 'i', 'em', 'u', 's', 'strike',
+  'h1', 'h2', 'h3', 'h4', 'ul', 'ol', 'li', 'blockquote'];
+function sanitizeRichHtml(html) {
+  let out = String(html == null ? '' : html);
+  out = out.replace(/<!--[\s\S]*?-->/g, '');
+  ['script', 'style', 'iframe', 'object', 'embed', 'template', 'svg', 'math'].forEach(function (tag) {
+    out = out.replace(new RegExp('<' + tag + '[^>]*>[\\s\\S]*?<\\/' + tag + '\\s*>', 'gi'), '');
+    out = out.replace(new RegExp('<\\/?' + tag + '[^>]*>', 'gi'), '');
+  });
+  /* every attribute goes — an allowed tag keeps its name only */
+  out = out.replace(/<([a-z][a-z0-9]*)\b[^>]*>/gi, function (m, tag) {
+    return RICH_TAGS.indexOf(String(tag).toLowerCase()) !== -1 ? '<' + tag.toLowerCase() + '>' : '';
+  });
+  out = out.replace(/<\s*\/\s*([a-z][a-z0-9]*)\s*>/gi, function (m, tag) {
+    return RICH_TAGS.indexOf(String(tag).toLowerCase()) !== -1 ? '</' + tag.toLowerCase() + '>' : '';
+  });
+  /* a stray angle bracket could open a new tag later — write it out safely */
+  out = out.replace(/</g, '&lt;').replace(/&lt;(\/?(?:[a-z][a-z0-9]*)\s*>)/gi, '<$1');
+  return out;
+}
+/* The same letter as plain words (for read-aloud and for editors without HTML). */
+function plainFromHtml(html) {
+  return String(html == null ? '' : html)
+    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+    .replace(/<\/(p|div|h1|h2|h3|h4|li|blockquote|tr)\s*>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
+    .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n')
+    .replace(/^[ \t]+/gm, '').trim();
+}
+function hasRichText(text) {
+  const s = String(text == null ? '' : text);
+  return new RegExp('<\\s*/?\\s*(?:' + RICH_TAGS.join('|') + ')[\\s/>]', 'i').test(s);
+}
+/* Word spans for narration that keep the formatting tags around them. Only the
+   sanitizer's (attribute-free) output is passed here, so a tag is never split. */
+function narrationRichMarkup(html) {
+  let i = 0;
+  return String(html).replace(/(<[^>]*>)|(\S+)/g, function (m, tag, word) {
+    if (tag) return tag;
+    i++;
+    return '<span class="narrate-word" data-narrate-word="' + (i - 1) + '">' + word + '</span>';
+  });
+}
+/* The default letter — an admin may change every word of it, title included. */
+const CHRIST_LETTER_TITLE = 'The Letter from Christ';
+const CHRIST_LETTER_HTML = [
+  '<p>My Dear Friend,</p>',
+  '<p>I have not come to condemn you, but to find you. Before you read another page of this programme, hear this: you are not a project to be corrected — you are a person to be loved, and love does not give up.</p>',
+  '<p>I know the chapters of your story that you would rather nobody ever reads. I have seen them, and I have not looked away. The shame you carry was never meant to be carried alone; bring it to Me and trade it for peace. Where you are weak, I am patient. Where you have failed, I am not finished.</p>',
+  '<p>Character is built in the quiet places: in the choice nobody applauds, in the honest word when a lie would be easier, in getting up again after falling. Every small yes to what is right is a stone laid in a foundation that will not shake.</p>',
+  '<p>Read, think, argue, question — and then let the truth change you. I am nearer than your next breath, and I will be with you on every page of this journey.</p>',
+  '<p>With unending love,<br>Jesus Christ</p>'
+].join('');
+
+/* A basic rich-text editor: a toolbar over a contenteditable box. No library,
+   nothing to install — the same buttons on both admin consoles. Falls back to
+   a plain box where contenteditable/execCommand is unavailable. */
+const RTE_BUTTONS = [
+  ['bold', 'B', 'Bold'], ['italic', 'I', 'Italic'], ['underline', 'U', 'Underline'],
+  ['h3', 'H', 'Heading'], ['quote', '“', 'Quote'],
+  ['insertUnorderedList', '•', 'Bulleted list'], ['insertOrderedList', '1.', 'Numbered list'],
+  ['removeFormat', 'Tx', 'Clear formatting']
+];
+function richTextEditorHtml(id, html) {
+  const fallback = typeof document === 'undefined' || !document.createElement ||
+    typeof document.execCommand !== 'function';
+  const tools = RTE_BUTTONS.map(function (b) {
+    return '<button type="button" class="rte-btn" data-rte="' + b[0] + '" title="' + esc(b[2]) + '">' +
+      esc(b[1]) + '</button>';
+  }).join('');
+  const body = fallback
+    ? '<textarea id="' + esc(id) + '" class="rte-fallback" rows="14">' + esc(plainFromHtml(html)) + '</textarea>'
+    : '<div id="' + esc(id) + '" class="rte-body" contenteditable="true" role="textbox" ' +
+      'aria-multiline="true" data-rte-body>' + sanitizeRichHtml(html) + '</div>';
+  return '<div class="rte" data-rte-root="' + esc(id) + '">' +
+    '<div class="rte-bar" role="toolbar" aria-label="Text formatting">' + tools + '</div>' + body + '</div>';
+}
+function richTextGet(id) {
+  const box = document.getElementById(id);
+  if (!box) return '';
+  return box.classList && box.classList.contains('rte-fallback')
+    ? sanitizeRichHtml(plainFromHtml(box.value))
+    : sanitizeRichHtml(box.innerHTML);
+}
+function richTextSet(id, html) {
+  const box = document.getElementById(id);
+  if (!box) return;
+  if (box.classList && box.classList.contains('rte-fallback')) box.value = plainFromHtml(html);
+  else box.innerHTML = sanitizeRichHtml(html);
+}
+/* Wire the toolbar once the editor is on the page. */
+function wireRichTextEditor(root) {
+  if (!root || !root.querySelectorAll) return;
+  const id = root.getAttribute ? root.getAttribute('data-rte-root') : null;
+  root.querySelectorAll('[data-rte]').forEach(function (btn) {
+    btn.onclick = function (e) {
+      e.preventDefault();
+      const body = id ? document.getElementById(id) : null;
+      if (!body) return;
+      if (body.focus) body.focus();
+      const cmd = btn.getAttribute('data-rte');
+      try {
+        if (cmd === 'h3') document.execCommand('formatBlock', false, 'h3');
+        else if (cmd === 'quote') document.execCommand('formatBlock', false, 'blockquote');
+        else if (cmd === 'removeFormat') document.execCommand('removeFormat');
+        else document.execCommand(cmd);
+      } catch (err) { /* command unavailable in this browser */ }
+      if (body.classList && body.classList.contains('rte-fallback')) return;
+      body.innerHTML = sanitizeRichHtml(body.innerHTML);
+    };
   });
 }
 
@@ -170,13 +385,19 @@ function narratorControlsHtml(opts) {
   '</div>';
 }
 
-/* Text + controls, used for chapter text, letters and library text files. */
+/* Text + controls, used for chapter text, letters and library text files.
+   A letter written in the rich editor carries formatting tags — those are
+   shown as formatting (sanitized first), and read aloud from the plain words. */
 function narratedTextHtml(text, opts) {
   opts = opts || {};
   const cls = opts.className ? ' ' + opts.className : '';
+  const rich = opts.html !== false && hasRichText(text);
+  const shown = rich ? sanitizeRichHtml(text) : esc(text);
+  const spoken = rich ? plainFromHtml(shown) : String(text == null ? '' : text);
   return '<div class="narrator" data-narrator>' +
-    '<div class="narrator-text' + cls + '" data-narrate-text data-narrate-raw="' + esc(text) + '">' +
-      narrationMarkup(text) + '</div>' +
+    '<div class="narrator-text' + cls + (rich ? ' letter-rich' : '') + '"' +
+      ' data-narrate-text data-narrate-raw="' + esc(spoken) + '">' +
+      (rich ? narrationRichMarkup(shown) : narrationMarkup(text)) + '</div>' +
     narratorControlsHtml(opts) +
   '</div>';
 }

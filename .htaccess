@@ -22,17 +22,30 @@ RewriteRule ^(css|js)/(.*)$ public/$1/$2 [L]
 # Uploads are stored at the project root /uploads/
 # (nothing to rewrite — served directly)
 
-# Media uploads (audio/video library entries)
+# Media uploads (audio/video library entries) — one type per container so a
+# browser will attempt playback (and seeking) instead of downloading blindly.
 AddType audio/mpeg .mp3
 AddType audio/mp4 .m4a
 AddType audio/aac .aac
 AddType audio/wav .wav
 AddType audio/flac .flac
 AddType audio/ogg .ogg .oga
+AddType audio/opus .opus
+AddType audio/webm .weba
+AddType audio/amr .amr
+AddType audio/midi .mid .midi
+AddType audio/aiff .aif .aiff
+AddType audio/x-ms-wma .wma
 AddType video/mp4 .mp4 .m4v
 AddType video/quicktime .mov
 AddType video/webm .webm
 AddType video/ogg .ogv
+AddType video/x-matroska .mkv
+AddType video/x-msvideo .avi
+AddType video/x-ms-wmv .wmv
+AddType video/mpeg .mpeg .mpg .vob
+AddType video/mp2t .m2ts .ts
+AddType video/3gpp .3gp
 
 # Keep PHP internals out of direct browser access except api.php/install.php
 <FilesMatch "^(config|engine|routes_.*|seed_data)\.php$">

@@ -117,7 +117,7 @@ async function filePayload(input) {
   const f = input.files[0];
   if (!f) return null;
   if (f.size > 40 * 1024 * 1024) throw new Error('File too large (max 40MB)');
-  return { name: f.name, base64: await fileToBase64(f) };
+  return { name: f.name, base64: await fileToBase64(f), size: f.size };
 }
 function setFlagCount(n) {
   const b = document.querySelector('#nav .nav-btn[data-view="submissions"]');
@@ -693,9 +693,14 @@ function libIndicator(it) {
   if (it.url && /\.pdf($|[?#])/i.test(String(it.url))) {
     return pdfHtml(it.url, { title: it.fileName || it.title });
   }
-  if (it.fileName) return '<span class="mono small">' + esc(it.fileName) + '</span>';
-  if (it.text) return '<span class="badge warn">Text · ' + String(it.text).length + ' chars</span>';
-  if (it.url) return pdfHtml(it.url);
+  const size = fmtBytes(it.fileSize);
+  const sizeHtml = size ? ' <span class="badge info lib-size">' + size + '</span>' : '';
+  if (it.fileName) return '<span class="mono small">' + esc(it.fileName) + '</span>' + sizeHtml;
+  if (it.text) {
+    return '<span class="badge warn">Text · ' + plainFromHtml(it.text).length + ' chars</span>' +
+      (hasRichText(it.text) ? ' <span class="badge info">FORMATTED</span>' : '');
+  }
+  if (it.url) return pdfHtml(it.url) + sizeHtml;
   return '<span class="muted">—</span>';
 }
 async function renderLibrary() {
@@ -719,16 +724,24 @@ async function renderLibrary() {
   let html = '<div class="card"><h3>Add to library</h3><form id="libForm"><div class="row">' +
     '<div><label>Type</label><select id="lfType">' +
     '<option value="book">Book / Reading (file)</option>' +
-    '<option value="letter">Letter (text)</option>' +
-    '<option value="video">Video (URL)</option>' +
-    '<option value="audio">Audio / MP3 (file)</option></select></div>' +
+    '<option value="letter">Letter (formatted text)</option>' +
+    '<option value="video">Video (URL or file)</option>' +
+    '<option value="audio">Audio / MP3 (URL or file)</option></select></div>' +
     '<div><label>Title</label><input type="text" id="lfTitle" required></div>' +
     '</div>' +
-    '<div id="lfTextRow"><label>Text (for letters)</label>' +
-    '<textarea id="lfText" placeholder="Paste the letter text"></textarea></div>' +
-    '<div id="lfUrlRow" class="hidden"><label>Video / audio URL</label>' +
-    '<input type="text" id="lfUrl" placeholder="https://…"></div>' +
-    '<label>File (optional — max 40MB)</label><input type="file" id="lfFile">' +
+    '<div id="lfTextRow"><div class="mt row">' +
+    '<div><label>Letter text</label>' +
+    '<p class="muted small">Bold, italics, headings, quotes and lists are kept — nothing else.</p></div>' +
+    '<div class="fixed"><button type="button" class="ghost" id="lfChrist">Insert the Letter of Christ</button>' +
+    (isAdmin() ? '<label class="small" style="display:block;margin-top:8px">' +
+      '<input type="checkbox" id="lfAccountLetter"> Show this to my learners as the account letter</label>' : '') +
+    '</div></div>' +
+    richTextEditorHtml('lfText', '') + '</div>' +
+    '<div id="lfUrlRow" class="hidden mt"><label>Video / audio URL</label>' +
+    '<input type="text" id="lfUrl" placeholder="https://… or /uploads/…"></div>' +
+    '<label class="mt">File (optional — max 40MB, plays right here while it uploads)</label>' +
+    '<input type="file" id="lfFile" accept="' + esc(LIB_ACCEPT) + '">' +
+    '<div id="lfFileBox"></div>' +
     '<div class="mt"><button type="submit">Upload</button></div></form></div>';
 
   html += '<div class="card"><h3>Library <span class="badge info">' + items.length + '</span></h3>';
@@ -781,18 +794,30 @@ async function renderLibrary() {
   };
   typeSel.onchange = syncType;
   syncType();
+  wireRichTextEditor(document.querySelector('[data-rte-root="lfText"]'));
+  wireLibFileInput(document.getElementById('lfFile'), document.getElementById('lfFileBox'));
+  /* the Letter of Christ, ready to edit word by word (title included) */
+  const christ = document.getElementById('lfChrist');
+  if (christ) christ.onclick = function () {
+    const title = document.getElementById('lfTitle');
+    if (title && !title.value.trim()) title.value = CHRIST_LETTER_TITLE;
+    richTextSet('lfText', CHRIST_LETTER_HTML);
+    toast('Letter of Christ inserted — edit the title and every word before saving.', 'ok');
+  };
 
   document.getElementById('libForm').onsubmit = wrap(async function (e) {
     e.preventDefault();
     const type = typeSel.value;
     const title = document.getElementById('lfTitle').value.trim();
-    const text = document.getElementById('lfText').value.trim();
+    const text = type === 'letter' ? richTextGet('lfText') : '';
     const url = document.getElementById('lfUrl').value.trim();
     const file = await filePayload(document.getElementById('lfFile'));
     const body = { type: type, title: title };
     if (type === 'letter') {
-      if (!text && !file) { toast('Add text or a file for the letter', 'err'); return; }
-      if (text) body.text = text;
+      if (!plainFromHtml(text) && !file) { toast('Add text or a file for the letter', 'err'); return; }
+      if (plainFromHtml(text)) body.text = text;
+      const acct = document.getElementById('lfAccountLetter');
+      if (acct && acct.checked) body.useAsAccountLetter = true;
     } else if (type === 'video' || type === 'audio') {
       if (!url && !file) { toast('Add a URL or choose a file', 'err'); return; }
       if (url) body.url = url;
@@ -802,7 +827,10 @@ async function renderLibrary() {
     }
     if (file) body.file = file;
     await API.post('/library', body);
-    toast('Library entry added', 'ok');
+    toast(type === 'letter' && body.useAsAccountLetter
+      ? 'Letter saved — your learners will read it as their Letter of Christ.'
+      : 'Library entry added', 'ok');
+    ME = await API.get('/me').catch(function () { return ME; });
     renderLibrary();
   });
 
@@ -858,27 +886,41 @@ async function renderLibrary() {
 }
 
 function openLibEdit(it) {
+  const currentLetter = ME && ME.letter && ME.letter.id === it.id;
   openModal('<h3>Edit library entry</h3>' +
     '<p class="muted small">Type: <b>' + esc(it.type) + '</b>' +
-    (it.fileName ? ' — current file: <span class="mono">' + esc(it.fileName) + '</span>' : '') + '</p>' +
+    (it.fileName ? ' — current file: <span class="mono">' + esc(it.fileName) + '</span>' +
+      (fmtBytes(it.fileSize) ? ' (' + fmtBytes(it.fileSize) + ')' : '') : '') + '</p>' +
     '<form id="libEditForm"><label>Title</label>' +
     '<input type="text" id="leTitle" value="' + esc(it.title) + '" required>' +
-    '<label>Text</label><textarea id="leText">' + esc(it.text || '') + '</textarea>' +
+    '<div id="leTextRow"' + (it.type === 'letter' ? '' : ' class="hidden"') + '>' +
+      '<label class="mt">Text</label>' + richTextEditorHtml('leText', it.text || '') +
+      (isAdmin() ? '<label class="small" style="display:block;margin-top:8px">' +
+        '<input type="checkbox" id="leAccountLetter"' + (currentLetter ? ' checked' : '') + '> ' +
+        'Show this to my learners as the account letter</label>' : '') + '</div>' +
     '<label>URL</label><input type="text" id="leUrl" value="' + esc(it.url || '') + '" placeholder="https://…">' +
-    '<label>Replace file (optional — max 40MB)</label><input type="file" id="leFile">' +
+    '<label>Replace file (optional — max 40MB, previewed here while it uploads)</label>' +
+    '<input type="file" id="leFile" accept="' + esc(LIB_ACCEPT) + '">' +
+    '<div id="leFileBox"></div>' +
     '<div class="mt"><button type="submit">Save changes</button></div></form>');
+  wireRichTextEditor(document.querySelector('[data-rte-root="leText"]'));
+  wireLibFileInput(document.getElementById('leFile'), document.getElementById('leFileBox'));
   document.getElementById('libEditForm').onsubmit = wrap(async function (e) {
     e.preventDefault();
     const body = {
       title: document.getElementById('leTitle').value.trim(),
-      text: document.getElementById('leText').value.trim(),
       url: document.getElementById('leUrl').value.trim()
     };
+    /* only a letter carries editor text — anything else keeps its stored text */
+    if (it.type === 'letter') body.text = richTextGet('leText');
+    const acct = document.getElementById('leAccountLetter');
+    if (acct && it.type === 'letter') body.useAsAccountLetter = acct.checked;
     const f = await filePayload(document.getElementById('leFile'));
     if (f) body.file = f;
     await API.put('/library/' + it.id, body);
     closeModal();
     toast('Entry updated', 'ok');
+    ME = await API.get('/me').catch(function () { return ME; });
     renderLibrary();
   });
 }

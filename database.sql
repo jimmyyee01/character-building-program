@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS tenants (
   logo LONGTEXT NULL,
   program_logo LONGTEXT NULL,
   theme_color VARCHAR(20) NULL,
+  letter_id VARCHAR(64) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX (portal_id)
 ) ENGINE=InnoDB;
@@ -87,6 +88,7 @@ CREATE TABLE IF NOT EXISTS library (
   `text` LONGTEXT NULL,
   url TEXT NULL,
   file_name VARCHAR(255) NULL,
+  file_size BIGINT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX (type), INDEX (scope)
 ) ENGINE=InnoDB;

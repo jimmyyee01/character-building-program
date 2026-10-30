@@ -51,12 +51,12 @@ async function logoDataUrl(input) {
   if (f.size > 1500000) throw new Error('Image too large (max 1.5 MB)');
   return await fileToDataUrl(f);
 }
-/* Any file input → {name, base64} payload, max 40 MB. */
+/* Any file input → {name, base64, size} payload, max 40 MB. */
 async function filePayload(input) {
   const f = input.files[0];
   if (!f) return null;
   if (f.size > 40 * 1024 * 1024) throw new Error('File too large (max 40MB)');
-  return { name: f.name, base64: await fileToBase64(f) };
+  return { name: f.name, base64: await fileToBase64(f), size: f.size };
 }
 /* Fetch-once caches shared between views. */
 async function ensure(key, path, mapKey) {
@@ -1615,8 +1615,11 @@ async function renderLibrary() {
 
   const rows = items.length ? items.map(function (i) {
     const flags = [];
-    if (i.fileName) flags.push('<span class="badge lock">FILE: ' + esc(i.fileName) + '</span>');
-    if (i.text) flags.push('<span class="badge info">TEXT</span>');
+    const size = fmtBytes(i.fileSize);
+    if (i.fileName) flags.push('<span class="badge lock">FILE: ' + esc(i.fileName) +
+      (size ? ' · ' + size : '') + '</span>');
+    if (i.text) flags.push('<span class="badge info">TEXT' +
+      (hasRichText(i.text) ? ' · FORMATTED' : '') + '</span>');
     if (i.url) flags.push(pdfHtml(i.url));
     if (!flags.length) flags.push('<span class="muted">—</span>');
     return '<tr><td>' + libraryTypeBadge(i.type) + '</td>' +
@@ -1641,7 +1644,7 @@ async function renderLibrary() {
       '<div class="row">' +
         '<div><label>Type</label><select id="lfType">' +
           '<option value="book"' + (el && el.type === 'book' ? ' selected' : '') + '>Book (PDF)</option>' +
-          '<option value="letter"' + (el && el.type === 'letter' ? ' selected' : '') + '>Letter</option>' +
+          '<option value="letter"' + (el && el.type === 'letter' ? ' selected' : '') + '>Letter (formatted text)</option>' +
           '<option value="video"' + (el && el.type === 'video' ? ' selected' : '') + '>Video</option>' +
           '<option value="audio"' + (el && el.type === 'audio' ? ' selected' : '') + '>Audio / MP3</option>' +
         '</select></div>' +
@@ -1649,15 +1652,27 @@ async function renderLibrary() {
           esc(el ? el.title : '') + '"></div>' +
         '<div><label>Scope</label><select id="lfScope">' + scopeOpts + '</select></div>' +
       '</div>' +
-      '<label>Text (rich text for letters)</label>' +
-      '<textarea id="lfText">' + esc(el && el.text ? el.text : '') + '</textarea>' +
+      '<div id="lfTextRow" class="mt">' +
+        '<div class="row">' +
+          '<div><label>Letter text</label>' +
+            '<p class="muted small">Bold, italics, headings, quotes and lists are kept — nothing else.</p></div>' +
+          '<div class="fixed">' +
+            '<button type="button" class="ghost" data-act="l-christ">Insert the Letter of Christ</button>' +
+            '<label class="small" style="display:block;margin-top:8px">' +
+              '<input type="checkbox" id="lfProgramLetter"> Make this the program-wide Letter of Christ</label>' +
+          '</div>' +
+        '</div>' +
+        richTextEditorHtml('lfText', el && el.text ? el.text : '') +
+      '</div>' +
       '<div class="row">' +
         '<div><label>URL (video / audio / external files)</label>' +
-          '<input type="text" id="lfUrl" placeholder="https://…" value="' +
+          '<input type="text" id="lfUrl" placeholder="https://… or /uploads/…" value="' +
             esc(el && el.url ? el.url : '') + '"></div>' +
-        '<div><label>File upload (max 40MB)' +
-          (el && el.fileName ? ' — current: ' + esc(el.fileName) : '') + '</label>' +
-          '<input type="file" id="lfFile"></div>' +
+        '<div><label>File upload (max 40MB — plays right here while it uploads)' +
+          (el && el.fileName ? ' — current: ' + esc(el.fileName) +
+            (fmtBytes(el.fileSize) ? ' (' + fmtBytes(el.fileSize) + ')' : '') : '') + '</label>' +
+          '<input type="file" id="lfFile" accept="' + esc(LIB_ACCEPT) + '">' +
+          '<div id="lfFileBox"></div></div>' +
       '</div>' +
       '<div class="mt row">' +
         '<div class="fixed"><button type="submit">' +
@@ -1673,7 +1688,11 @@ async function renderLibrary() {
   if (el) {
     const sel = $('lfScope');
     if (sel) sel.value = el.scope || 'global';
+    const prog = $('lfProgramLetter');
+    if (prog) prog.checked = !!(S.settings && S.settings.letterId === el.id);
   }
+  wireRichTextEditor(document.querySelector('[data-rte-root="lfText"]'));
+  wireLibFileInput($('lfFile'), $('lfFileBox'));
 }
 async function saveLibrary(e) {
   e.preventDefault();
@@ -1687,21 +1706,33 @@ async function saveLibrary(e) {
       scope: val('lfScope') || 'global'
     };
     if (!body.title) throw new Error('Enter a title');
-    const text = $('lfText').value.trim();
-    if (text) body.text = text;
+    const text = richTextGet('lfText');
+    if (plainFromHtml(text)) body.text = text;
     const url = val('lfUrl');
     if (url) body.url = url;
     const file = await filePayload($('lfFile'));
     if (file) body.file = file;
+    let saved = null;
     if (el) {
-      await API.put('/library/' + encodeURIComponent(el.id), body);
+      saved = await API.put('/library/' + encodeURIComponent(el.id), body);
       toast('Library item updated', 'ok');
     } else {
-      await API.post('/library', body);
+      saved = await API.post('/library', body);
       toast('Library item added', 'ok');
+    }
+    /* "Make this the program-wide Letter of Christ" — the settings pointer */
+    const prog = $('lfProgramLetter');
+    const progWanted = prog && prog.checked;
+    if (progWanted && body.type === 'letter') {
+      const letterId = (saved && saved.item && saved.item.id) || (el && el.id);
+      if (letterId) {
+        await API.put('/super/settings', { letterId: letterId });
+        toast('This is now the program-wide Letter of Christ', 'ok');
+      }
     }
     S.editLibraryId = null;
     drop('library');
+    drop('settings');
     renderLibrary();
   } catch (err) { fail(err); }
 }
@@ -2836,6 +2867,13 @@ async function onAction(btn, e) {
         S.editLibraryId = null;
         renderLibrary();
         break;
+      case 'l-christ': {
+        const title = $('lfTitle');
+        if (title && !title.value.trim()) title.value = CHRIST_LETTER_TITLE;
+        richTextSet('lfText', CHRIST_LETTER_HTML);
+        toast('Letter of Christ inserted — edit the title and every word before saving.', 'ok');
+        break;
+      }
       case 'l-del':
         deleteLibrary(id);
         break;

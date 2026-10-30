@@ -18,12 +18,13 @@ function need(cond, message, status) { if (!cond) throw new HttpError(message, s
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-const BUILD = '2026-10-29-reading-ribbon';
+const BUILD = '2026-10-30-library-media-letters';
 const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.students', 'reports.student-roster',
   'reports.student-detail', 'reports.student-assessment', 'reports.module-performers', 'reports.top-performers',
   'public.top-performers', 'reading.activity', 'reading.video-alerts',
   'messaging', 'notifications', 'users.supervisor-auto-assignment', 'keywords',
-  'reader.book', 'library.lock', 'certificates', 'chapter.pages', 'exports', 'assessment', 'assessment.admin', 'read-aloud'];
+  'reader.book', 'library.lock', 'library.media', 'library.letters', 'certificates', 'chapter.pages',
+  'exports', 'assessment', 'assessment.admin', 'read-aloud'];
 
 function send(res, code, obj) {
   const body = JSON.stringify(obj);
@@ -115,14 +116,39 @@ function slugify(s) {
 }
 
 /* ------------------------------------------------------------ file save --- */
+/* Uploads arrive as { name, base64, size } over JSON. The stored size lets the
+   admin screens show how big a video/audio file is without downloading it. */
 function saveUpload(file) {
   if (!file || !file.base64 || !file.name) return null;
   const cleaned = String(file.name).replace(/[^a-zA-Z0-9._-]/g, '_').slice(-80);
   const id = dbm.uid('upl');
   const name = id + '-' + cleaned;
   fs.mkdirSync(UPLOADS, { recursive: true });
-  fs.writeFileSync(path.join(UPLOADS, name), Buffer.from(file.base64, 'base64'));
-  return '/uploads/' + name;
+  const buf = Buffer.from(file.base64, 'base64');
+  fs.writeFileSync(path.join(UPLOADS, name), buf);
+  return { url: '/uploads/' + name, size: Number(file.size) || buf.length };
+}
+
+/* ------------------------------------------------------------- rich text -- */
+/* Letters are written in a small editor on the admin pages. Only this allow-list
+   of formatting tags survives a save — the same rule the browser runs before it
+   shows a letter, so nothing else can ride along into a learner's screen. */
+const RICH_TAGS = ['p', 'br', 'b', 'strong', 'i', 'em', 'u', 's', 'strike',
+  'h1', 'h2', 'h3', 'h4', 'ul', 'ol', 'li', 'blockquote'];
+function sanitizeRichHtml(html) {
+  let out = String(html == null ? '' : html);
+  out = out.replace(/<!--[\s\S]*?-->/g, '');
+  ['script', 'style', 'iframe', 'object', 'embed', 'template', 'svg', 'math'].forEach(tag => {
+    out = out.replace(new RegExp('<' + tag + '[^>]*>[\\s\\S]*?<\\/' + tag + '\\s*>', 'gi'), '');
+    out = out.replace(new RegExp('<\\/?' + tag + '[^>]*>', 'gi'), '');
+  });
+  /* every attribute goes — an allowed tag keeps its name only */
+  out = out.replace(/<([a-z][a-z0-9]*)\b[^>]*>/gi, (m, tag) =>
+    RICH_TAGS.indexOf(String(tag).toLowerCase()) !== -1 ? '<' + tag.toLowerCase() + '>' : '');
+  out = out.replace(/<\s*\/\s*([a-z][a-z0-9]*)\s*>/gi, (m, tag) =>
+    RICH_TAGS.indexOf(String(tag).toLowerCase()) !== -1 ? '</' + tag.toLowerCase() + '>' : '');
+  /* a stray angle bracket could open a new tag later — write it out safely */
+  return out.replace(/</g, '&lt;').replace(/&lt;(\/?(?:[a-z][a-z0-9]*)\s*>)/gi, '<$1');
 }
 
 /* -------------------------------------------------------------- routing --- */
@@ -348,6 +374,26 @@ route('POST', '/api/auth/super-login', ({ body, req, res }) => {
   return { ok: true, token, user: publicUser(su) };
 });
 
+route('PUT', '/api/tenant/settings', ({ user, body }) => {
+  requireRole(user, ADMINS);
+  body = body || {};
+  /* An account admin manages their own account; super may pass a tenant id. */
+  const tenantId = user.role === 'super' ? (body.tenantId || user.tenantId) : user.tenantId;
+  need(tenantId, 'No account selected', 400);
+  const tenant = dbm.byId('tenants', tenantId);
+  need(tenant, 'Account not found', 404);
+  if (body.letterId !== undefined) {
+    if (body.letterId) {
+      const lib = dbm.byId('library', body.letterId);
+      need(lib && lib.type === 'letter', 'Choose a letter from the library', 400);
+      need(lib.scope === 'global' || lib.scope === tenantId,
+        'That letter belongs to another account', 403);
+    }
+    setTenantLetter(tenantId, body.letterId || null);
+  }
+  return { ok: true, letterId: tenant.letterId || null };
+});
+
 route('POST', '/api/auth/logout', ({ req, res }) => {
   auth.destroySession(req, res);
   return { ok: true };
@@ -357,7 +403,7 @@ route('GET', '/api/me', ({ user }) => {
   need(user, 'Sign in required', 401);
   const tenant = tenantOf(user);
   const portal = tenant ? dbm.byId('portals', tenant.portalId) : null;
-  const letter = dbm.byId('library', dbm.db.settings.letterId);
+  const letter = tenantLetterOf(tenant) || dbm.byId('library', dbm.db.settings.letterId);
   const video = dbm.byId('library', dbm.db.settings.letterVideoId);
   return {
     ok: true,
@@ -365,7 +411,8 @@ route('GET', '/api/me', ({ user }) => {
     branding: tenantBranding(tenant),
     portal: portal ? { name: portal.name, active: portalActive(portal),
       scheduleMode: portal.scheduleMode, windows: portal.windows || [] } : null,
-    letter: { title: letter ? letter.title : null, text: letter ? letter.text : null,
+    letter: { id: letter ? letter.id : null, title: letter ? letter.title : null,
+      text: letter ? letter.text : null,
       done: !!user.letterFeedbackAt, feedbackAt: user.letterFeedbackAt || null },
     letterVideo: video ? { id: video.id, title: video.title, url: video.url } : null,
     optionalVideoSeen: !!user.optionalVideoSeen
@@ -2194,6 +2241,23 @@ function qp(req, name) {
   return new URL(req.url, 'http://localhost').searchParams.get(name);
 }
 
+/* ------------------------------------------------- the Letter of Christ -- */
+/* Super admin keeps the program-wide letter (settings.letterId). An account
+   admin may set a letter for their own account (tenants.letterId) — their
+   learners read that one first, and fall back to the program letter. */
+function tenantLetterOf(tenant) {
+  if (!tenant || !tenant.letterId) return null;
+  const lib = dbm.byId('library', tenant.letterId);
+  return lib && lib.type === 'letter' ? lib : null;
+}
+function setTenantLetter(tenantId, letterId) {
+  const tenant = dbm.byId('tenants', tenantId);
+  if (!tenant) return null;
+  tenant.letterId = letterId || null;
+  dbm.save();
+  return tenant;
+}
+
 route('POST', '/api/library', ({ user, body }) => {
   requireRole(user, ADMINS);
   body = body || {};
@@ -2203,16 +2267,22 @@ route('POST', '/api/library', ({ user, body }) => {
     ? (rawType === 'mp3' ? 'audio' : rawType) : 'book';
   const scope = user.role === 'super' ? (body.scope || 'global') : user.tenantId;
   const item = { id: dbm.uid('lib'), type, title: String(body.title).trim(), scope,
-    text: body.text ? String(body.text) : null, url: body.url || null, fileName: null,
-    createdAt: dbm.nowISO() };
+    text: body.text ? sanitizeRichHtml(body.text) : null, url: body.url || null,
+    fileName: null, fileSize: null, createdAt: dbm.nowISO() };
   if (body.file) {
-    item.url = saveUpload(body.file);
+    const saved = saveUpload(body.file);
+    need(saved, 'File upload failed');
+    item.url = saved.url;
+    item.fileSize = saved.size;
     item.fileName = body.file.name;
-    need(item.url, 'File upload failed');
   }
   need(item.url || item.text || type === 'book', 'Provide a file, a link or text');
   dbm.collection('library').push(item);
   dbm.save();
+  /* An account admin may point their own learners at this letter straight away */
+  if (type === 'letter' && body.useAsAccountLetter && user.role === 'tenant_admin') {
+    setTenantLetter(user.tenantId, item.id);
+  }
   return { ok: true, item };
 });
 
@@ -2223,13 +2293,19 @@ route('PUT', '/api/library/([a-z0-9_-]+)', ({ user, params, body }) => {
   need(canEdit(user, item), 'You can only edit your own entries', 403);
   body = body || {};
   if (body.title) item.title = String(body.title).trim();
-  if (body.text !== undefined) item.text = body.text || null;
+  if (body.text !== undefined) item.text = body.text ? sanitizeRichHtml(body.text) : null;
   if (body.url !== undefined) item.url = body.url || null;
   if (body.type) {
     const rt = String(body.type).toLowerCase();
     item.type = (rt === 'mp3') ? 'audio' : (['book','letter','video','audio'].indexOf(rt) !== -1 ? rt : item.type);
   }
-  if (body.file) { item.url = saveUpload(body.file); item.fileName = body.file.name; }
+  if (body.file) {
+    const saved = saveUpload(body.file);
+    if (saved) { item.url = saved.url; item.fileSize = saved.size; item.fileName = body.file.name; }
+  }
+  if (body.useAsAccountLetter !== undefined && user.role === 'tenant_admin' && item.type === 'letter') {
+    setTenantLetter(user.tenantId, body.useAsAccountLetter ? item.id : null);
+  }
   if (body.scope && user.role === 'super') item.scope = body.scope;
   dbm.save();
   return { ok: true, item };

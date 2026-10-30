@@ -799,6 +799,65 @@ function cleanSlice(s) {
         out.indexOf('Unknown endpoint: GET /api/health') !== -1;
     })());
 
+  /* ---------------- library media preview, size and the letter editor ---- */
+  check('file sizes read as people write them',
+    run(adminCtx, 'fmtBytes', [1024]) === '1.0 KB' &&
+      run(adminCtx, 'fmtBytes', [5 * 1024 * 1024]) === '5.0 MB' &&
+      run(adminCtx, 'fmtBytes', [0]) === null);
+  check('every media format the server can serve is recognised',
+    run(adminCtx, 'mediaKindByUrl', ['/uploads/a.mkv']) === 'video' &&
+      run(adminCtx, 'mediaKindByUrl', ['/uploads/b.opus']) === 'audio' &&
+      run(adminCtx, 'mediaKindByUrl', ['/uploads/c.m4a?v=2']) === 'audio' &&
+      run(adminCtx, 'mediaKindByUrl', ['/uploads/d.3gp']) === 'video' &&
+      run(adminCtx, 'mediaKindByUrl', ['/uploads/e.pdf']) === 'pdf');
+  check('the file dialog offers every one of those formats',
+    fn(adminCtx, 'LIB_ACCEPT').indexOf('.mkv') !== -1 &&
+      fn(adminCtx, 'LIB_ACCEPT').indexOf('.opus') !== -1 &&
+      fn(adminCtx, 'LIB_ACCEPT').indexOf('.wma') !== -1);
+  const previewHtml = run(adminCtx, 'libFilePreviewHtml',
+    [{ name: 'lesson-one.mkv', size: 5 * 1024 * 1024 }]);
+  dirty('chosen-file preview', previewHtml);
+  check('a chosen video is playable right there with its size shown',
+    /<video[\s>]/.test(previewHtml) && previewHtml.indexOf('5.0 MB') !== -1 &&
+      previewHtml.indexOf('lesson-one.mkv') !== -1, previewHtml.slice(0, 160));
+  check('a chosen audio file previews as audio',
+    /<audio[\s>]/.test(run(adminCtx, 'libFilePreviewHtml',
+      [{ name: 'song.mp3', size: 2048 }])));
+
+  check('letters keep their formatting and lose any script or handler',
+    (function () {
+      const clean = run(adminCtx, 'sanitizeRichHtml',
+        ['<p onclick="x()">Hi <b>there</b></p><script>alert(1)</script>' +
+         '<img src=x onerror=alert(2)>']);
+      return clean.indexOf('<p>') !== -1 && clean.indexOf('<b>there</b>') !== -1 &&
+        clean.toLowerCase().indexOf('script') === -1 &&
+        clean.indexOf('onclick') === -1 && clean.indexOf('onerror') === -1;
+    })());
+  check('a formatted letter reads back as plain words for the narrator',
+    run(adminCtx, 'plainFromHtml',
+      ['<p>My Dear Friend,</p><p>With love,<br>Jesus Christ</p>'])
+      .indexOf('My Dear Friend,\nWith love,\nJesus Christ') !== -1);
+  check('the basic letter editor offers its toolbar and a writing area',
+    (function () {
+      const out = run(adminCtx, 'richTextEditorHtml', ['lfText', '']);
+      return out.indexOf('rte-bar') !== -1 && out.indexOf('data-rte="bold"') !== -1 &&
+        out.indexOf('data-rte="insertOrderedList"') !== -1 &&
+        (out.indexOf('contenteditable="true"') !== -1 || out.indexOf('rte-fallback') !== -1);
+    })());
+  check('the Letter of Christ preset carries its title and its words',
+    fn(adminCtx, 'CHRIST_LETTER_TITLE') === 'The Letter from Christ' &&
+      run(adminCtx, 'plainFromHtml', [fn(adminCtx, 'CHRIST_LETTER_HTML')])
+        .indexOf('Jesus Christ') !== -1);
+  const richLetterHtml = run(appCtx, 'narratedTextHtml', ['<p>My Dear <b>Friend</b>,</p>']);
+  dirty('rich learner letter', richLetterHtml);
+  check('the learner letter view shows formatting and word highlights',
+    richLetterHtml.indexOf('<p>') !== -1 && richLetterHtml.indexOf('<b>') !== -1 &&
+      richLetterHtml.indexOf('data-narrate-word="0"') !== -1 &&
+      richLetterHtml.indexOf('My Dear Friend,') !== -1);
+  check('the admin library rows show the stored file size',
+    run(adminCtx, 'libIndicator', [{ fileName: 'clip.mp4', fileSize: 5 * 1024 * 1024 }])
+      .indexOf('5.0 MB') !== -1);
+
   console.log(bad ? '\n' + bad + ' FAILED' : '\nLIVE RENDER OK');
   process.exit(bad ? 1 : 0);
 })().catch(function (e) { console.log('FATAL ' + e.message); process.exit(1); });

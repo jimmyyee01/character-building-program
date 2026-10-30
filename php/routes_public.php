@@ -282,7 +282,8 @@ function r_me($user, $body, $params, $token, $query): array {
         $portalRow = $st->fetch() ?: null;
     }
     $s = get_settings();
-    $lib = get_library($s['letter_id'] ?? null);
+    /* the account's own Letter of Christ first, then the program-wide one */
+    $lib = tenant_letter($tenant ?? []) ?: get_library($s['letter_id'] ?? null);
     $vid = get_library($s['letter_video_id'] ?? null);
     return [
         'user' => public_user($fresh),
@@ -294,6 +295,7 @@ function r_me($user, $body, $params, $token, $query): array {
             'windows' => jdec($portalRow['windows_json'] ?? null, []),
         ] : null,
         'letter' => [
+            'id' => $lib['id'] ?? null,
             'title' => $lib['title'] ?? '',
             'text' => $lib['text'] ?? '',
             'done' => (bool)($fresh['letter_feedback_at'] ?? null),

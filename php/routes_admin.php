@@ -11,6 +11,7 @@ function can_edit(array $user, ?string $rowScope): bool {
 function lib_row(array $r): array {
     return ['id'=>$r['id'],'type'=>(($r['type'] ?? '') === 'mp3' ? 'audio' : ($r['type'] ?? null)),'title'=>$r['title'],'scope'=>$r['scope'],
         'text'=>$r['text'],'url'=>$r['url'],'fileName'=>$r['file_name'],
+        'fileSize'=>isset($r['file_size']) && $r['file_size'] !== null ? (int)$r['file_size'] : null,
         'createdAt'=>iso($r['created_at'] ?? null)];
 }
 function book_row(array $r): array {
@@ -2311,14 +2312,19 @@ function r_library_create(array $user, array $body, array $params, ?string $toke
     if (!in_array($type, ['book','letter','video','audio','mp3'], true)) $type = 'book';
     if ($type === 'mp3') $type = 'audio';
     $scope = $user['role'] === 'super' ? ($body['scope'] ?? 'global') : $user['tenant_id'];
-    $url = $body['url'] ?? null; $fname = null; $text = $body['text'] ?? null;
+    $url = $body['url'] ?? null; $fname = null; $size = null;
+    $text = isset($body['text']) && $body['text'] !== '' ? sanitize_rich_html($body['text']) : null;
     if (isset($body['file']) && is_array($body['file'])) {
-        $u = save_upload($body['file']);
-        if ($u) { $url = $u; $fname = $body['file']['name'] ?? null; }
+        $u = save_upload_meta($body['file']);
+        if ($u) { $url = $u['url']; $fname = $body['file']['name'] ?? null; $size = $u['size']; }
     }
     $id = uid('lib');
-    db()->prepare('INSERT INTO library (id,type,title,scope,`text`,url,file_name,created_at) VALUES (?,?,?,?,?,?,?,?)')
-        ->execute([$id, $type, $title, $scope, $text, $url, $fname, now_dt()]);
+    db()->prepare('INSERT INTO library (id,type,title,scope,`text`,url,file_name,file_size,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+        ->execute([$id, $type, $title, $scope, $text, $url, $fname, $size, now_dt()]);
+    /* an account admin may point their own learners at this letter straight away */
+    if ($type === 'letter' && !empty($body['useAsAccountLetter']) && $user['role'] === 'tenant_admin') {
+        set_tenant_letter($user['tenant_id'], $id);
+    }
     $st = db()->prepare('SELECT * FROM library WHERE id=?'); $st->execute([$id]);
     $lr = lib_row($st->fetch()); $lr['canEdit'] = true;
     return ['item' => $lr] + $lr;
@@ -2330,12 +2336,17 @@ function r_library_update(array $user, array $body, array $params, ?string $toke
     need($r, 'Library item not found', 404); need(can_edit($user, $r['scope']), 'Not permitted', 403);
     $set = []; $args = [];
     if (isset($body['title'])) { $set[] = 'title=?'; $args[] = $body['title']; }
-    if (array_key_exists('text', $body)) { $set[] = '`text`=?'; $args[] = $body['text']; }
+    if (array_key_exists('text', $body)) { $set[] = '`text`=?'; $args[] = $body['text'] !== '' && $body['text'] !== null ? sanitize_rich_html($body['text']) : null; }
     if (array_key_exists('url', $body)) { $set[] = 'url=?'; $args[] = $body['url']; }
     if (isset($body['type'])) { $t = strtolower(trim((string)$body['type'])); if (in_array($t, ['book','letter','video','audio','mp3'], true)) { if ($t === 'mp3') $t = 'audio'; $set[] = 'type=?'; $args[] = $t; } }
     if (isset($body['file']) && is_array($body['file'])) {
-        $u = save_upload($body['file']);
-        if ($u) { $set[] = 'url=?'; $args[] = $u; $set[] = 'file_name=?'; $args[] = $body['file']['name'] ?? null; }
+        $u = save_upload_meta($body['file']);
+        if ($u) { $set[] = 'url=?'; $args[] = $u['url']; $set[] = 'file_name=?'; $args[] = $body['file']['name'] ?? null; $set[] = 'file_size=?'; $args[] = $u['size']; }
+    }
+    if (array_key_exists('useAsAccountLetter', $body) && $user['role'] === 'tenant_admin') {
+        $isLetter = strtolower(trim((string)($body['type'] ?? $r['type']))) === 'letter'
+            || (($r['type'] ?? '') === 'letter');
+        if ($isLetter) set_tenant_letter($user['tenant_id'], !empty($body['useAsAccountLetter']) ? $id : null);
     }
     if (isset($body['scope'])) {
         need($user['role'] === 'super', 'Not permitted', 403);
@@ -2352,4 +2363,43 @@ function r_library_delete(array $user, array $body, array $params, ?string $toke
     need($r, 'Library item not found', 404); need(can_edit($user, $r['scope']), 'Not permitted', 403);
     db()->prepare('DELETE FROM library WHERE id=?')->execute([$id]);
     return ['deleted' => true];
+}
+
+/* ------------------------------------------------- the Letter of Christ -- */
+/* Super admin keeps the program-wide letter (settings.letter_id). An account
+   admin may set a letter for their own account (tenants.letter_id) — their
+   learners read that one first, and fall back to the program letter. */
+function tenant_letter(array $tenant): ?array {
+    $id = $tenant['letter_id'] ?? null;
+    if (!$id) return null;
+    $st = db()->prepare("SELECT * FROM library WHERE id=? AND type='letter' LIMIT 1");
+    $st->execute([$id]);
+    $row = $st->fetch();
+    return $row ?: null;
+}
+function set_tenant_letter(?string $tenantId, ?string $letterId): void {
+    if (!$tenantId) return;
+    db()->prepare('UPDATE tenants SET letter_id=? WHERE id=?')->execute([$letterId, $tenantId]);
+}
+function r_tenant_settings_update(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super','tenant_admin']);
+    $tenantId = $user['role'] === 'super'
+        ? ($body['tenantId'] ?? $body['tenant_id'] ?? $user['tenant_id'])
+        : $user['tenant_id'];
+    need($tenantId, 'No account selected', 400);
+    $st = db()->prepare('SELECT * FROM tenants WHERE id=?'); $st->execute([$tenantId]); $t = $st->fetch();
+    need($t, 'Account not found', 404);
+    if (array_key_exists('letterId', $body) || array_key_exists('letter_id', $body)) {
+        $letterId = $body['letterId'] ?? $body['letter_id'] ?? null;
+        if ($letterId) {
+            $st = db()->prepare("SELECT * FROM library WHERE id=? AND type='letter'");
+            $st->execute([$letterId]); $lib = $st->fetch();
+            need($lib, 'Choose a letter from the library', 400);
+            need(($lib['scope'] ?? '') === 'global' || ($lib['scope'] ?? '') === $tenantId,
+                'That letter belongs to another account', 403);
+        }
+        set_tenant_letter($tenantId, $letterId ? (string)$letterId : null);
+    }
+    $st = db()->prepare('SELECT letter_id FROM tenants WHERE id=?'); $st->execute([$tenantId]);
+    return ['ok' => true, 'letterId' => $st->fetchColumn() ?: null];
 }

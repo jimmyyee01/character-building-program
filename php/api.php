@@ -20,10 +20,10 @@ $ADMINS = ['super', 'tenant_admin'];
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-define('APP_BUILD', '2026-10-29-reading-ribbon');
+define('APP_BUILD', '2026-10-30-library-media-letters');
 define('APP_FEATURES', 'health,super.analytics,admin.analytics,reports.students,reports.student-roster,reports.student-detail,reports.student-assessment,reports.module-performers,reports.top-performers,'
     . 'public.top-performers,users.supervisor-auto-assignment,messaging,notifications,keywords,reading.activity,reading.video-alerts,'
-    . 'reader.book,library.lock,certificates,chapter.pages,exports,assessment,assessment.admin,read-aloud');
+    . 'reader.book,library.lock,library.media,library.letters,certificates,chapter.pages,exports,assessment,assessment.admin,read-aloud');
 
 /* Public: which backend and which build is answering. */
 function r_health($user, $body, $params, $token, $query): array {
@@ -87,6 +87,7 @@ route('POST', '/api/reading/open', 'r_reading_open');
 route('POST',   '/api/library', 'r_library_create');
 route('PUT',    '/api/library/([a-zA-Z0-9_-]+)', 'r_library_update');
 route('DELETE', '/api/library/([a-zA-Z0-9_-]+)', 'r_library_delete');
+route('PUT',    '/api/tenant/settings', 'r_tenant_settings_update');
 route('GET',    '/api/books', 'r_books_list');
 route('POST',   '/api/books', 'r_books_create');
 route('PUT',    '/api/books/([a-zA-Z0-9_-]+)', 'r_books_update');

@@ -19,10 +19,20 @@ const MIME = {
   '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
   '.svg': 'image/svg+xml', '.webp': 'image/webp', '.ico': 'image/x-icon',
-  '.pdf': 'application/pdf', '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime',
-  '.webm': 'video/webm', '.ogv': 'video/ogg',
-  '.ogg': 'audio/ogg', '.oga': 'audio/ogg', '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4',
-  '.aac': 'audio/aac', '.wav': 'audio/wav', '.flac': 'audio/flac', '.txt': 'text/plain; charset=utf-8'
+  '.pdf': 'application/pdf', '.txt': 'text/plain; charset=utf-8',
+  /* video — every container a school is likely to hand us, served with the
+     MIME type that lets a browser attempt playback (seeking needs it) */
+  '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime',
+  '.webm': 'video/webm', '.ogv': 'video/ogg', '.mkv': 'video/x-matroska',
+  '.avi': 'video/x-msvideo', '.wmv': 'video/x-ms-wmv', '.mpeg': 'video/mpeg',
+  '.mpg': 'video/mpeg', '.m2ts': 'video/mp2t', '.ts': 'video/mp2t',
+  '.vob': 'video/mpeg', '.3gp': 'video/3gpp',
+  /* audio */
+  '.ogg': 'audio/ogg', '.oga': 'audio/ogg', '.opus': 'audio/opus',
+  '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.aac': 'audio/aac',
+  '.wav': 'audio/wav', '.flac': 'audio/flac', '.weba': 'audio/webm',
+  '.amr': 'audio/amr', '.mid': 'audio/midi', '.midi': 'audio/midi',
+  '.aif': 'audio/aiff', '.aiff': 'audio/aiff', '.wma': 'audio/x-ms-wma'
 };
 
 function sendJSON(res, code, obj) {

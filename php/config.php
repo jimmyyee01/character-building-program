@@ -218,12 +218,47 @@ function slugify($s): string {
 
 /* --------------------------------------------------------------- upload - */
 function save_upload($file): ?string {
+    $saved = save_upload_meta($file);
+    return $saved ? $saved['url'] : null;
+}
+/* Same upload, plus the stored size so the admin screens can show how big a
+   video or audio file is without downloading it. */
+function save_upload_meta($file): ?array {
     if (!is_array($file) || empty($file['base64']) || empty($file['name'])) return null;
     $clean = preg_replace('/[^a-zA-Z0-9._-]/', '_', (string)$file['name']);
     $clean = substr($clean, -80);
     $name = uid('upl') . '-' . $clean;
     if (!is_dir(UPLOAD_DIR)) mkdir(UPLOAD_DIR, 0775, true);
-    file_put_contents(UPLOAD_DIR . '/' . $name, base64_decode((string)$file['base64']));
-    return '/uploads/' . $name;
+    $bytes = base64_decode((string)$file['base64']);
+    file_put_contents(UPLOAD_DIR . '/' . $name, $bytes);
+    $size = isset($file['size']) && (int)$file['size'] > 0 ? (int)$file['size'] : strlen($bytes);
+    return ['url' => '/uploads/' . $name, 'size' => $size];
+}
+
+/* ------------------------------------------------------------ rich text -- */
+/* Letters are written in a small editor on the admin pages. Only this allow-list
+   of formatting tags survives a save — the same rule the Node backend and the
+   browser run, so nothing else can ride along into a learner's screen. */
+function sanitize_rich_html($html): string {
+    $out = (string)($html ?? '');
+    $out = preg_replace('/<!--.*?-->/s', '', $out);
+    foreach (['script', 'style', 'iframe', 'object', 'embed', 'template', 'svg', 'math'] as $tag) {
+        $out = preg_replace('/<' . $tag . '[^>]*>.*?<\/' . $tag . '\s*>/is', '', $out);
+        $out = preg_replace('/<\/?' . $tag . '[^>]*>/i', '', $out);
+    }
+    $allowed = ['p', 'br', 'b', 'strong', 'i', 'em', 'u', 's', 'strike',
+        'h1', 'h2', 'h3', 'h4', 'ul', 'ol', 'li', 'blockquote'];
+    /* every attribute goes — an allowed tag keeps its name only */
+    $out = preg_replace_callback('/<([a-z][a-z0-9]*)\b[^>]*>/i', function ($m) use ($allowed) {
+        $tag = strtolower($m[1]);
+        return in_array($tag, $allowed, true) ? '<' . $tag . '>' : '';
+    }, $out);
+    $out = preg_replace_callback('/<\s*\/\s*([a-z][a-z0-9]*)\s*>/i', function ($m) use ($allowed) {
+        $tag = strtolower($m[1]);
+        return in_array($tag, $allowed, true) ? '</' . $tag . '>' : '';
+    }, $out);
+    /* a stray angle bracket could open a new tag later — write it out safely */
+    $out = str_replace('<', '&lt;', $out);
+    return preg_replace('/&lt;(\/?(?:[a-z][a-z0-9]*)\s*>)/i', '<$1', $out);
 }
 

@@ -411,7 +411,7 @@ pdfPageCount('/uploads/books/alpha.pdf').then(function (n) {
     pages.every(s => !/function (pdfHtml|bookCoverHtml|bookReaderHtml)/.test(s)) &&
     /function bookCoverHtml/.test(commonSrc) && /function pdfHtml/.test(commonSrc));
   check('library rows and reading views use the closed cover',
-    /if \(it\.url\) return pdfHtml\(it\.url\);/.test(admin) &&
+    /if \(it\.url\) return pdfHtml\(it\.url\) \+ sizeHtml;/.test(admin) &&
     (pages[1].match(/pdfHtml\(d\.book\.pdf/g) || []).length === 1 &&
     /open: true, back: true/.test(pages[1]) &&
     !/pdfHtml\(d\.book\.pdf, \{\s*title: 'Open the whole book'/.test(pages[1]));
