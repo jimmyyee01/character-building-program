@@ -1052,12 +1052,21 @@ table.nested td { font-size: 12px; }
 .inline-media { display: block; margin: 12px 0; }
 .inline-media .video-frame, .inline-media .audio-frame { width: 100%; max-width: 560px; }
 .attached-media { position: relative; margin: 0 0 14px; }
-.attached-media .attached-media-close {
-  position: absolute; top: 8px; right: 8px; z-index: 2;
+.attached-media .attached-media-tools {
+  position: absolute; top: 8px; right: 8px; z-index: 2; display: flex; gap: 6px;
+}
+.attached-media .attached-media-btn {
   background: rgba(12, 18, 36, .72); color: #fff; border: 0; border-radius: 50%;
   width: 34px; height: 34px; font-size: 18px; line-height: 1; cursor: pointer;
 }
 .attached-media .audio-frame { width: 100%; background: #f3f6fb; border-radius: 12px; }
+/* Minimized: the clip moves aside into a small always-on-top corner player. */
+.attached-media.minimized {
+  position: fixed; bottom: 16px; right: 16px; width: 240px; z-index: 1200;
+  margin: 0; border-radius: 12px; overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .28); background: #000;
+}
+.attached-media.minimized .audio-frame { background: #111; }
 
 .lib-size { font-variant-numeric: tabular-nums; }
 

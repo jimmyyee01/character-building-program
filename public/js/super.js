@@ -1643,6 +1643,13 @@ async function renderLibrary() {
       '</td></tr>';
   }).join('') : '<tr><td colspan="5" class="muted">Library is empty.</td></tr>';
 
+  const libVideoOpts = '<option value="">- none -</option>' +
+    items.filter(function (i) { return (i.type === 'video' || i.type === 'audio') && i.url; })
+      .map(function (i) {
+        const sel = elMedia && elMedia.url === i.url ? ' selected' : '';
+        return '<option value="' + esc(String(i.id)) + '"' + sel + '>' +
+          esc(i.title || i.fileName || i.url) + '</option>';
+      }).join('');
   v.innerHTML = '<h2>Library</h2>' +
     '<div class="card"><h3>' +
       (el ? 'Edit item — ' + esc(el.title) : 'Add to library') + '</h3>' +
@@ -1672,6 +1679,9 @@ async function renderLibrary() {
         richTextEditorHtml('lfText', el && el.text ? el.text : '') +
       '</div>' +
       '<div id="lfMediaWrap"' + ((el ? el.type : 'book') === 'letter' ? '' : ' class="hidden"') + '>' +
+        '<label>Video from the library (optional) - plays above the letter</label>' +
+        '<select id="lfMediaLib">' + libVideoOpts + '</select>' +
+        '<p class="muted small" style="margin:2px 0 10px">Pick a clip already in the library, or upload one below.</p>' +
         mediaPickerHtml('lfMedia', elMedia,
           'Video for the Letter of Christ (optional) — plays above the text') +
       '</div>' +
@@ -1701,6 +1711,8 @@ async function renderLibrary() {
   }
   wireRichTextEditor(document.querySelector('[data-rte-root="lfText"]'));
   wireMediaPicker('lfMedia');
+  const lfLibSel = $('lfMediaLib');
+  if (lfLibSel) lfLibSel.onchange = function () { selectLibraryMedia(this.value); };
   wireLibFileInput($('lfFile'), $('lfFileBox'));
 }
 async function saveLibrary(e) {
@@ -2012,6 +2024,29 @@ function bookMediaEditorHTML(b) {
 }
 /* Drop an inline media marker at the caret of a content field (a chapter
    textarea or the letter editor). The renderer turns it into a player. */
+/* Attach a clip chosen from the library (a video or audio item) to the letter.
+   That library file becomes the clip that plays on top of the letter. */
+function selectLibraryMedia(itemId) {
+  const item = (S.library || []).find(function (i) { return String(i.id) === String(itemId); }) || null;
+  const set = function (field, value) {
+    const e = $('lfMedia' + field);
+    if (e) e.value = value == null ? '' : value;
+  };
+  const status = $('lfMediaStatus');
+  const preview = $('lfMediaPreview');
+  if (!item) {
+    set('Url', ''); set('Kind', ''); set('Name', ''); set('Size', '');
+    if (status) status.innerHTML = '<span class="muted small">No clip attached.</span>';
+    if (preview) preview.innerHTML = '';
+    return;
+  }
+  const kind = item.type === 'audio' ? 'audio' : 'video';
+  set('Url', item.url); set('Kind', kind);
+  set('Name', item.title || item.fileName || ''); set('Size', item.fileSize || '');
+  if (status) status.innerHTML = '<span class="badge ok">FROM LIBRARY</span> <span class="mono small">' +
+    esc(item.title || item.url) + '</span>';
+  if (preview) preview.innerHTML = mediaTag({ url: item.url, kind: kind }, 'lfMediaLibCur');
+}
 function insertMediaMarker(field) {
   if (!field) return;
   const url = (window.prompt('Link to the video or audio file (e.g. https://.../clip.mp4):') || '').trim();

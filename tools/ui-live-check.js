@@ -885,6 +885,24 @@ function cleanSlice(s) {
   check('an attached audio clip renders as an audio player',
     /<audio[\s>]/.test(run(adminCtx, 'attachedMediaHtml',
       [{ url: '/uploads/y.mp3', kind: 'audio' }, 'clip'])));
+  check('a clip carries a close button plus a hidden restore button',
+    (function () {
+      const h = run(adminCtx, 'attachedMediaHtml', [{ url: '/uploads/x.mp4', kind: 'video' }, 'clip']);
+      return h.indexOf('data-attached-close') !== -1 && h.indexOf('data-attached-restore') !== -1 &&
+        /data-attached-restore[^>]*\shidden/.test(h);
+    })());
+  check('closing a clip moves it aside into a small player, not away',
+    (function () {
+      const src = fs.readFileSync(path.join(dir, 'common.js'), 'utf8');
+      return src.indexOf("box.classList.add('minimized')") !== -1 &&
+        src.indexOf("box.classList.remove('minimized')") !== -1 &&
+        src.indexOf('m.pause()') !== -1;
+    })());
+  check('the letter form can pick a clip from the library',
+    (function () {
+      const src = fs.readFileSync(path.join(dir, 'super.js'), 'utf8');
+      return src.indexOf('lfMediaLib') !== -1 && src.indexOf('selectLibraryMedia') !== -1;
+    })());
   check('the letter flow places an attached clip above the letter',
     (function () {
       const src = fs.readFileSync(path.join(dir, 'app.js'), 'utf8');

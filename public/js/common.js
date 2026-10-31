@@ -540,17 +540,49 @@ function wireMediaPicker(id, opts) {
 function attachedMediaHtml(media, id) {
   if (!media || !media.url) return '';
   return '<div class="attached-media" data-attached-media="' + esc(id) + '">' +
-    '<button type="button" class="attached-media-close" data-attached-close="' + esc(id) +
-      '" aria-label="Close the clip" title="Close">&times;</button>' +
+    '<div class="attached-media-tools">' +
+      '<button type="button" class="attached-media-btn attached-media-restore" ' +
+        'data-attached-restore="' + esc(id) + '" aria-label="Show the clip on top" ' +
+        'title="Show on top" hidden>&#8599;</button>' +
+      '<button type="button" class="attached-media-btn attached-media-close" ' +
+        'data-attached-close="' + esc(id) + '" aria-label="Close the clip" ' +
+        'title="Close - move aside to watch later">&times;</button>' +
+    '</div>' +
     mediaTag(media, id + 'Player') + '</div>';
 }
-/* Wire the close button so it hides just the clip, never the content. */
+/* Wire the clip: the close button moves it aside into a small corner player so a
+   learner can read first and watch it later. From that small player it can be
+   restored to the top or closed for good. Closing never hides the content. */
 function wireAttachedMedia(root) {
   if (!root || !root.querySelectorAll) return;
   root.querySelectorAll('[data-attached-close]').forEach(function (btn) {
     btn.onclick = function () {
       const box = btn.closest ? btn.closest('[data-attached-media]') : null;
-      if (box) box.classList.add('hidden');
+      if (!box) return;
+      if (box.classList.contains('minimized')) {
+        box.classList.add('hidden');          /* the small player is closed for good */
+        return;
+      }
+      box.classList.add('minimized');         /* go aside into the corner player */
+      const m = box.querySelector('video, audio');
+      if (m && m.pause) { try { m.pause(); } catch (e) {} }
+      const restore = box.querySelector('[data-attached-restore]');
+      if (restore) restore.hidden = false;
+      btn.setAttribute('title', 'Close the small player');
+      btn.setAttribute('aria-label', 'Close the small player');
+    };
+  });
+  root.querySelectorAll('[data-attached-restore]').forEach(function (btn) {
+    btn.onclick = function () {
+      const box = btn.closest ? btn.closest('[data-attached-media]') : null;
+      if (!box) return;
+      box.classList.remove('minimized');      /* back on top of the letter or book */
+      btn.hidden = true;
+      const close = box.querySelector('[data-attached-close]');
+      if (close) {
+        close.setAttribute('title', 'Close - move aside to watch later');
+        close.setAttribute('aria-label', 'Close the clip');
+      }
     };
   });
 }
