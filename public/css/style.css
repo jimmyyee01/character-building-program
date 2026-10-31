@@ -229,6 +229,19 @@ tr:hover td { background: #f8faff; }
 .cbp-comms-message.mine { align-self: flex-end; background: var(--brand-soft); }
 .cbp-comms-message p { margin: 0 0 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .cbp-comms-message small { color: var(--muted); }
+/* message attachments */
+.cbp-comms-attach { display: grid; gap: 6px; }
+.cbp-comms-attach input[type=file] { font-size: 12px; }
+.cbp-comms-att-list { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.cbp-comms-att { margin: 6px 0; }
+.cbp-comms-att video, .cbp-comms-att audio { width: 100%; max-width: 320px; display: block; }
+.cbp-comms-att img { max-width: 100%; max-height: 220px; border-radius: 8px; display: block; }
+.cbp-comms-att-link {
+  display: inline-block; padding: 6px 10px; border-radius: 8px;
+  background: #eef2fa; border: 1px solid var(--line, #dbe3ef);
+  text-decoration: none; color: var(--brand, #24508c); font-size: 13px;
+}
+.cbp-comms-att-link:hover { background: var(--brand-soft, #e7eefb); }
 .err-text { color: var(--bad); font-size: 13px; }
 
 .muted { color: var(--muted); }

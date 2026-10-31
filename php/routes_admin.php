@@ -1194,6 +1194,33 @@ function message_notification(string $recipientId, array $sender, string $conver
         'conversationId'=>$conversationId,
     ]);
 }
+/* Files attached to a message (PDF/text/Word/audio/video). They arrive base64 in
+   the request body and are written to the uploads directory here, so the stored
+   message keeps only the finished link; kind is read from the file name. */
+function message_attachments_from(array $body): array {
+    $list = $body['attachments'] ?? [];
+    if (!is_array($list)) return [];
+    $out = [];
+    foreach (array_slice(array_values($list), 0, 20) as $a) {
+        if (!is_array($a)) continue;
+        $saved = save_upload_meta($a);
+        if (!$saved) continue;
+        $name = isset($a['name']) && $a['name'] !== '' ? (string)$a['name'] : 'attachment';
+        $out[] = ['url' => $saved['url'], 'name' => $name, 'size' => $saved['size'],
+            'kind' => message_attach_kind($name)];
+    }
+    return $out;
+}
+function message_attach_kind(string $name): string {
+    $ext = strtolower((string)pathinfo($name, PATHINFO_EXTENSION));
+    $audio = ['mp3','m4a','aac','wav','flac','ogg','oga','opus','weba','amr','mid','midi','aif','aiff','wma'];
+    $video = ['mp4','m4v','mov','webm','ogv','mkv','avi','wmv','mpeg','mpg','m2ts','ts','vob','3gp'];
+    $image = ['png','jpg','jpeg','gif','webp','svg'];
+    if (in_array($ext, $audio, true)) return 'audio';
+    if (in_array($ext, $video, true)) return 'video';
+    if (in_array($ext, $image, true)) return 'image';
+    return 'file';   /* pdf, txt, doc, docx, rtf, odt and anything else */
+}
 function conversation_for_users(array $user, array $recipient): array {
     $participants = [(string)$user['id'], (string)$recipient['id']];
     sort($participants, SORT_STRING);
@@ -1274,12 +1301,14 @@ function r_messages_list(array $user, array $body, array $params, ?string $token
 function r_messages_send(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin','supervisor','student','member','teacher']);
     $text = trim((string)($body['body'] ?? ''));
-    need($text !== '' && mb_strlen($text) <= 5000, 'Message must be between 1 and 5000 characters');
+    need(mb_strlen($text) <= 5000, 'Message must be at most 5000 characters');
     $ids = $body['recipientIds'] ?? [];
     need(is_array($ids), 'Choose one or more recipients');
     $ids = array_values(array_unique(array_map('strval', $ids)));
     need(count($ids) >= 1 && count($ids) <= 500, 'Choose between 1 and 500 recipients');
     $pdo = db();
+    $attachments = message_attachments_from($body);
+    need($text !== '' || count($attachments) > 0, 'Message must be between 1 and 5000 characters');
     $recipients = [];
     $st = $pdo->prepare('SELECT * FROM users WHERE id=? LIMIT 1');
     foreach ($ids as $id) {
@@ -1294,8 +1323,9 @@ function r_messages_send(array $user, array $body, array $params, ?string $token
             $conversation = conversation_for_users($user, $recipient);
             $messageId = uid('msg');
             $now = now_dt();
-            $pdo->prepare('INSERT INTO conversation_messages (id,conversation_id,sender_id,body,created_at) VALUES (?,?,?,?,?)')
-                ->execute([$messageId, $conversation['id'], $user['id'], $text, $now]);
+            $pdo->prepare('INSERT INTO conversation_messages (id,conversation_id,sender_id,body,attachments_json,created_at) VALUES (?,?,?,?,?,?)')
+                ->execute([$messageId, $conversation['id'], $user['id'], $text,
+                    $attachments ? json_encode($attachments, JSON_UNESCAPED_UNICODE) : null, $now]);
             $pdo->prepare('UPDATE conversations SET updated_at=? WHERE id=?')->execute([$now, $conversation['id']]);
             message_notification((string)$recipient['id'], $user, (string)$conversation['id'], $text);
         }
@@ -1323,9 +1353,10 @@ function r_messages_thread_get(array $user, array $body, array $params, ?string 
         $person = $st->fetch();
         if ($person) $people[] = ['id'=>$person['id'], 'fullName'=>$person['full_name'], 'role'=>$person['role']];
     }
-    $st = $pdo->prepare('SELECT id,sender_id,body,created_at,read_at FROM conversation_messages WHERE conversation_id=? ORDER BY created_at ASC');
+    $st = $pdo->prepare('SELECT id,sender_id,body,attachments_json,created_at,read_at FROM conversation_messages WHERE conversation_id=? ORDER BY created_at ASC');
     $st->execute([$conversation['id']]);
     $messages = array_map(fn($m) => ['id'=>$m['id'], 'senderId'=>$m['sender_id'], 'body'=>$m['body'],
+        'attachments'=>jdec($m['attachments_json'] ?? null, []),
         'createdAt'=>iso($m['created_at']), 'readAt'=>iso($m['read_at'])], $st->fetchAll());
     return ['conversation'=>['id'=>$conversation['id'], 'participants'=>$people], 'messages'=>$messages];
 }
@@ -1338,15 +1369,19 @@ function r_messages_reply(array $user, array $body, array $params, ?string $toke
     $st->execute([$peerId]);
     need(can_message_user($user, $st->fetch()), 'Not permitted to reply in this conversation', 403);
     $text = trim((string)($body['body'] ?? ''));
-    need($text !== '' && mb_strlen($text) <= 5000, 'Message must be between 1 and 5000 characters');
+    need(mb_strlen($text) <= 5000, 'Message must be at most 5000 characters');
     $pdo = db();
+    $attachments = message_attachments_from($body);
+    need($text !== '' || count($attachments) > 0, 'Message must be between 1 and 5000 characters');
     $now = now_dt();
     $id = uid('msg');
-    $pdo->prepare('INSERT INTO conversation_messages (id,conversation_id,sender_id,body,created_at) VALUES (?,?,?,?,?)')
-        ->execute([$id, $conversation['id'], $user['id'], $text, $now]);
+    $pdo->prepare('INSERT INTO conversation_messages (id,conversation_id,sender_id,body,attachments_json,created_at) VALUES (?,?,?,?,?,?)')
+        ->execute([$id, $conversation['id'], $user['id'], $text,
+            $attachments ? json_encode($attachments, JSON_UNESCAPED_UNICODE) : null, $now]);
     $pdo->prepare('UPDATE conversations SET updated_at=? WHERE id=?')->execute([$now, $conversation['id']]);
     message_notification($peerId, $user, (string)$conversation['id'], $text);
-    return ['message'=>['id'=>$id, 'senderId'=>$user['id'], 'body'=>$text, 'createdAt'=>iso($now), 'readAt'=>null]];
+    return ['message'=>['id'=>$id, 'senderId'=>$user['id'], 'body'=>$text, 'attachments'=>$attachments,
+        'createdAt'=>iso($now), 'readAt'=>null]];
 }
 function r_notifications_list(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['tenant_admin','supervisor','student','member','teacher']);

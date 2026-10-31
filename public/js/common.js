@@ -204,6 +204,49 @@ function fmtBytes(n) {
 }
 /* The upload cap the JSON/base64 transport allows (see filePayload). */
 const LIB_MAX_UPLOAD = 40 * 1024 * 1024;
+
+/* ---------------------------------------------- message attachments ------- */
+/* A message may carry files — documents (PDF/text/Word), audio and video. They
+   are saved to /uploads like every other upload and shown in the thread as an
+   inline player (audio/video/image) or a download link (documents). */
+const MSG_ACCEPT = (function () {
+  const exts = ['pdf', 'txt', 'doc', 'docx', 'rtf', 'odt',
+    'mp4', 'm4v', 'mov', 'webm', 'ogv', 'mkv', 'avi', 'wmv', 'mpeg', 'mpg', 'm2ts', 'ts', 'vob', '3gp',
+    'mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'oga', 'opus', 'weba', 'amr', 'mid', 'midi', 'aif', 'aiff', 'wma',
+    'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'];
+  return exts.map(function (e) { return '.' + e; }).join(',') + ',video/*,audio/*,application/pdf,image/*';
+})();
+const MSG_MAX_UPLOAD = 40 * 1024 * 1024;
+const MSG_MAX_FILES = 10;
+
+function messageAttachmentHtml(a) {
+  if (!a || !a.url) return '';
+  const kind = a.kind || mediaKindByUrl(a.name || a.url);
+  const label = esc(a.name || 'attachment') +
+    (a.size ? ' <span class="muted small">(' + fmtBytes(a.size) + ')</span>' : '');
+  if (kind === 'video' || kind === 'audio') {
+    return '<div class="cbp-comms-att">' +
+      mediaTag({ url: a.url, kind: kind, name: a.name, size: a.size }) + '</div>';
+  }
+  if (kind === 'image') {
+    return '<div class="cbp-comms-att"><a href="' + esc(a.url) + '" target="_blank" rel="noopener">' +
+      '<img src="' + esc(a.url) + '" alt="' + esc(a.name || 'image') + '"></a></div>';
+  }
+  return '<div class="cbp-comms-att"><a class="cbp-comms-att-link" href="' + esc(a.url) +
+    '" download="' + esc(a.name || '') + '" target="_blank" rel="noopener">' + label + '</a></div>';
+}
+
+/* The file picker + pending list + progress bar shared by compose and reply. */
+function messageAttachFieldHtml(prefix) {
+  return '<div class="cbp-comms-attach">' +
+    '<label class="muted small">Attach files (PDF, text, Word, audio, video)</label>' +
+    '<input type="file" id="' + prefix + 'Files" name="files" multiple accept="' + esc(MSG_ACCEPT) + '">' +
+    '<div class="cbp-comms-att-list" id="' + prefix + 'List"></div>' +
+    '<div class="upload-progress hidden" id="' + prefix + 'Progress">' +
+    '<div class="upload-progress-bar"><span style="width:0%"></span></div>' +
+    '<span class="upload-progress-label">0%</span></div></div>';
+}
+
 /* Prevents paste/cut/drop into "own words" boxes (server also enforces length).
    The optional message lets the letter editor use its own wording. */
 function blockPaste(el, message) {
@@ -2548,7 +2591,8 @@ function initCommunicationWidget() {
       panel.innerHTML = header(active.participant.fullName) +
         '<div class="cbp-comms-toolbar"><button type="button" class="ghost small" data-comms-screen="inbox">Back to inbox</button></div>' +
         '<div id="cbpCommsMessages" class="cbp-comms-messages"><p class="muted">Loading conversation…</p></div>' +
-        '<form id="cbpCommsReply" class="cbp-comms-form"><textarea name="body" maxlength="5000" required placeholder="Write a reply…"></textarea>' +
+        '<form id="cbpCommsReply" class="cbp-comms-form"><textarea name="body" maxlength="5000" placeholder="Write a reply…"></textarea>' +
+        messageAttachFieldHtml('cbpReply') +
         '<button type="submit">Send reply</button></form>';
       loadThread(active.id);
       return;
@@ -2559,7 +2603,8 @@ function initCommunicationWidget() {
         '<select id="cbpCommsRecipients" name="recipientIds" multiple size="5" required>' +
         state.recipients.map(function (r) {
           return '<option value="' + esc(r.id) + '">' + esc(r.fullName) + ' (' + esc(r.role.replace(/_/g, ' ')) + ')</option>';
-        }).join('') + '</select><textarea name="body" maxlength="5000" required placeholder="Write a message…"></textarea>' +
+        }).join('') + '</select><textarea name="body" maxlength="5000" placeholder="Write a message…"></textarea>' +
+        messageAttachFieldHtml('cbpCompose') +
         '<button type="submit">Send message</button></form>';
       return;
     }
@@ -2599,8 +2644,9 @@ function initCommunicationWidget() {
       if (!box || state.activeId !== id) return;
       box.innerHTML = (result.messages || []).map(function (m) {
         const mine = m.senderId === (API.user() || {}).id;
+        const atts = (m.attachments || []).map(messageAttachmentHtml).join('');
         return '<div class="cbp-comms-message' + (mine ? ' mine' : '') + '">' +
-          '<p>' + esc(m.body) + '</p><small>' + esc(fmtDate(m.createdAt)) + '</small></div>';
+          (m.body ? '<p>' + esc(m.body) + '</p>' : '') + atts + '<small>' + esc(fmtDate(m.createdAt)) + '</small></div>';
       }).join('') || '<p class="muted">No messages yet.</p>';
       box.scrollTop = box.scrollHeight;
       await load();
@@ -2659,20 +2705,42 @@ function initCommunicationWidget() {
     event.preventDefault();
     const form = event.target;
     const text = String(new FormData(form).get('body') || '').trim();
-    if (!text) return;
+    const fileInput = form.querySelector('input[type="file"]');
+    const files = fileInput ? Array.prototype.slice.call(fileInput.files || []) : [];
+    if (!text && !files.length) { toast('Write a message or attach a file.', 'err'); return; }
+    if (files.length > MSG_MAX_FILES) { toast('Attach at most ' + MSG_MAX_FILES + ' files.', 'err'); return; }
+    const tooBig = files.filter(function (f) { return f.size > MSG_MAX_UPLOAD; });
+    if (tooBig.length) { toast('"' + tooBig[0].name + '" is too large (max 40MB).', 'err'); return; }
+    const barId = form.id === 'cbpCommsCompose' ? 'cbpComposeProgress' : 'cbpReplyProgress';
+    const btn = form.querySelector('button[type="submit"]');
     try {
+      if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+      /* Read each file to base64 and send it inline — the message endpoints are
+         open to every messaging role (the shared /upload is admin-only). The bar
+         reports the real transfer of the whole message. */
+      const attachments = [];
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        attachments.push({ name: f.name, size: f.size, base64: await fileToBase64(f) });
+      }
+      const payload = { body: text, attachments: attachments };
       if (form.id === 'cbpCommsCompose') {
         const select = form.querySelector('[name="recipientIds"]');
         const recipientIds = Array.from(select.selectedOptions).map(function (option) { return option.value; });
-        await API.post('/messages', { recipientIds, body: text });
+        if (!recipientIds.length) { toast('Choose at least one recipient.', 'err'); return; }
+        payload.recipientIds = recipientIds;
+        await uploadWithProgress('/messages', payload, barId, 'POST');
         toast('Message sent.', 'ok');
         state.screen = 'inbox'; state.activeId = null;
       } else if (form.id === 'cbpCommsReply' && state.activeId) {
-        await API.post('/messages/' + encodeURIComponent(state.activeId), { body: text });
+        await uploadWithProgress('/messages/' + encodeURIComponent(state.activeId), payload, barId, 'POST');
       }
       await load();
       draw();
-    } catch (e) { toast(e.message, 'err'); }
+    } catch (e) {
+      toast(e.message, 'err');
+      if (btn) { btn.disabled = false; btn.textContent = form.id === 'cbpCommsCompose' ? 'Send message' : 'Send reply'; }
+    }
   });
   load().catch(function (e) { console.error('[messages] Failed to load unread counts:', e); });
   window.setInterval(function () {

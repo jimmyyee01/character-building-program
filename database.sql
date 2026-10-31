@@ -237,6 +237,7 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
   conversation_id VARCHAR(64) NOT NULL,
   sender_id VARCHAR(64) NOT NULL,
   body TEXT NOT NULL,
+  attachments_json LONGTEXT NULL,
   read_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX (conversation_id, created_at), INDEX (conversation_id, read_at)

@@ -17,6 +17,10 @@ $wanted = [
     'chapters' => [
         'keywords_json' => 'LONGTEXT NULL',
     ],
+    'conversation_messages' => [
+        /* PDF/text/Word/audio/video files attached to a message */
+        'attachments_json' => 'LONGTEXT NULL',
+    ],
     'users' => [
         'supervisor_waitlisted' => 'TINYINT(1) NOT NULL DEFAULT 0',
         'assessment_pre_json' => 'LONGTEXT NULL',
@@ -79,6 +83,7 @@ try {
             conversation_id VARCHAR(64) NOT NULL,
             sender_id VARCHAR(64) NOT NULL,
             body TEXT NOT NULL,
+            attachments_json LONGTEXT NULL,
             read_at DATETIME NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             INDEX (conversation_id, created_at), INDEX (conversation_id, read_at)

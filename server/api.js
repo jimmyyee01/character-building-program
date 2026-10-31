@@ -3410,6 +3410,33 @@ function messageNotification(recipientId, sender, conversationId, body) {
   });
 }
 
+/* Files attached to a message. They arrive base64 in the request body (the same
+   JSON transport the whole app uses) and are written to /uploads here, so the
+   stored message only keeps the finished link. Documents, audio and video all
+   fit; kind is read from the file name so the player knows what to render. */
+function messageAttachmentsFrom(body) {
+  const list = Array.isArray(body && body.attachments) ? body.attachments : [];
+  const out = [];
+  for (const a of list.slice(0, 20)) {
+    const saved = saveUpload(a);
+    if (!saved) continue;
+    out.push({ url: saved.url, name: a && a.name ? String(a.name) : 'attachment',
+      size: saved.size, kind: messageAttachKind(a && a.name) });
+  }
+  return out;
+}
+/* What a message attachment is, so the client renders a player for audio/video/
+   image and a download link for documents (PDF/text/Word/anything else). */
+function messageAttachKind(name) {
+  const m = /\.([a-z0-9]+)$/i.exec(String(name || ''));
+  const ext = m ? m[1].toLowerCase() : '';
+  if (AUDIO_MEDIA_EXTS.indexOf(ext) !== -1) return 'audio';
+  if (['mp4', 'm4v', 'mov', 'webm', 'ogv', 'mkv', 'avi', 'wmv', 'mpeg', 'mpg',
+    'm2ts', 'ts', 'vob', '3gp'].indexOf(ext) !== -1) return 'video';
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].indexOf(ext) !== -1) return 'image';
+  return 'file';   /* pdf, txt, doc, docx, rtf, odt and anything else */
+}
+
 function conversationsFor(user) {
   let list = dbm.collection('conversations').filter(c =>
     user.role === 'super' || (c.tenantId === user.tenantId && Array.isArray(c.participantIds) && c.participantIds.includes(user.id)));
@@ -3454,16 +3481,18 @@ route('GET', '/api/messages', ({ user }) => {
 route('POST', '/api/messages', ({ user, body }) => {
   requireRole(user, ['super', 'tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
   const text = String((body || {}).body || '').trim();
-  need(text.length > 0 && text.length <= 5000, 'Message must be between 1 and 5000 characters');
+  need(text.length <= 5000, 'Message must be at most 5000 characters');
   const recipientIds = Array.isArray(body.recipientIds) ? Array.from(new Set(body.recipientIds.map(String))) : [];
   need(recipientIds.length > 0 && recipientIds.length <= 500, 'Choose between 1 and 500 recipients');
   const recipients = recipientIds.map(id => dbm.byId('users', id));
   need(recipients.every(recipient => canMessage(user, recipient)), 'One or more recipients are not permitted', 403);
+  const attachments = messageAttachmentsFrom(body);
+  need(text.length > 0 || attachments.length > 0, 'Message must be between 1 and 5000 characters');
   const messageIds = [];
   recipients.forEach(recipient => {
     const conversation = conversationFor(user, recipient);
     const message = { id: dbm.uid('msg'), conversationId: conversation.id,
-      senderId: user.id, body: text, createdAt: dbm.nowISO(), readAt: null };
+      senderId: user.id, body: text, attachments, createdAt: dbm.nowISO(), readAt: null };
     dbm.collection('messages').push(message);
     conversation.updatedAt = message.createdAt;
     messageIds.push(message.id);
@@ -3500,9 +3529,11 @@ route('POST', '/api/messages/([a-z0-9_-]+)', ({ user, params, body }) => {
   const recipient = dbm.byId('users', peerId);
   need(canMessage(user, recipient), 'Not permitted to reply in this conversation', 403);
   const text = String((body || {}).body || '').trim();
-  need(text.length > 0 && text.length <= 5000, 'Message must be between 1 and 5000 characters');
+  need(text.length >= 0 && text.length <= 5000, 'Message must be at most 5000 characters');
+  const attachments = messageAttachmentsFrom(body);
+  need(text.length > 0 || attachments.length > 0, 'Message must be between 1 and 5000 characters');
   const message = { id: dbm.uid('msg'), conversationId: conversation.id,
-    senderId: user.id, body: text, createdAt: dbm.nowISO(), readAt: null };
+    senderId: user.id, body: text, attachments, createdAt: dbm.nowISO(), readAt: null };
   dbm.collection('messages').push(message);
   conversation.updatedAt = message.createdAt;
   messageNotification(recipient.id, user, conversation.id, text);
