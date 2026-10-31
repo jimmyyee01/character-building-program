@@ -891,11 +891,25 @@ function cleanSlice(s) {
       return src.indexOf('attachedMediaHtml(letter.media') !== -1 &&
         src.indexOf('attachedMediaHtml(d.letter.media') !== -1;
     })());
-  check('a book opens its clip in a popup with a close button',
+  check('a book places its attached clip on top of the book',
     (function () {
       const src = fs.readFileSync(path.join(dir, 'app.js'), 'utf8');
-      return src.indexOf('bookPlayClip') !== -1 && src.indexOf('mediaTag(d.book.media') !== -1;
+      return src.indexOf('attachedMediaHtml(d.book.media') !== -1;
     })());
+  check('an inline [video:URL] marker becomes a player inside the text',
+    /<video[\s>]/.test(run(adminCtx, 'narratedTextHtml',
+      ['Hello [video:/uploads/a.mp4] world', { className: 'content' }])));
+  check('inline media is dropped from the spoken words and the words stay aligned',
+    (function () {
+      const h = run(adminCtx, 'narratedTextHtml',
+        ['Hello [audio:/uploads/b.mp3] world', { className: 'content' }]);
+      const raw = (h.match(/data-narrate-raw="([^"]*)"/) || [])[1] || '';
+      const words = (h.match(/data-narrate-word/g) || []).length;
+      return raw === 'Hello world' && words === 2 && h.indexOf('[audio') === -1;
+    })());
+  check('an inline [media:URL] marker picks the kind from the link',
+    /<audio[\s>]/.test(run(adminCtx, 'narratedTextHtml',
+      ['Intro [media:/uploads/c.mp3] tail', { className: 'content' }])));
   check('the upload helper reports progress through XMLHttpRequest',
     (function () {
       const src = fs.readFileSync(path.join(dir, 'common.js'), 'utf8');

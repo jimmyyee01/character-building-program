@@ -1663,7 +1663,8 @@ async function renderLibrary() {
           '<div><label>Letter text</label>' +
             '<p class="muted small">Bold, italics, headings, quotes and lists are kept — nothing else.</p></div>' +
           '<div class="fixed">' +
-            '<button type="button" class="ghost" data-act="l-christ">Insert the Letter of Christ</button>' +
+            '<button type="button" class="ghost" data-act="l-christ">Insert the Letter of Christ</button> ' +
+            '<button type="button" class="ghost" data-act="ins-media" data-target="#lfText">+ Media link</button>' +
             '<label class="small" style="display:block;margin-top:8px">' +
               '<input type="checkbox" id="lfProgramLetter"> Make this the program-wide Letter of Christ</label>' +
           '</div>' +
@@ -1840,6 +1841,7 @@ async function renderBooks() {
   /* size every page picker (and read the linked PDF so all pages appear) */
   v.querySelectorAll('[data-pg]').forEach(function (p) { pgInit(p); });
   wireMediaPicker('bkMedia');
+  books.forEach(function (b) { wireMediaPicker('bkMedia-' + b.id); });
 }
 function chapterFieldsHTML(ch) {
   const sel = pageSelection(ch);
@@ -1851,7 +1853,11 @@ function chapterFieldsHTML(ch) {
     '<div><label>Order</label><input type="number" class="ch-order" value="' +
       esc(ch && ch.order != null ? ch.order : '') + '"></div>' +
   '</div>' +
-  '<label>Content</label><textarea class="ch-content" style="min-height:110px">' +
+  '<label>Content</label>' +
+  '<div><button type="button" class="ghost small" data-act="ins-media" data-target=".ch-content">' +
+    '+ Insert video/audio link</button> ' +
+    '<span class="muted small">drops [video:URL] / [audio:URL] into the text</span></div>' +
+  '<textarea class="ch-content" style="min-height:110px">' +
     esc(ch ? (ch.content || '') : '') + '</textarea>' +
   (S.curBookSummary
     ? '<label>Key words (comma separated — the typed answer is assessed against these)</label>' +
@@ -1982,6 +1988,49 @@ function chapterHTML(ch) {
       : '<b class="small">Questions</b>' + objList + questionFormHTML(id)) +
   '</div>';
 }
+/* Normalise a book's attached clip: the Node list carries flat mediaUrl/Kind/
+   Name/Size columns while the PHP list nests them under .media. */
+function bookMediaOf(b) {
+  if (!b) return null;
+  return b.media || (b.mediaUrl
+    ? { url: b.mediaUrl, kind: b.mediaKind || 'video', name: b.mediaName || null, size: b.mediaSize || null }
+    : null);
+}
+/* A clip on top of a book: a button that reveals a picker, so a super admin can
+   attach or replace the video/audio that shows above the book for learners. */
+function bookMediaEditorHTML(b) {
+  const cur = bookMediaOf(b);
+  return '<div class="mt"><button type="button" class="small ghost" data-act="bk-media-toggle" data-id="' +
+      esc(String(b.id)) + '">' + (cur ? 'Change the clip on top' : '+ Add a clip on top') + '</button></div>' +
+    '<div class="bk-media hidden" data-bkmedia="' + esc(String(b.id)) + '">' +
+      mediaPickerHtml('bkMedia-' + b.id, cur, 'Video or audio shown on top of this book (optional)') +
+      '<div class="mt"><button type="button" class="small" data-act="bk-media-save" data-id="' +
+        esc(String(b.id)) + '">Save clip</button> ' +
+        '<button type="button" class="small ghost" data-act="bk-media-cancel" data-id="' +
+        esc(String(b.id)) + '">Cancel</button></div>' +
+    '</div>';
+}
+/* Drop an inline media marker at the caret of a content field (a chapter
+   textarea or the letter editor). The renderer turns it into a player. */
+function insertMediaMarker(field) {
+  if (!field) return;
+  const url = (window.prompt('Link to the video or audio file (e.g. https://.../clip.mp4):') || '').trim();
+  if (!url) return;
+  const kind = mediaKindByUrl(url) === 'audio' ? 'audio' : 'video';
+  const marker = '[' + kind + ':' + url + ']';
+  if (field.tagName === 'TEXTAREA' || field.tagName === 'INPUT') {
+    const s = typeof field.selectionStart === 'number' ? field.selectionStart : field.value.length;
+    const e = typeof field.selectionEnd === 'number' ? field.selectionEnd : field.value.length;
+    field.value = field.value.slice(0, s) + marker + field.value.slice(e);
+    field.selectionStart = field.selectionEnd = s + marker.length;
+    field.focus();
+  } else {
+    field.focus();
+    try { document.execCommand('insertText', false, marker); }
+    catch (err) { field.innerHTML += esc(marker); }
+  }
+  toast('Media link inserted â€” save to keep it.', 'ok');
+}
 function bookCardHTML(b, isSummary) {
   S.curBook = b;
   S.curBookSummary = !!isSummary;
@@ -2001,6 +2050,7 @@ function bookCardHTML(b, isSummary) {
       '<div class="fixed"><button type="button" class="small danger" data-act="bk-book-del" ' +
         'data-id="' + esc(String(b.id)) + '">Delete book</button></div>' +
     '</div>' +
+    bookMediaEditorHTML(b) +
     '<form class="ch-form hidden" data-book="' + esc(String(b.id)) + '">' +
       chapterFieldsHTML(null) +
       '<div class="mt"><button type="submit" class="small">Save chapter</button></div>' +
@@ -2929,6 +2979,34 @@ async function onAction(btn, e) {
       case 'bk-ch-del':
         deleteChapter(id);
         break;
+      case 'bk-media-toggle': {
+        const box = document.querySelector('[data-bkmedia="' + id + '"]');
+        if (box) box.classList.toggle('hidden');
+        break;
+      }
+      case 'bk-media-cancel': {
+        const box = document.querySelector('[data-bkmedia="' + id + '"]');
+        if (box) box.classList.add('hidden');
+        break;
+      }
+      case 'bk-media-save': {
+        const med = mediaPickerValue('bkMedia-' + id);
+        await API.put('/books/' + encodeURIComponent(id), {
+          mediaUrl: med ? med.url : '',
+          mediaKind: med ? med.kind : '',
+          mediaName: med ? med.name : '',
+          mediaSize: med ? med.size : ''
+        });
+        toast('Clip saved', 'ok');
+        await renderBooks();
+        break;
+      }
+      case 'ins-media': {
+        const sel = btn.getAttribute('data-target') || '.ch-content';
+        const scope = btn.closest('form') || document;
+        insertMediaMarker(scope.querySelector(sel) || document.querySelector(sel));
+        break;
+      }
       case 'bk-q-add': {
         const form = btn.closest('form');
         const opts = form.querySelector('.q-opts');

@@ -658,22 +658,13 @@ function renderBook() {
       '<span class="muted small">' + esc(d.module.title) + '</span></div>' +
       /* no full-book PDF is offered on this page — only the chapter's own pages */
       '<div>' +
-        (d.book.media && d.book.media.url
+        (false && d.book.media && d.book.media.url
           ? '<button class="ghost small" id="bookPlayClip">▶ Play clip</button> ' : '') +
         '<button class="ghost small" id="backToBooks3">← Books</button></div>' +
     '</div></div>' +
+    attachedMediaHtml(d.book.media, 'bookMedia') +
     '<div class="reader">' + listHtml + '<div id="chapterBody">' + body + '</div></div>';
 
-  /* a clip attached to this book opens in a popup with its own close button */
-  const playClip = $('bookPlayClip');
-  if (playClip) {
-    playClip.onclick = function () {
-      modal('<h3>' + esc(d.book.title) + '</h3>' +
-        mediaTag(d.book.media, 'bookClipPlayer') +
-        '<div class="mt"><button data-close class="ghost">Close</button></div>',
-        { wide: true });
-    };
-  }
   $('backToBooks').onclick = backToModule;
   $('backToBooks3').onclick = backToModule;
   const b2 = $('backToBooks2'); if (b2) b2.onclick = backToModule;

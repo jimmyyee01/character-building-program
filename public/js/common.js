@@ -744,16 +744,48 @@ function narratorControlsHtml(opts) {
 /* Text + controls, used for chapter text, letters and library text files.
    A letter written in the rich editor carries formatting tags — those are
    shown as formatting (sanitized first), and read aloud from the plain words. */
+/* Inline media dropped into the middle of a page of content. The admin writes a
+   marker in the text â€” [media:URL] (the kind is taken from the link) or an
+   explicit [video:URL] / [audio:URL]. Each marker becomes a player in the flow;
+   the marker itself is never read aloud, and the words around it keep their
+   normal read-aloud highlighting (players add no word spans and are left out of
+   the spoken text, so the narrator's word list stays aligned). */
+const MEDIA_MARKER_RE = /\[(video|audio|media)\s*:\s*([^\s\]]+)\]/gi;
+function inlineMediaHtml(media) {
+  return '<span class="inline-media">' + mediaTag(media) + '</span>';
+}
 function narratedTextHtml(text, opts) {
   opts = opts || {};
   const cls = opts.className ? ' ' + opts.className : '';
-  const rich = opts.html !== false && hasRichText(text);
-  const shown = rich ? sanitizeRichHtml(text) : esc(text);
-  const spoken = rich ? plainFromHtml(shown) : String(text == null ? '' : text);
+  const src = String(text == null ? '' : text);
+  const media = [];
+  MEDIA_MARKER_RE.lastIndex = 0;
+  const withSlots = src.replace(MEDIA_MARKER_RE, function (m, kind, url) {
+    const kl = String(kind).toLowerCase();
+    const k = kl === 'audio' ? 'audio'
+      : kl === 'video' ? 'video'
+      : (mediaKindByUrl(url) === 'audio' ? 'audio' : 'video');
+    media.push({ url: String(url), kind: k });
+    return ' \uE000MEDIA' + (media.length - 1) + '\uE000 ';
+  });
+  const rich = opts.html !== false && hasRichText(withSlots);
+  const shown = rich ? sanitizeRichHtml(withSlots) : esc(withSlots);
+  const spokenFull = rich ? plainFromHtml(shown) : withSlots;
+  let html = rich ? narrationRichMarkup(shown) : narrationMarkup(withSlots);
+  let spoken = spokenFull;
+  if (media.length) {
+    /* swap each marker's word span for its player, and keep the spoken words
+       clear of the markers so read-aloud skips them */
+    html = html.replace(
+      /<span class="narrate-word" data-narrate-word="(\d+)">\s*\uE000MEDIA(\d+)\uE000\s*<\/span>/g,
+      function (m2, w, i) { return inlineMediaHtml(media[Number(i)]); });
+    html = html.replace(/\uE000MEDIA(\d+)\uE000/g,
+      function (m2, i) { return inlineMediaHtml(media[Number(i)]); });
+    spoken = spokenFull.replace(/\s*\uE000MEDIA\d+\uE000\s*/g, ' ').replace(/\s+/g, ' ').trim();
+  }
   return '<div class="narrator" data-narrator>' +
     '<div class="narrator-text' + cls + (rich ? ' letter-rich' : '') + '"' +
-      ' data-narrate-text data-narrate-raw="' + esc(spoken) + '">' +
-      (rich ? narrationRichMarkup(shown) : narrationMarkup(text)) + '</div>' +
+      ' data-narrate-text data-narrate-raw="' + esc(spoken) + '">' + html + '</div>' +
     narratorControlsHtml(opts) +
   '</div>';
 }

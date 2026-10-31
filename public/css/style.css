@@ -1049,6 +1049,8 @@ table.nested td { font-size: 12px; }
 }
 .upload-progress-label { font-size: 12px; font-weight: 700; color: var(--muted); min-width: 38px; text-align: right; }
 /* A clip attached to a letter or a book, played inline with a close button. */
+.inline-media { display: block; margin: 12px 0; }
+.inline-media .video-frame, .inline-media .audio-frame { width: 100%; max-width: 560px; }
 .attached-media { position: relative; margin: 0 0 14px; }
 .attached-media .attached-media-close {
   position: absolute; top: 8px; right: 8px; z-index: 2;
