@@ -1075,6 +1075,18 @@ table.nested td { font-size: 12px; }
    spot. Text stays black (forced below), so the tint is kept light for contrast. */
 .super-admin #view-library .rte-body,
 .super-admin #view-library .rte-fallback { background: #dcebff; }
+/* Super admin's library letter editor: dark-blue formatting toolbar with white
+   controls, so the tools read clearly on the blue letter page. */
+.super-admin #view-library .rte-bar {
+  background: #16345f;
+  border-bottom-color: #16345f;
+}
+.super-admin #view-library .rte-btn {
+  background: #16345f;
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.35);
+}
+.super-admin #view-library .rte-btn:hover { background: #24508c; color: #fff; }
 /* Letter text is often pasted from Word or Docs, which arrives carrying inline
    colour attributes. Inline styles beat normal rules, so force the editor — and
    every node inside it — back to black. */
