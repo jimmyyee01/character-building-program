@@ -1650,6 +1650,16 @@ async function renderLibrary() {
         return '<option value="' + esc(String(i.id)) + '"' + sel + '>' +
           esc(i.title || i.fileName || i.url) + '</option>';
       }).join('');
+  /* the letter's clip comes strictly from the library: flag whether the current
+     clip matches a library item, or is a legacy upload that is simply kept */
+  const elMediaFromLib = !!(elMedia && items.some(function (i) {
+    return (i.type === 'video' || i.type === 'audio') && i.url === elMedia.url;
+  }));
+  const lfMediaStatusHtml = !elMedia
+    ? '<span class="muted small">No clip attached.</span>'
+    : (elMediaFromLib
+      ? '<span class="badge ok">FROM LIBRARY</span> <span class="mono small">' + esc(elMedia.name || elMedia.url) + '</span>'
+      : '<span class="badge warn">CURRENT CLIP (LEGACY UPLOAD)</span> <span class="mono small">' + esc(elMedia.name || elMedia.url) + '</span>');
   v.innerHTML = '<h2>Library</h2>' +
     '<div class="card"><h3>' +
       (el ? 'Edit item — ' + esc(el.title) : 'Add to library') + '</h3>' +
@@ -1681,9 +1691,13 @@ async function renderLibrary() {
       '<div id="lfMediaWrap"' + ((el ? el.type : 'book') === 'letter' ? '' : ' class="hidden"') + '>' +
         '<label>Video from the library (optional) - plays above the letter</label>' +
         '<select id="lfMediaLib">' + libVideoOpts + '</select>' +
-        '<p class="muted small" style="margin:2px 0 10px">Pick a clip already in the library, or upload one below.</p>' +
-        mediaPickerHtml('lfMedia', elMedia,
-          'Video for the Letter of Christ (optional) — plays above the text') +
+        '<p class="muted small" style="margin:2px 0 8px">The clip comes strictly from the library: upload a video to the library first, then pick it here.</p>' +
+        '<div id="lfMediaStatus">' + lfMediaStatusHtml + '</div>' +
+        '<div id="lfMediaPreview">' + (elMedia ? mediaTag(elMedia, 'lfMediaCur') : '') + '</div>' +
+        '<input type="hidden" id="lfMediaUrl" value="' + esc(elMedia ? elMedia.url : '') + '">' +
+        '<input type="hidden" id="lfMediaKind" value="' + esc(elMedia ? (elMedia.kind || 'video') : '') + '">' +
+        '<input type="hidden" id="lfMediaName" value="' + esc(elMedia ? (elMedia.name || '') : '') + '">' +
+        '<input type="hidden" id="lfMediaSize" value="' + esc(elMedia && elMedia.size ? elMedia.size : '') + '">' +
       '</div>' +
       '<div>' +
         '<label>File upload (max 40MB — plays right here while it uploads)' +
@@ -1710,7 +1724,6 @@ async function renderLibrary() {
     if (prog) prog.checked = !!(S.settings && S.settings.letterId === el.id);
   }
   wireRichTextEditor(document.querySelector('[data-rte-root="lfText"]'));
-  wireMediaPicker('lfMedia');
   const lfLibSel = $('lfMediaLib');
   if (lfLibSel) lfLibSel.onchange = function () { selectLibraryMedia(this.value); };
   wireLibFileInput($('lfFile'), $('lfFileBox'));

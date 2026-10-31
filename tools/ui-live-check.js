@@ -903,6 +903,13 @@ function cleanSlice(s) {
       const src = fs.readFileSync(path.join(dir, 'super.js'), 'utf8');
       return src.indexOf('lfMediaLib') !== -1 && src.indexOf('selectLibraryMedia') !== -1;
     })());
+  check('the letter clip comes strictly from the library (no upload picker)',
+    (function () {
+      const src = fs.readFileSync(path.join(dir, 'super.js'), 'utf8');
+      return src.indexOf("mediaPickerHtml('lfMedia'") === -1 &&
+        src.indexOf("wireMediaPicker('lfMedia')") === -1 &&
+        src.indexOf('lfMediaStatus') !== -1;
+    })());
   check('the letter flow places an attached clip above the letter',
     (function () {
       const src = fs.readFileSync(path.join(dir, 'app.js'), 'utf8');
