@@ -1,5 +1,5 @@
 {
-  "build": "2026-11-05-veil-while-answering",
+  "build": "2026-11-05-letter-after-module",
   "features": [
     "health",
     "super.analytics",
@@ -27,7 +27,8 @@
     "exports",
     "assessment",
     "assessment.admin",
-    "read-aloud"
+    "read-aloud",
+    "letter.after-module"
   ],
   "note": "Static build marker. If /api/health has no build, the FILES are newer than the backend process (restart it). If this file is missing or shows an older build, the FOLDER being served is not the one you pulled."
 }

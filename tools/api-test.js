@@ -35,7 +35,7 @@ async function main() {
     (r.data.features || []).indexOf('admin.analytics') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
   check('the login serves the live top-performers build and its features',
-    r.ok && r.data.build === '2026-11-05-veil-while-answering' &&
+    r.ok && r.data.build === '2026-11-05-letter-after-module' &&
       (r.data.features || []).indexOf('reports.module-performers') !== -1 &&
       (r.data.features || []).indexOf('reports.top-performers') !== -1 &&
       (r.data.features || []).indexOf('public.top-performers') !== -1 &&
@@ -44,6 +44,9 @@ async function main() {
       (r.data.features || []).indexOf('assessment') !== -1 &&
       (r.data.features || []).indexOf('assessment.admin') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
+  check('this deployment carries the letter that closes each module',
+    r.ok && (r.data.features || []).indexOf('letter.after-module') !== -1,
+    'features ' + JSON.stringify(r.data.features || []));
   check('this deployment carries the library media and letter features',
     r.ok && (r.data.features || []).indexOf('library.media') !== -1 &&
       (r.data.features || []).indexOf('library.letters') !== -1,
@@ -569,6 +572,84 @@ async function part3(r, tok, check) {
   check('GET /dashboard -> {recent, certificates}', r.ok && Array.isArray(r.data.recent), 'status ' + r.status);
   r = await call('/final', null, stuTok);
   check('GET /final (403 until every module is done)', r.ok || r.status === 403, 'status ' + r.status);
+
+  /* ------------- the letter that closes each module (super admin) -------- */
+  /* The admin writes a pool of up to ten questions for the letter that closes a
+     module; every learner is issued only TWO of them, seeded by their own
+     account. The pool must never reach a learner whole. */
+  const su = await call('/auth/super-login', { method: 'POST', body: { username: 'superadmin', password: 'SuperAdmin@123' } });
+  const suTok = su.data.token;
+  /* a run that was killed mid-way can leave its throw-away module behind, and such
+     a leftover unfinished module would make the seeded graduates look unfinished */
+  const stale = await call('/super/modules', null, suTok);
+  for (const m of (stale.data.modules || []).filter(function (x) {
+    return /^Letter pool module /.test(String(x.title || ''));
+  })) {
+    const own = await call('/books?moduleId=' + encodeURIComponent(m.id), null, suTok);
+    for (const b of (own.data.books || [])) {
+      await call('/books/' + encodeURIComponent(b.id), { method: 'DELETE' }, suTok);
+    }
+    await call('/super/modules/' + encodeURIComponent(m.id), { method: 'DELETE' }, suTok);
+  }
+  const letterRun = Date.now().toString(36).slice(-5);
+  const poolQs = [];
+  for (let i = 1; i <= 12; i++) {
+    poolQs.push({ question: 'Letter question ' + i + '?',
+      options: ['Answer A' + i, 'Answer B' + i, 'Answer C' + i], answerIndex: 1 });
+  }
+  /* a blank row in the middle is dropped and the pool stops at ten */
+  const withBlank = poolQs.slice();
+  withBlank.splice(2, 0, { question: '   ', options: [], answerIndex: 0 });
+  let lr = await call('/super/modules', { method: 'POST', body: {
+    title: 'Letter pool module ' + letterRun, mode: 'summary', order: 99,
+    letter: { enabled: true, letterId: null, mode: 'objectives', questions: withBlank } } }, suTok);
+  /* the two backends answer either {module} or the module itself */
+  const letterMod = lr.data.module || (lr.data && lr.data.id ? lr.data : {});
+  const savedPool = ((letterMod.letter || {}).questions || []);
+  check('the super admin saves a letter pool with a module',
+    lr.ok && !!letterMod.id && savedPool.length === 10,
+    'status ' + lr.status + ' pool ' + savedPool.length);
+  check('blank question rows are dropped from the letter pool',
+    savedPool.length === 10 && savedPool.every(function (q) { return !!String(q.question || '').trim(); }),
+    JSON.stringify(savedPool.map(function (q) { return q.question; })));
+  check('a letter question keeps its options and the right answer',
+    savedPool.length > 0 && (savedPool[0].options || []).length === 3 && savedPool[0].answerIndex === 1,
+    JSON.stringify(savedPool[0] || {}));
+
+  /* the learner sees the size of the pool and their own two questions only */
+  let lv = await call('/modules', null, stuTok);
+  const letterListed = (lv.data.modules || []).filter(function (m) { return m.id === letterMod.id; })[0] || {};
+  const letterProg = (letterListed.progress || {}).letter || null;
+  check('the learner is told "2 of 10" and never the questions themselves',
+    lv.ok && !!letterProg && letterProg.meta.pool === 10 && letterProg.meta.pick === 2 &&
+      JSON.stringify(lv.data).indexOf('Letter question') === -1,
+    JSON.stringify(letterProg).slice(0, 200));
+  lv = await call('/module/' + encodeURIComponent(letterMod.id) + '/letter', null, stuTok);
+  check('the letter questions are not issued before every book is finished',
+    !lv.ok && (lv.status === 403 || lv.status === 400) &&
+      JSON.stringify(lv.data).indexOf('Letter question') === -1,
+    'status ' + lv.status + ' ' + JSON.stringify(lv.data).slice(0, 160));
+  lv = await call('/submissions', { method: 'POST', body: { type: 'module_letter',
+    moduleId: letterMod.id,
+    answers: [{ questionId: 'q1', choice: 0 }, { questionId: 'q2', choice: 0 }] } }, stuTok);
+  check('the letter cannot be answered while its module is unfinished',
+    !lv.ok && lv.status === 403, 'status ' + lv.status + ' ' + JSON.stringify(lv.data).slice(0, 160));
+
+  /* the answering style can be changed without losing the questions */
+  lr = await call('/super/modules/' + encodeURIComponent(letterMod.id), { method: 'PUT',
+    body: { letter: { enabled: true, mode: 'summary', questions: poolQs.slice(3, 6) } } }, suTok);
+  const switched = ((lr.data.module || lr.data || {}).letter) || {};
+  check('a module letter can be switched to typed answers',
+    lr.ok && switched.mode === 'summary' && (switched.questions || []).length === 3,
+    'status ' + lr.status + ' ' + JSON.stringify(switched).slice(0, 160));
+  lr = await call('/super/modules/' + encodeURIComponent(letterMod.id), { method: 'PUT',
+    body: { letter: { enabled: false, mode: 'objectives', questions: poolQs.slice(0, 3) } } }, suTok);
+  lv = await call('/modules', null, stuTok);
+  const offListed = (lv.data.modules || []).filter(function (m) { return m.id === letterMod.id; })[0] || {};
+  check('switching the letter off removes it from the learner flow',
+    lr.ok && !((offListed.progress || {}).letter), JSON.stringify((offListed.progress || {}).letter || null));
+  lr = await call('/super/modules/' + encodeURIComponent(letterMod.id), { method: 'DELETE' }, suTok);
+  check('the letter test module is removed again', lr.ok, 'status ' + lr.status + ' ' + JSON.stringify(lr.data).slice(0, 160));
 
   const certs = await call('/certificates', null, stuTok);
   const first = (certs.data.certificates || [])[0];

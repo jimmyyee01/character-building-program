@@ -20,10 +20,10 @@ $ADMINS = ['super', 'tenant_admin'];
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-define('APP_BUILD', '2026-11-05-veil-while-answering');
+define('APP_BUILD', '2026-11-05-letter-after-module');
 define('APP_FEATURES', 'health,super.analytics,admin.analytics,reports.students,reports.student-roster,reports.student-detail,reports.student-assessment,reports.module-performers,reports.top-performers,'
     . 'public.top-performers,users.supervisor-auto-assignment,messaging,notifications,keywords,reading.activity,reading.video-alerts,'
-    . 'reader.book,library.lock,library.media,library.letters,certificates,chapter.pages,exports,assessment,assessment.admin,read-aloud');
+    . 'reader.book,library.lock,library.media,library.letters,certificates,chapter.pages,exports,assessment,assessment.admin,read-aloud,letter.after-module');
 
 /* Public: which backend and which build is answering. */
 function r_health($user, $body, $params, $token, $query): array {
@@ -68,6 +68,7 @@ route('POST', '/api/assessment/pre', 'r_assessment_pre');
 route('POST', '/api/assessment/post', 'r_assessment_post');
 route('GET',  '/api/modules', 'r_modules');
 route('GET',  '/api/module/([a-zA-Z0-9_-]+)', 'r_module_one');
+route('GET',  '/api/module/([a-zA-Z0-9_-]+)/letter', 'r_module_letter');
 route('GET',  '/api/book/([a-zA-Z0-9_-]+)', 'r_book_one');
 route('GET',  '/api/chapter/([a-zA-Z0-9_-]+)/objectives', 'r_chapter_objectives');
 route('POST', '/api/chapter/([a-zA-Z0-9_-]+)/read', 'r_chapter_read');

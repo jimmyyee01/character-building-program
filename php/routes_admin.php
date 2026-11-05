@@ -347,8 +347,17 @@ function r_super_module_create(array $user, array $body, array $params, ?string 
         'summary_prompts_json'=>jenc($body['summaryPrompts'] ?? $body['summary_prompts'] ?? ($mode === 'objectives' ? ['What did you learn?','How will you apply it?','Write your reflection.'] : [])),
         'completion_video_id'=>$body['completionVideoId'] ?? $body['completion_video_id'] ?? null,
         'created_at'=>now_dt()];
-    db()->prepare('INSERT INTO modules (id,`key`,`order`,title,mode,certificate_name,default_books,letter_after_book,summary_prompts_json,completion_video_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-        ->execute(array_values($row));
+    /* The letter that closes the module (its pool of questions) lives in its own
+       column, so it is written only once migrate.php has added it — an older
+       database keeps working exactly as before. */
+    if (has_column('modules', 'letter_json')) {
+        $row['letter_json'] = jenc(normalize_module_letter_input($body['letter'] ?? null));
+        db()->prepare('INSERT INTO modules (id,`key`,`order`,title,mode,certificate_name,default_books,letter_after_book,summary_prompts_json,completion_video_id,created_at,letter_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+            ->execute(array_values($row));
+    } else {
+        db()->prepare('INSERT INTO modules (id,`key`,`order`,title,mode,certificate_name,default_books,letter_after_book,summary_prompts_json,completion_video_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+            ->execute(array_values($row));
+    }
     $st = db()->prepare('SELECT * FROM modules WHERE id=?'); $st->execute([$row['id']]);
     return n_module($st->fetch());
 }
@@ -370,6 +379,9 @@ function r_super_module_update(array $user, array $body, array $params, ?string 
             if ($col === 'letter_after_book') $v = (int)(bool)$v;
             $set[] = "$col=?"; $args[] = $v;
         }
+    }
+    if (array_key_exists('letter', $body) && has_column('modules', 'letter_json')) {
+        $set[] = 'letter_json=?'; $args[] = jenc(normalize_module_letter_input($body['letter']));
     }
     if (count($set)) { $args[] = $id; db()->prepare('UPDATE modules SET ' . implode(',', $set) . ' WHERE id=?')->execute($args); }
     $st = db()->prepare('SELECT * FROM modules WHERE id=?'); $st->execute([$id]);

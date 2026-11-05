@@ -18,13 +18,14 @@ function need(cond, message, status) { if (!cond) throw new HttpError(message, s
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-const BUILD = '2026-11-05-veil-while-answering';
+const BUILD = '2026-11-05-letter-after-module';
 const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.students', 'reports.student-roster',
   'reports.student-detail', 'reports.student-assessment', 'reports.module-performers', 'reports.top-performers',
   'public.top-performers', 'reading.activity', 'reading.video-alerts',
   'messaging', 'notifications', 'users.supervisor-auto-assignment', 'keywords',
   'reader.book', 'library.lock', 'library.media', 'library.letters', 'certificates', 'chapter.pages',
-  'chapter.reading-gate', 'exports', 'assessment', 'assessment.admin', 'read-aloud'];
+  'chapter.reading-gate', 'exports', 'assessment', 'assessment.admin', 'read-aloud',
+  'letter.after-module'];
 
 function send(res, code, obj) {
   const body = JSON.stringify(obj);
@@ -639,19 +640,27 @@ function moduleProgress(user, module) {
   const allBooks = books.length > 0 && states.every(s => s.complete);
   const cert = dbm.where('certificates', c => c.userId === user.id && c.moduleId === module.id)[0] || null;
   const bestPick = findSub(user.id, 'best_book', { moduleId: module.id });
+  /* the letter this module closes with (only when the admin turned it on and
+     wrote at least one question) */
+  const letterMeta = moduleLetterMeta(module);
+  const letterOn = letterMeta.enabled && letterMeta.pool > 0;
+  const letterSub = letterOn ? findSub(user.id, 'module_letter', { moduleId: module.id }) : null;
 
   let stage = 'work';
   if (cert) stage = 'certified';
   else if (bestPick) stage = 'video';
+  else if (allBooks && letterOn && !letterSub) stage = 'letter';
   else if (allBooks) stage = 'best_book';
 
   let total = 2; // best book pick + certificate
+  if (letterOn) total++;
   let done = 0;
   states.forEach(s => {
     s.chapters.forEach(c => { total++; if (c.submission) done++; });
     if (module.mode === 'summary') { total++; if (s.letterSubmission) done++; }
     else { s.summaries.forEach(x => { total++; if (x.submission) done++; }); }
   });
+  if (letterSub) done++;
   if (bestPick) done++;
   if (cert) done++;
 
@@ -665,6 +674,9 @@ function moduleProgress(user, module) {
       certificateName: module.certificateName, summaryPrompts: module.summaryPrompts || [],
       completionVideoId: module.completionVideoId || null },
     books: states, stage, bestPick: subMeta(bestPick), certificate: cert || null,
+    /* the closing letter: on/off, how many questions, and the learner's result */
+    letter: letterOn ? { meta: letterMeta, open: !letterSub,
+      submission: subMeta(letterSub) } : null,
     percent: total ? Math.round(100 * done / total) : 0,
     objectiveScore: objTotal ? Math.round(100 * objScore / objTotal) : null
   };
@@ -813,6 +825,106 @@ function shuffleWithSeed(arr, seedStr) {
 function shuffledForLogin(user, token, list) {
   const day = new Date().toISOString().slice(0, 10);
   return shuffleWithSeed(list, user.id + '|' + (token || '') + '|' + day);
+}
+
+/* ======================================= the letter after a module ======= */
+/* The super admin writes a pool of up to ten questions for the letter that
+   closes a module. Each learner answers only TWO of them: the pair is drawn
+   from the pool with the learner's own account as the seed, so every student
+   sees a different two, in a different order, while the same student always
+   sees the same two. While the questions are live the letter itself is veiled
+   (blurred) so an answer is written from what was read, never copied. */
+const LETTER_POOL_MAX = 10;
+const LETTER_PICK = 2;
+
+/* One authored question: a prompt plus (for objective mode) up to six
+   options and the index of the right one. */
+function normalizeLetterQuestions(list) {
+  return (Array.isArray(list) ? list : []).map((q, i) => {
+    const src = q && typeof q === 'object' ? q : { question: q };
+    const question = String(src.question || src.text || '').trim();
+    if (!question) return null;
+    const options = (Array.isArray(src.options) ? src.options : [])
+      .map(o => (o && typeof o === 'object' ? String(o.text || '') : String(o == null ? '' : o)).trim())
+      .filter(Boolean).slice(0, 6);
+    let answerIndex = Number(src.answerIndex);
+    if (!Number.isFinite(answerIndex) || answerIndex < 0 || answerIndex >= options.length) answerIndex = 0;
+    return {
+      id: String(src.id || ('q' + (i + 1))),
+      question,
+      options,
+      answerIndex: options.length ? answerIndex : null
+    };
+  }).filter(Boolean).slice(0, LETTER_POOL_MAX)
+    .map((q, i) => ({ id: q.id || ('q' + (i + 1)), question: q.question,
+      options: q.options, answerIndex: q.answerIndex }));
+}
+
+/* The authored pool of one module (empty when nothing has been written yet). */
+function letterQuestions(mod) {
+  return normalizeLetterQuestions(mod && mod.letter ? mod.letter.questions : null);
+}
+
+/* What the admin screen and the learner screen need to know about the letter:
+   whether it is on, which library letter it carries, which answering style it
+   uses and how many questions are in the pool. */
+function moduleLetterMeta(mod) {
+  const src = mod && mod.letter && typeof mod.letter === 'object' ? mod.letter : {};
+  const list = letterQuestions(mod);
+  return {
+    enabled: src.enabled === undefined ? list.length > 0 : !!src.enabled,
+    letterId: src.letterId || null,
+    mode: src.mode === 'summary' ? 'summary' : 'objectives',
+    pool: list.length,
+    pick: list.length ? Math.min(LETTER_PICK, list.length) : 0
+  };
+}
+
+/* The letter the module's questions belong to: the module's own pick first,
+   then the programme's Letter from Christ, so a module can reuse it. */
+function moduleLetterDoc(mod) {
+  const meta = moduleLetterMeta(mod);
+  const lib = (meta.letterId && dbm.byId('library', meta.letterId)) ||
+    dbm.byId('library', dbm.db.settings.letterId);
+  if (!lib) return null;
+  return { id: lib.id, title: lib.title, text: lib.text, media: mediaOut(lib) };
+}
+
+/* What the super admin may save for a module's letter: the on/off switch, the
+   library letter it carries, the answering style ('objectives' = pick one of
+   the options, 'summary' = type an answer) and the pool of questions. Blank
+   rows are dropped and the pool is capped at ten. */
+function normalizeModuleLetterInput(src) {
+  const obj = src && typeof src === 'object' ? src : {};
+  const list = normalizeLetterQuestions(obj.questions);
+  return {
+    enabled: obj.enabled === undefined ? list.length > 0 : !!obj.enabled,
+    letterId: obj.letterId ? String(obj.letterId) : null,
+    mode: obj.mode === 'summary' ? 'summary' : 'objectives',
+    questions: list
+  };
+}
+
+/* The TWO questions this learner has to answer, in their own stable order.
+   Options are shuffled per login (the submission maps the chosen text back to
+   the authored index, exactly like chapter objectives). */
+function moduleLetterFor(user, mod, opts) {
+  const meta = moduleLetterMeta(mod);
+  if (!meta.enabled || !meta.pool) return null;
+  const token = (opts && opts.token) || '';
+  const all = letterQuestions(mod);
+  const order = shuffleWithSeed(all, user.id + '|' + mod.id + '|letter');
+  const chosen = order.slice(0, meta.pick);
+  return {
+    mode: meta.mode,
+    letter: moduleLetterDoc(mod),
+    counts: { pool: meta.pool, pick: meta.pick },
+    questions: chosen.map(q => ({
+      id: q.id,
+      question: q.question,
+      options: q.options.length ? shuffleWithSeed(q.options, q.id + token) : []
+    }))
+  };
 }
 
 function flowFor(user) {
@@ -1148,6 +1260,40 @@ route('GET', '/api/module/([a-z0-9_-]+)', ({ user, params }) => {
   return { ok: true, status: st.status, progress: st.progress };
 });
 
+/* The letter that closes a module, with the TWO questions this account has to
+   answer. The questions are issued only at the letter stage, so they are not
+   readable while the books are still being worked on; the pool of ten never
+   leaves the server as a whole. Once submitted the learner sees their own two
+   questions again, with the answers they gave. */
+route('GET', '/api/module/([a-z0-9_-]+)/letter', ({ user, token, params }) => {
+  requireRole(user, PARTICIPANTS);
+  const module = dbm.byId('modules', params[0]);
+  need(module, 'Module not found', 404);
+  const st = moduleStatuses(user).find(m => m.id === module.id);
+  need(st, 'Module not found', 404);
+  const meta = moduleLetterMeta(module);
+  need(meta.enabled && meta.pool > 0, 'This module has no letter questions', 400);
+  const done = findSub(user.id, 'module_letter', { moduleId: module.id });
+
+  if (done) {
+    return { ok: true, submitted: true, live: false, stage: st.progress.stage,
+      letter: moduleLetterDoc(module), mode: meta.mode,
+      counts: { pool: meta.pool, pick: meta.pick }, submission: subMeta(done),
+      questions: (done.answers || []).map(a => ({
+        id: a.questionId, question: a.question, options: [],
+        yourChoice: a.chosen || null, yourText: a.text || null,
+        correct: a.correct === undefined || a.correct === null ? null : !!a.correct,
+        answer: a.answer || null
+      })) };
+  }
+
+  need(st.progress.stage === 'letter',
+    'The letter opens once every book of this module is finished', 403);
+  const out = moduleLetterFor(user, module, { token });
+  return { ok: true, submitted: false, live: true, stage: st.progress.stage,
+    letter: out.letter, mode: out.mode, counts: out.counts, questions: out.questions };
+});
+
 /* Book detail: stages, chapter gating, letter and colour summaries. */
 route('GET', '/api/book/([a-z0-9_-]+)', ({ user, params }) => {
   requireRole(user, PARTICIPANTS);
@@ -1244,7 +1390,7 @@ route('POST', '/api/submissions', ({ user, token, body }) => {
   const type = String(body.type || '');
   const now = dbm.nowISO();
   const tenantId = user.tenantId;
-  const text = body.text != null ? String(body.text).trim() : '';
+  let text = body.text != null ? String(body.text).trim() : '';
   let sub = null;
   let warning = null;
   let assessment = null;
@@ -1259,6 +1405,12 @@ route('POST', '/api/submissions', ({ user, token, body }) => {
       if (ch) list = chapterKeywords(ch).list;
     } else if (base.bookId) {
       const chs = dbm.where('chapters', c => c.bookId === base.bookId);
+      list = suggestKeywords(chs.map(c => c.content).join(' '), 10);
+    } else if (base.moduleId) {
+      /* a letter answered in typed words is measured against the module's own
+         chapters, the same reading the questions were written from */
+      const bids = dbm.where('books', b => b.moduleId === base.moduleId).map(b => b.id);
+      const chs = dbm.where('chapters', c => bids.indexOf(c.bookId) !== -1);
       list = suggestKeywords(chs.map(c => c.content).join(' '), 10);
     } else if (base.type === 'general_summary') {
       list = suggestKeywords(dbm.db.chapters.map(c => c.content).join(' '), 12);
@@ -1390,6 +1542,54 @@ route('POST', '/api/submissions', ({ user, token, body }) => {
     const entry = mp.books.find(b => b.book.id === book.id);
     need(entry && entry.complete, 'That book is not complete yet', 403);
     store({ type, moduleId: mod.id, bookId: book.id }, { moduleId: mod.id });
+
+  } else if (type === 'module_letter') {
+    const mod = dbm.byId('modules', body.moduleId);
+    need(mod, 'Module not found', 404);
+    activeModule(mod);
+    const meta = moduleLetterMeta(mod);
+    need(meta.enabled && meta.pool > 0, 'This module has no letter questions');
+    const mp = moduleProgress(user, mod);
+    need(mp.stage === 'letter', 'Finish every book of this module before answering the letter', 403);
+    need(!findSub(user.id, 'module_letter', { moduleId: mod.id }), 'You already answered this letter');
+    /* only the two questions this account was given may be answered */
+    const picked = moduleLetterFor(user, mod, { token });
+    const answers = Array.isArray(body.answers) ? body.answers : [];
+    need(answers.length === picked.questions.length,
+      'Answer exactly ' + picked.questions.length + ' questions');
+    const pool = letterQuestions(mod);
+    const byId = {};
+    answers.forEach(a => { if (a && a.questionId) byId[String(a.questionId)] = a; });
+    const detail = [];
+    let score = 0;
+    let objectiveCount = 0;
+    picked.questions.forEach(q => {
+      const src = pool.find(x => x.id === q.id) ||
+        { id: q.id, question: q.question, options: [], answerIndex: null };
+      const a = byId[q.id];
+      need(a, 'Answer both questions before submitting');
+      if (meta.mode === 'summary') {
+        const typed = String(a.text == null ? '' : a.text).trim();
+        need(typed.length >= 15, 'Write at least 15 characters in your own words for each question');
+        detail.push({ questionId: q.id, question: src.question, text: typed });
+      } else {
+        need(src.options.length >= 2, 'This question has no options yet — ask your administrator');
+        objectiveCount++;
+        const shuffled = shuffleWithSeed(src.options, q.id + (token || ''));
+        const choice = Number(a.choice);
+        const chosenText = (choice >= 0 && choice < shuffled.length) ? shuffled[choice] : null;
+        need(chosenText != null, 'Choose an answer for every question');
+        const originalChoice = src.options.indexOf(chosenText);
+        const correct = originalChoice === src.answerIndex;
+        if (correct) score++;
+        detail.push({ questionId: q.id, question: src.question, choice: originalChoice,
+          chosen: chosenText, answer: src.options[src.answerIndex], correct });
+      }
+    });
+    /* typed answers feed the same key-word / copy checks as a chapter summary */
+    if (meta.mode === 'summary') text = detail.map(d => d.question + '\n' + d.text).join('\n\n');
+    store({ type, moduleId: mod.id, answers: detail,
+      score: objectiveCount ? score : null, total: objectiveCount || null }, { moduleId: mod.id });
 
   } else if (type === 'general_summary') {
     const statuses = moduleStatuses(user);
@@ -1719,6 +1919,7 @@ route('GET', '/api/final', ({ user }) => {
       bookSummaries: byType('book_summary'),
       objectiveSubmissions: byType('objectives'),
       bestPicks: byType('best_book'),
+      moduleLetters: byType('module_letter'),
       generalSummaries: byType('general_summary')
     },
     bookQuestions,
@@ -2321,7 +2522,8 @@ route('POST', '/api/super/modules', ({ user, body }) => {
       : (objectives ? [{ label: 'Summary 1', color: '#e74c3c' },
           { label: 'Summary 2', color: '#f39c12' },
           { label: 'Summary 3', color: '#27ae60' }] : []),
-    completionVideoId: null, createdAt: dbm.nowISO()
+    completionVideoId: null, letter: normalizeModuleLetterInput(body.letter),
+    createdAt: dbm.nowISO()
   };
   dbm.collection('modules').push(mod);
   dbm.save();
@@ -2339,6 +2541,7 @@ route('PUT', '/api/super/modules/([a-z0-9_-]+)', ({ user, params, body }) => {
   if (body.mode) mod.mode = body.mode === 'objectives' ? 'objectives' : 'summary';
   if (body.defaultBooks) mod.defaultBooks = Number(body.defaultBooks);
   if (body.summaryPrompts !== undefined) mod.summaryPrompts = body.summaryPrompts;
+  if (body.letter !== undefined) mod.letter = normalizeModuleLetterInput(body.letter);
   if (body.completionVideoId !== undefined) mod.completionVideoId = body.completionVideoId;
   dbm.save();
   return { ok: true, module: mod };

@@ -447,7 +447,8 @@ function showOptionalVideo() {
 const TYPE_LABELS = {
   chapter_summary: 'Chapter summary', objectives: 'Chapter objectives',
   letter_summary: 'Letter summary', book_summary: 'Book summary',
-  best_book: 'Best book choice', general_summary: 'General summary'
+  best_book: 'Best book choice', general_summary: 'General summary',
+  module_letter: 'Letter after module'
 };
 
 async function renderHome() {
@@ -531,7 +532,9 @@ async function renderModules() {
           : '<button disabled>Completed</button>';
       } else if (m.status === 'active') {
         action = '<button data-open="' + esc(m.id) + '">' +
-          (p.stage === 'best_book' ? 'Choose the best book' : p.stage === 'video' ? 'Claim your certificate' : 'Open books') +
+          (p.stage === 'best_book' ? 'Choose the best book'
+            : p.stage === 'letter' ? 'Open the letter'
+            : p.stage === 'video' ? 'Claim your certificate' : 'Open books') +
           '</button>';
       }
       return '<div class="module-card ' + (m.status === 'locked' ? 'locked' : '') + '">' +
@@ -558,6 +561,7 @@ async function openModule(moduleId) {
   show('modules');
 
   if (p.stage === 'best_book') { renderBestBookPicker(p); return; }
+  if (p.stage === 'letter') { renderModuleLetter(p); return; }
   if (p.stage === 'video') { renderCertificatePrompt(p); return; }
 
   const firstOpen = p.books.findIndex(function (b) { return !b.complete; });
@@ -1112,6 +1116,175 @@ function wireSummariesPanel(d) {
   });
 }
 
+/* ------------------ the letter that closes a module --------------------- */
+/* The super admin writes a pool of up to ten questions for the letter of a
+   module; each learner answers only TWO of them, drawn per account, so every
+   student gets a different pair. The letter stays readable while it is open —
+   the moment the questions come on screen the letter is veiled (blurred), so
+   the answers are written from what was read, never copied. "Back to the
+   letter" lifts the veil again, and the server keeps the questions shut until
+   every book of the module is finished. */
+function renderModuleLetter(p) {
+  show('modules');
+  const meta = (p.letter && p.letter.meta) || { pool: 0, pick: 2, mode: 'objectives' };
+  $('view-modules').innerHTML =
+    '<button id="backModsLetter" class="ghost small">← All modules</button>' +
+    '<div class="card mt letter-stage"><h3>' + esc(p.module.title) + ' — the letter 🎉</h3>' +
+    '<p class="muted">Every book in this module is finished. Read the letter, then answer <b>' +
+      esc(meta.pick) + ' of the ' + esc(meta.pool) + ' questions</b> set for this module. ' +
+      'Each student is given a different pair.</p>' +
+    '<div id="moduleLetterBody"><p class="muted">Loading the letter…</p></div></div>';
+  $('backModsLetter').onclick = renderModules;
+  loadModuleLetter(p);
+}
+
+async function loadModuleLetter(p) {
+  const box = $('moduleLetterBody');
+  if (!box) return;
+  let d;
+  try { d = await API.get('/module/' + p.module.id + '/letter'); }
+  catch (e) { box.innerHTML = '<p class="muted">' + esc(e.message) + '</p>'; return; }
+  box.innerHTML = moduleLetterHtml(d);
+  wireModuleLetter(d, p);
+}
+
+function moduleLetterHtml(d) {
+  const letter = d.letter || {};
+  const pick = d.counts ? d.counts.pick : 2;
+  const pool = d.counts ? d.counts.pool : 0;
+  /* the letter itself, veiled the moment the questions are open */
+  let html = '<div id="moduleLetterSheet" class="letter-sheet">' +
+    '<h4 class="mt">' + esc(letter.title || 'The letter') + '</h4>' +
+    attachedMediaHtml(letter.media, 'mlMedia') +
+    narratedTextHtml(letter.text || 'The letter has not been configured yet.',
+      { className: 'letter-box', status: 'Press Play to hear this letter.' }) + '</div>';
+
+  if (d.submitted) {
+    html += '<hr><h4 class="mt">Your questions</h4>' +
+      (d.questions || []).map(function (q, i) { return moduleLetterAnswerHtml(q, i); }).join('') +
+      '<p class="timestamp mt">Submitted: ' +
+        fmtDate(d.submission && (d.submission.submittedAt || d.submission.createdAt)) + '</p>' +
+      '<div class="mt"><button id="moduleLetterNext">Continue to the best book →</button></div>';
+    return html;
+  }
+
+  html += '<div class="read-gate answer-open" id="moduleLetterNote" hidden>' +
+    '<span class="lock" aria-hidden="true">✍️</span>' +
+    '<span><b>Answering now — the letter is set aside</b>' +
+      '<span class="small muted">The letter, its clip and its text are blurred while your questions are ' +
+      'open, so the answers come from what you read. Step back to read or hear it again.</span>' +
+    '</span></div>' +
+    '<div class="mt"><button id="moduleLetterStart">Answer my ' + esc(pick) + ' of ' + esc(pool) +
+      ' questions</button></div>' +
+    '<div id="moduleLetterForm" hidden><hr><h4>Your questions</h4>' +
+      '<p class="muted small">You were given ' + esc(pick) + ' of the ' + esc(pool) +
+        ' questions written for this module. Another student gets a different pair.</p>' +
+      (d.questions || []).map(function (q, i) { return moduleLetterQuestionHtml(q, i, d.mode); }).join('') +
+      '<div class="mt"><button id="moduleLetterSubmit">Submit my answers</button> ' +
+      '<button id="moduleLetterBack" class="ghost">Back to the letter</button></div></div>';
+  return html;
+}
+
+function moduleLetterQuestionHtml(q, i, mode) {
+  const head = '<b>' + (i + 1) + '. ' + esc(q.question) + '</b>';
+  if (mode === 'summary') {
+    return '<div class="letter-q" data-q="' + esc(q.id) + '">' + head +
+      '<textarea class="ml-text no-paste" rows="4" ' +
+        'placeholder="Answer in your own words (at least 15 characters)..."></textarea></div>';
+  }
+  return '<div class="letter-q" data-q="' + esc(q.id) + '">' + head +
+    '<div class="ml-opts">' + (q.options || []).map(function (o, oi) {
+      return '<label class="ml-opt"><input type="radio" name="ml-' + esc(q.id) + '" value="' + oi + '"> ' +
+        '<span>' + esc(o) + '</span></label>';
+    }).join('') + '</div></div>';
+}
+
+function moduleLetterAnswerHtml(q, i) {
+  const verdict = q.correct === null || q.correct === undefined ? ''
+    : ' <span class="badge ' + (q.correct ? 'ok' : 'warn') + '">' +
+      (q.correct ? 'Correct' : 'Not quite') + '</span>';
+  return '<div class="letter-q submitted">' +
+    '<b>' + (i + 1) + '. ' + esc(q.question) + '</b>' + verdict +
+    (q.yourChoice ? '<div class="muted small mt">Your answer: <b>' + esc(q.yourChoice) + '</b></div>' : '') +
+    (q.yourText ? '<div class="content">' + esc(q.yourText) + '</div>' : '') +
+    (q.correct === false && q.answer
+      ? '<div class="muted small">Expected: ' + esc(q.answer) + '</div>' : '') +
+    '</div>';
+}
+
+function wireModuleLetter(d, p) {
+  const next = $('moduleLetterNext');
+  if (next) { next.onclick = function () { openModule(p.module.id); }; return; }
+
+  const sheet = $('moduleLetterSheet');
+  const form = $('moduleLetterForm');
+  const start = $('moduleLetterStart');
+  const note = $('moduleLetterNote');
+
+  /* the letter is read-only for students: no copying the sacred text */
+  if (sheet) {
+    const box = sheet.querySelector('.letter-box');
+    if (box) blockPaste(box, 'The letter cannot be copied or pasted.');
+  }
+  if (form) {
+    form.querySelectorAll('textarea').forEach(function (ta) {
+      blockPaste(ta, 'Please write your own words.');
+    });
+  }
+
+  /* one switch for both halves of the rule: questions on screen = letter veiled */
+  function veil(on) {
+    if (sheet) sheet.classList.toggle('veiled', on === true);
+    if (form) form.hidden = on !== true;
+    if (start) start.hidden = on === true;
+    if (note) { if (on === true) note.removeAttribute('hidden'); else note.setAttribute('hidden', ''); }
+    if (on === true) {
+      const first = form && form.querySelector('textarea, input[type=radio]');
+      if (first && first.focus) first.focus();
+    } else if (sheet && sheet.scrollIntoView) {
+      sheet.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
+  }
+
+  if (start) start.onclick = function () { veil(true); };
+  const back = $('moduleLetterBack');
+  if (back) back.onclick = function () { veil(false); };
+
+  const submit = $('moduleLetterSubmit');
+  if (submit) submit.onclick = async function () {
+    const answers = [];
+    let missing = false;
+    (d.questions || []).forEach(function (q) {
+      const row = form.querySelector('[data-q="' + q.id + '"]');
+      if (!row) { missing = true; return; }
+      if (d.mode === 'summary') {
+        const ta = row.querySelector('textarea');
+        const val = ta ? ta.value.trim() : '';
+        if (val.length < 15) missing = true;
+        answers.push({ questionId: q.id, text: val });
+      } else {
+        const picked = row.querySelector('input[type=radio]:checked');
+        if (!picked) missing = true;
+        answers.push({ questionId: q.id, choice: picked ? Number(picked.value) : -1 });
+      }
+    });
+    if (missing) {
+      toast(d.mode === 'summary'
+        ? 'Please answer both questions in at least 15 characters each.'
+        : 'Please choose an answer for both questions.', 'err');
+      return;
+    }
+    submit.disabled = true;
+    try {
+      const r = await API.post('/submissions',
+        { type: 'module_letter', moduleId: p.module.id, answers: answers });
+      toast(r.warning || 'Letter answers submitted.', r.warning ? 'err' : 'ok');
+      await loadFlow();
+      openModule(p.module.id);
+    } catch (e) { submit.disabled = false; toast(e.message, 'err'); }
+  };
+}
+
 /* -------------------- best book → completion video → certificate -------- */
 function renderBestBookPicker(p) {
   show('modules');
@@ -1530,7 +1703,10 @@ function renderFinalTab() {
       sectionBlock('Objective submissions', sums.objectiveSubmissions, function (s) {
         return finalSubHtml(s, null);
       }) +
-      sectionBlock('Best book choices', sums.bestPicks);
+      sectionBlock('Best book choices', sums.bestPicks) +
+      sectionBlock('Letters after each module', sums.moduleLetters, function (s) {
+        return finalSubHtml(s, '#24508c');
+      });
     if (!html) html = '<div class="card"><p class="muted">No summaries recorded.</p></div>';
   } else if (FINAL_TAB === 'thoughts') {
     html = '<div class="card"><h3>Add a thought</h3>' +

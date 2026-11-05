@@ -94,6 +94,50 @@ function r_module_one($user, $body, $params, $token, $query) {
   need($found, 'Module not found', 404);
   return ['status' => $found['status'], 'progress' => $found['progress']];
 }
+/* The letter that closes a module, with the TWO questions this account has to
+   answer. The pool of ten never leaves the server as a whole: only the pair is
+   issued, and only once every book of the module is finished. Until the letter
+   is submitted the learner screen blurs the letter (veil) so an answer is
+   written from what was read, not copied. */
+function r_module_letter($user, $body, $params, $token, $query) {
+  global $PARTICIPANTS;
+  require_role($user, $PARTICIPANTS);
+  $id = $params[0] ?? null;
+  need($id, 'Module id required', 400);
+  $st = db()->prepare('SELECT * FROM modules WHERE id=? LIMIT 1');
+  $st->execute([$id]);
+  $row = $st->fetch();
+  need($row, 'Module not found', 404);
+  $module = n_module($row);
+  $meta = module_letter_meta($module);
+  need($meta['enabled'] && $meta['pool'] > 0, 'This module has no letter', 400);
+  $found = null;
+  foreach (module_statuses($user) as $s) if ($s['id'] === $module['id']) { $found = $s; break; }
+  need($found, 'Module not found', 404);
+  $done = find_sub($user['id'], 'module_letter', ['module_id' => $module['id']]);
+  if ($done) {
+    /* write-once: once answered, the letter is only read back */
+    $answers = [];
+    foreach ((is_array($done['answers'] ?? null) ? $done['answers'] : []) as $a) {
+      if (!is_array($a)) continue;
+      $answers[] = ['id' => $a['questionId'] ?? null, 'question' => $a['question'] ?? '',
+        'options' => [], 'yourChoice' => $a['chosen'] ?? null, 'yourText' => $a['text'] ?? null,
+        'correct' => isset($a['correct']) ? (bool)$a['correct'] : null,
+        'answer' => $a['answer'] ?? null];
+    }
+    return ['submitted' => true, 'live' => false, 'stage' => $found['progress']['stage'],
+      'letter' => module_letter_doc($module), 'mode' => $meta['mode'],
+      'counts' => ['pool' => $meta['pool'], 'pick' => $meta['pick']],
+      'submission' => sub_meta($done), 'questions' => $answers];
+  }
+  need(($found['progress']['stage'] ?? '') === 'letter',
+    'The letter opens once every book of this module is finished', 403);
+  $out = module_letter_for($user, $module, $token);
+  return ['submitted' => false, 'live' => true, 'stage' => $found['progress']['stage'],
+    'letter' => $out['letter'], 'mode' => $out['mode'], 'counts' => $out['counts'],
+    'questions' => $out['questions']];
+}
+
 function r_book_one($user, $body, $params, $token, $query) {
   global $PARTICIPANTS;
   require_role($user, $PARTICIPANTS);
@@ -325,7 +369,7 @@ function r_submissions($user, $body, $params, $token, $query) {
   global $PARTICIPANTS;
   require_role($user, $PARTICIPANTS);
   $type = (string)($body['type'] ?? '');
-  need(in_array($type, ['chapter_summary','objectives','letter_summary','book_summary','best_book','general_summary'], true), 'Invalid type', 400);
+  need(in_array($type, ['chapter_summary','objectives','letter_summary','book_summary','best_book','module_letter','general_summary'], true), 'Invalid type', 400);
   $pdo = db();
   $warn = null; $newRow = null;
   if ($type === 'chapter_summary' || $type === 'objectives') {
@@ -455,6 +499,63 @@ function r_submissions($user, $body, $params, $token, $query) {
     $newRow = ['id' => uid('sub'), 'user_id' => $user['id'], 'tenant_id' => $user['tenant_id'],
       'type' => $type, 'chapter_id' => null, 'book_id' => $bookId, 'module_id' => $moduleId,
       'index' => null, 'text' => $txt, 'answers_json' => null, 'score' => null, 'total' => null,
+      'color' => null, 'label' => null, 'similarity' => $cp['similarity'], 'flagged' => $cp['flagged'] ? 1 : 0,
+      'created_at' => now_dt()];
+  } elseif ($type === 'module_letter') {
+    $moduleId = (string)($body['moduleId'] ?? $body['module_id'] ?? '');
+    need($moduleId, 'moduleId required', 400);
+    $st = $pdo->prepare('SELECT * FROM modules WHERE id=? LIMIT 1'); $st->execute([$moduleId]);
+    $mrow = $st->fetch(); need($mrow, 'Module not found', 404);
+    $module = n_module($mrow);
+    $mst = null;
+    foreach (module_statuses($user) as $s) if ($s['id'] === $module['id']) { $mst = $s; break; }
+    need($mst && $mst['status'] === 'active', 'Module is not active', 403);
+    $meta = module_letter_meta($module);
+    need($meta['enabled'] && $meta['pool'] > 0, 'This module has no letter questions', 400);
+    $mp = module_progress($user, $module);
+    need(($mp['stage'] ?? '') === 'letter', 'Finish every book of this module before answering the letter', 403);
+    need(!find_sub($user['id'], 'module_letter', ['module_id' => $module['id']]), 'You already answered this letter', 400);
+    /* only the two questions this account was given may be answered */
+    $picked = module_letter_for($user, $module, $token);
+    $pool = letter_questions($module);
+    $incoming = is_array($body['answers'] ?? null) ? $body['answers'] : [];
+    $byId = [];
+    foreach ($incoming as $a) if (is_array($a) && !empty($a['questionId'])) $byId[(string)$a['questionId']] = $a;
+    need(count($byId) === count($picked['questions']),
+      'Answer exactly ' . count($picked['questions']) . ' questions', 400);
+    $detail = []; $score = 0; $objectiveCount = 0; $typedAll = [];
+    foreach ($picked['questions'] as $q) {
+      $src = null;
+      foreach ($pool as $x) if ($x['id'] === $q['id']) { $src = $x; break; }
+      if (!$src) $src = ['id' => $q['id'], 'question' => $q['question'], 'options' => [], 'answerIndex' => null];
+      $a = $byId[$q['id']] ?? null;
+      need($a, 'Answer both questions before submitting', 400);
+      if ($meta['mode'] === 'summary') {
+        $typed = trim((string)($a['text'] ?? ''));
+        need(mb_strlen($typed) >= 15, 'Write at least 15 characters in your own words for each question', 400);
+        $typedAll[] = $src['question'] . "\n" . $typed;
+        $detail[] = ['questionId' => $q['id'], 'question' => $src['question'], 'text' => $typed];
+      } else {
+        need(count($src['options']) >= 2, 'This question has no options yet — ask your administrator', 400);
+        $objectiveCount++;
+        $shuffled = shuffle_with_seed($src['options'], $q['id'] . ($token ?? ''));
+        $choice = isset($a['choice']) && is_numeric($a['choice']) ? (int)$a['choice'] : -1;
+        $chosenText = ($choice >= 0 && $choice < count($shuffled)) ? $shuffled[$choice] : null;
+        need($chosenText !== null, 'Choose an answer for every question', 400);
+        $originalChoice = array_search($chosenText, $src['options'], true);
+        $correct = ((int)$originalChoice === (int)$src['answerIndex']);
+        if ($correct) $score++;
+        $detail[] = ['questionId' => $q['id'], 'question' => $src['question'], 'choice' => (int)$originalChoice,
+          'chosen' => $chosenText, 'answer' => $src['options'][$src['answerIndex']] ?? null, 'correct' => $correct];
+      }
+    }
+    /* typed answers feed the same key-word / copy checks as a chapter summary */
+    $text = $typedAll ? implode("\n\n", $typedAll) : null;
+    $cp = assess_copy($user, $type, ['module_id' => $module['id']], $text);
+    $newRow = ['id' => uid('sub'), 'user_id' => $user['id'], 'tenant_id' => $user['tenant_id'],
+      'type' => $type, 'chapter_id' => null, 'book_id' => null, 'module_id' => $module['id'],
+      'index' => null, 'text' => $text, 'answers_json' => jenc($detail),
+      'score' => $objectiveCount ? $score : null, 'total' => $objectiveCount ?: null,
       'color' => null, 'label' => null, 'similarity' => $cp['similarity'], 'flagged' => $cp['flagged'] ? 1 : 0,
       'created_at' => now_dt()];
   } else {
@@ -707,7 +808,7 @@ function r_final($user, $body, $params, $token, $query) {
   $st->execute([$user['id']]);
   $all = array_map('n_sub', $st->fetchAll());
   $groups = ['chapterSummaries' => [], 'letterSummaries' => [], 'bookSummaries' => [],
-    'objectiveSubmissions' => [], 'bestPicks' => [], 'generalSummaries' => []];
+    'objectiveSubmissions' => [], 'bestPicks' => [], 'moduleLetters' => [], 'generalSummaries' => []];
   foreach ($all as $s) {
     $d = describe_sub($s);
     if ($s['type'] === 'chapter_summary') $groups['chapterSummaries'][] = $d;
@@ -715,6 +816,7 @@ function r_final($user, $body, $params, $token, $query) {
     elseif ($s['type'] === 'book_summary') $groups['bookSummaries'][] = $d;
     elseif ($s['type'] === 'objectives') $groups['objectiveSubmissions'][] = $d;
     elseif ($s['type'] === 'best_book') $groups['bestPicks'][] = $d;
+    elseif ($s['type'] === 'module_letter') $groups['moduleLetters'][] = $d;
     elseif ($s['type'] === 'general_summary') $groups['generalSummaries'][] = $d;
   }
   $bookQuestions = [];

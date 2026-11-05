@@ -17,6 +17,11 @@ $wanted = [
     'chapters' => [
         'keywords_json' => 'LONGTEXT NULL',
     ],
+    'modules' => [
+        /* the letter that closes the module: switch, library letter, answering
+           style and the pool of up to ten questions (two are issued per learner) */
+        'letter_json' => 'LONGTEXT NULL',
+    ],
     'conversation_messages' => [
         /* PDF/text/Word/audio/video files attached to a message */
         'attachments_json' => 'LONGTEXT NULL',

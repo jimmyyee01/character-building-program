@@ -138,6 +138,7 @@ CREATE TABLE IF NOT EXISTS modules (
   default_books INT NOT NULL DEFAULT 3,
   letter_after_book TINYINT(1) NOT NULL DEFAULT 1,
   summary_prompts_json LONGTEXT NULL,
+  letter_json LONGTEXT NULL,
   completion_video_id VARCHAR(64) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;

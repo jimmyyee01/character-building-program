@@ -40,6 +40,7 @@ function n_module(array $r): array {
         'defaultBooks' => (int)($r['default_books'] ?? 3),
         'letterAfterBook' => (bool)($r['letter_after_book'] ?? false),
         'summaryPrompts' => jdec($r['summary_prompts_json'] ?? null, []),
+        'letter' => normalize_module_letter_input(jdec($r['letter_json'] ?? null, null)),
         'completionVideoId' => $r['completion_video_id'],
         'createdAt' => iso($r['created_at'] ?? null)];
 }
@@ -253,17 +254,25 @@ function module_progress(array $user, array $module): array {
     $cr = $stmt->fetch();
     $cert = $cr ? n_cert($cr) : null;
     $bestPick = find_sub($user['id'], 'best_book', ['module_id' => $module['id']]);
+    /* the letter this module closes with (only when the admin turned it on and
+       wrote at least one question) */
+    $letterMeta = module_letter_meta($module);
+    $letterOn = $letterMeta['enabled'] && $letterMeta['pool'] > 0;
+    $letterSub = $letterOn ? find_sub($user['id'], 'module_letter', ['module_id' => $module['id']]) : null;
     $stage = 'work';
     if ($cert) $stage = 'certified';
     elseif ($bestPick) $stage = 'video';
+    elseif ($allBooks && $letterOn && !$letterSub) $stage = 'letter';
     elseif ($allBooks) $stage = 'best_book';
 
     $total = 2; $done = 0;
+    if ($letterOn) $total++;
     foreach ($states as $s) {
         foreach ($s['chapters'] as $c) { $total++; if ($c['submission']) $done++; }
         if ($module['mode'] === 'summary') { $total++; if ($s['letterSubmission']) $done++; }
         else { foreach ($s['summaries'] as $x) { $total++; if ($x['submission']) $done++; } }
     }
+    if ($letterSub) $done++;
     if ($bestPick) $done++;
     if ($cert) $done++;
 
@@ -286,6 +295,9 @@ function module_progress(array $user, array $module): array {
             'completionVideoId' => $module['completionVideoId']],
         'books' => $states, 'stage' => $stage,
         'bestPick' => sub_meta($bestPick), 'certificate' => $cert,
+        /* the closing letter: on/off, how many questions, and the learner's result */
+        'letter' => $letterOn ? ['meta' => $letterMeta, 'open' => !$letterSub,
+            'submission' => sub_meta($letterSub)] : null,
         'percent' => $total ? (int)round(100 * $done / $total) : 0,
         'objectiveScore' => $objTotal ? (int)round(100 * $objScore / $objTotal) : null];
 }
@@ -436,6 +448,17 @@ function submission_keywords(array $sub): array {
             $cache['bk:' . $bookId] = suggest_keywords(implode(' ', array_map(fn($r) => (string)$r['content'], $st->fetchAll())), 10);
         }
         return $cache['bk:' . $bookId];
+    }
+    /* a letter answered in typed words is measured against the module's own
+       chapters, the same reading the questions were written from */
+    $moduleId = $sub['module_id'] ?? null;
+    if ($moduleId !== null) {
+        if (!isset($cache['md:' . $moduleId])) {
+            $st = db()->prepare('SELECT c.content FROM chapters c JOIN books b ON b.id=c.book_id WHERE b.module_id=?');
+            $st->execute([$moduleId]);
+            $cache['md:' . $moduleId] = suggest_keywords(implode(' ', array_map(fn($r) => (string)$r['content'], $st->fetchAll())), 10);
+        }
+        return $cache['md:' . $moduleId];
     }
     if (!isset($cache['all'])) {
         $st = db()->query('SELECT content FROM chapters');
@@ -734,6 +757,103 @@ function shuffle_with_seed(array $arr, string $seed): array {
 }
 function shuffled_for_login(array $user, ?string $token, array $list): array {
     return shuffle_with_seed($list, $user['id'] . '|' . ($token ?? '') . '|' . date('Y-m-d'));
+}
+
+/* ======================================= the letter after a module ======= */
+/* The super admin writes a pool of up to ten questions for the letter that
+   closes a module. Each learner answers only TWO of them: the pair is drawn
+   from the pool with the learner's own account as the seed, so every student
+   sees a different two, in a different order, while the same student always
+   sees the same two. While the questions are live the letter itself is veiled
+   (blurred) so an answer is written from what was read, never copied. */
+const LETTER_POOL_MAX = 10;
+const LETTER_PICK = 2;
+
+/* One authored question: a prompt plus (for objective mode) up to six options
+   and the index of the right one. Mirrors normalizeLetterQuestions() in
+   server/api.js so both backends read the same stored shape. */
+function normalize_letter_questions($list): array {
+    if (!is_array($list)) return [];
+    $out = [];
+    foreach (array_values($list) as $i => $q) {
+        $src = is_array($q) ? $q : ['question' => (string)$q];
+        $question = trim((string)($src['question'] ?? $src['text'] ?? ''));
+        if ($question === '') continue;
+        $options = [];
+        if (isset($src['options']) && is_array($src['options'])) {
+            foreach ($src['options'] as $o) {
+                $text = is_array($o) ? trim((string)($o['text'] ?? '')) : trim((string)($o ?? ''));
+                if ($text !== '') $options[] = $text;
+                if (count($options) >= 6) break;
+            }
+        }
+        $answerIndex = $src['answerIndex'] ?? $src['answer_index'] ?? null;
+        $answerIndex = is_numeric($answerIndex) ? (int)$answerIndex : 0;
+        if ($answerIndex < 0 || ($options && $answerIndex >= count($options))) $answerIndex = 0;
+        $id = trim((string)($src['id'] ?? ''));
+        $out[] = ['id' => $id !== '' ? $id : ('q' . ($i + 1)), 'question' => $question,
+            'options' => $options, 'answerIndex' => $options ? $answerIndex : null];
+        if (count($out) >= LETTER_POOL_MAX) break;
+    }
+    return $out;
+}
+/* The authored pool of one module (empty when nothing has been written yet). */
+function letter_questions(array $module): array {
+    $letter = $module['letter'] ?? null;
+    return normalize_letter_questions(is_array($letter) ? ($letter['questions'] ?? null) : null);
+}
+/* What the admin screen and the learner screen need to know about the letter. */
+function module_letter_meta(array $module): array {
+    $src = (isset($module['letter']) && is_array($module['letter'])) ? $module['letter'] : [];
+    $list = letter_questions($module);
+    $enabled = array_key_exists('enabled', $src) ? (bool)$src['enabled'] : count($list) > 0;
+    return ['enabled' => $enabled,
+        'letterId' => $src['letterId'] ?? null,
+        'mode' => ($src['mode'] ?? '') === 'summary' ? 'summary' : 'objectives',
+        'pool' => count($list),
+        'pick' => $list ? min(LETTER_PICK, count($list)) : 0];
+}
+/* The letter the module's questions belong to: the module's own pick first,
+   then the programme's Letter from Christ, so a module can reuse it. */
+function module_letter_doc(array $module): ?array {
+    $meta = module_letter_meta($module);
+    $lib = $meta['letterId'] ? get_library($meta['letterId']) : null;
+    if (!$lib) {
+        $settings = get_settings();
+        $lib = get_library($settings['letter_id'] ?? null);
+    }
+    if (!$lib) return null;
+    return ['id' => $lib['id'], 'title' => $lib['title'], 'text' => $lib['text'],
+        'media' => media_out($lib)];
+}
+/* What the super admin may save for a module's letter (switch, library letter,
+   answering style, pool). Blank rows are dropped and the pool is capped at ten. */
+function normalize_module_letter_input($src): array {
+    $obj = is_array($src) ? $src : [];
+    $list = normalize_letter_questions($obj['questions'] ?? null);
+    return ['enabled' => array_key_exists('enabled', $obj) ? (bool)$obj['enabled'] : count($list) > 0,
+        'letterId' => !empty($obj['letterId']) ? (string)$obj['letterId']
+            : (!empty($obj['letter_id']) ? (string)$obj['letter_id'] : null),
+        'mode' => ($obj['mode'] ?? '') === 'summary' ? 'summary' : 'objectives',
+        'questions' => $list];
+}
+/* The TWO questions this learner has to answer, in their own stable order.
+   Options are shuffled per login; the submission maps the chosen text back to
+   the authored index, exactly like chapter objectives. */
+function module_letter_for(array $user, array $module, ?string $token): ?array {
+    $meta = module_letter_meta($module);
+    if (!$meta['enabled'] || !$meta['pool']) return null;
+    $all = letter_questions($module);
+    $order = shuffle_with_seed($all, $user['id'] . '|' . $module['id'] . '|letter');
+    $chosen = array_slice($order, 0, $meta['pick']);
+    $questions = [];
+    foreach ($chosen as $q) {
+        $questions[] = ['id' => $q['id'], 'question' => $q['question'],
+            'options' => $q['options'] ? shuffle_with_seed($q['options'], $q['id'] . ($token ?? '')) : []];
+    }
+    return ['mode' => $meta['mode'], 'letter' => module_letter_doc($module),
+        'counts' => ['pool' => $meta['pool'], 'pick' => $meta['pick']],
+        'questions' => $questions];
 }
 
 

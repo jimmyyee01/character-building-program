@@ -1352,6 +1352,39 @@ function promptRowHTML(label, color) {
     '<div class="fixed"><button type="button" class="small danger" data-act="m-prompt-del">Remove</button></div>' +
     '</div>';
 }
+/* One row of the letter-question pool. Options are written one per line and the
+   right one is named by its number, so the admin reads exactly the text a
+   student will see. Each learner is given only two of these rows. */
+function blankLetterQuestion() {
+  return { question: '', options: [], answerIndex: 0 };
+}
+/* How many questions a module's letter pool holds (0 = no letter, or switched
+   off). Used by the module table so the admin sees the pool at a glance. */
+function moduleLetterPool(m) {
+  const src = (m && m.letter && typeof m.letter === 'object') ? m.letter : {};
+  const list = Array.isArray(src.questions) ? src.questions : [];
+  const on = src.enabled === undefined ? list.length > 0 : !!src.enabled;
+  return on ? list.length : 0;
+}
+function letterQuestionRowHTML(q, i) {
+  const options = (q && q.options ? q.options : []).join('\n');
+  const ans = q && q.answerIndex != null ? Number(q.answerIndex) + 1 : 1;
+  return '<div class="pr-row lq-row">' +
+    '<div class="row" style="align-items:flex-end">' +
+      '<div><label class="muted small" style="margin:0 0 3px">Question ' + (i + 1) + '</label>' +
+      '<input type="text" class="lq-text" placeholder="What did this letter ask of you?" value="' +
+        esc(q && q.question ? q.question : '') + '"></div>' +
+      '<div style="max-width:130px"><label class="muted small" style="margin:0 0 3px">Correct option #</label>' +
+      '<input type="number" min="1" max="6" class="lq-ans" value="' + esc(String(ans)) + '"></div>' +
+      '<div class="fixed"><button type="button" class="small danger" data-act="m-letter-q-del">' +
+        'Remove</button></div>' +
+    '</div>' +
+    '<label class="muted small" style="margin:6px 0 3px">Options — one per line (up to 6; used when the ' +
+      'style is "Choose from options")</label>' +
+    '<textarea class="lq-opts" rows="4" placeholder="First option&#10;Second option">' +
+      esc(options) + '</textarea>' +
+    '</div>';
+}
 function moduleRankingHTML(view, students, modules) {
   let title, rows;
   if (view === 'graduation') {
@@ -1443,6 +1476,26 @@ async function renderModules() {
   const prompts = (em && em.summaryPrompts && em.summaryPrompts.length)
     ? em.summaryPrompts : [{ label: '', color: '#24508c' }];
 
+  /* The letter that closes the module: the admin writes a pool of up to ten
+     questions and each learner is issued only TWO of them. The library list is
+     only needed for the letter picker, so a failure there must not blank the
+     page. */
+  let letters = [];
+  try {
+    await ensure('library', '/library', 'library');
+    letters = (S.library || []).filter(function (x) { return x.type === 'letter'; });
+  } catch (e) { letters = []; }
+  const L = (em && em.letter && typeof em.letter === 'object') ? em.letter : {};
+  const letterOn = L.enabled === undefined ? !!(L.questions && L.questions.length) : !!L.enabled;
+  const letterMode = L.mode === 'summary' ? 'summary' : 'objectives';
+  const letterQs = (L.questions && L.questions.length) ? L.questions : [blankLetterQuestion()];
+  const letterOpts = '<option value="">— the programme letter —</option>' +
+    letters.map(function (x) {
+      return '<option value="' + esc(String(x.id)) + '"' +
+        (L.letterId && String(L.letterId) === String(x.id) ? ' selected' : '') + '>' +
+        esc(x.title) + '</option>';
+    }).join('');
+
   const videoOpts = '<option value="">— none —</option>' +
     S.videos.map(function (vd) {
       const sel = em && em.completionVideoId != null &&
@@ -1458,7 +1511,9 @@ async function renderModules() {
       '<td>' + (m.mode === 'objectives'
         ? '<span class="badge warn">OBJECTIVES</span>'
         : '<span class="badge info">SUMMARY</span>') +
-        (promptCount ? '<div class="muted small">' + promptCount + ' prompts</div>' : '') + '</td>' +
+        (promptCount ? '<div class="muted small">' + promptCount + ' prompts</div>' : '') +
+        (moduleLetterPool(m) ? '<div class="muted small">letter: ' + moduleLetterPool(m) +
+          ' questions</div>' : '') + '</td>' +
       '<td class="small">' + esc(m.certificateName || '—') + '</td>' +
       '<td>' + num(m.bookCount) + '</td>' +
       '<td class="nowrap">' +
@@ -1507,6 +1562,26 @@ async function renderModules() {
         prompts.map(function (p) { return promptRowHTML(p.label, p.color); }).join('') +
       '</div>' +
       '<button type="button" class="ghost small" data-act="m-add-prompt">+ Add prompt</button>' +
+      '<hr><h4 class="mt">Letter after the module</h4>' +
+      '<p class="muted small">Write the pool of questions for the letter that closes this module ' +
+        '(up to 10). Each student is issued only <b>two</b> of them, drawn from their own account, ' +
+        'so no two students answer the same pair in the same order. The pool never reaches the ' +
+        'browser whole. While a student\'s questions are open the letter is blurred.</p>' +
+      '<label style="margin-top:8px"><input type="checkbox" id="mfLetterOn"' +
+        (letterOn ? ' checked' : '') + '> This module has a letter with questions</label>' +
+      '<div class="row mt">' +
+        '<div><label>Letter from the library</label><select id="mfLetterId">' + letterOpts + '</select></div>' +
+        '<div><label>Answer style</label><select id="mfLetterMode">' +
+          '<option value="objectives"' + (letterMode === 'objectives' ? ' selected' : '') +
+            '>Choose from options</option>' +
+          '<option value="summary"' + (letterMode === 'summary' ? ' selected' : '') +
+            '>Written summary</option>' +
+        '</select></div>' +
+      '</div>' +
+      '<div id="mfLetterQs">' +
+        letterQs.map(function (q, i) { return letterQuestionRowHTML(q, i); }).join('') +
+      '</div>' +
+      '<button type="button" class="ghost small" data-act="m-letter-q-add">+ Add question (max 10)</button>' +
       '<div class="mt row">' +
         '<div class="fixed"><button type="submit">' +
           (em ? 'Save changes' : 'Create module') + '</button></div>' +
@@ -1558,6 +1633,27 @@ async function saveModule(e) {
       }
     }
     if (prompts.length) body.summaryPrompts = prompts;
+    /* the letter pool: blank rows are dropped here and the server keeps the
+       first ten, so an admin may leave a spare row in the form */
+    const letterQs = [];
+    const lqRows = document.querySelectorAll('#mfLetterQs .lq-row');
+    for (let i = 0; i < lqRows.length; i++) {
+      const text = lqRows[i].querySelector('.lq-text').value.trim();
+      if (!text) continue;
+      const options = lqRows[i].querySelector('.lq-opts').value.split('\n')
+        .map(function (s) { return s.trim(); })
+        .filter(function (s) { return s.length > 0; })
+        .slice(0, 6);
+      let answerIndex = Number(lqRows[i].querySelector('.lq-ans').value) - 1;
+      if (!isFinite(answerIndex) || answerIndex < 0 || answerIndex >= options.length) answerIndex = 0;
+      letterQs.push({ question: text, options: options, answerIndex: options.length ? answerIndex : null });
+    }
+    body.letter = {
+      enabled: $('mfLetterOn').checked && letterQs.length > 0,
+      letterId: val('mfLetterId') || null,
+      mode: val('mfLetterMode') === 'summary' ? 'summary' : 'objectives',
+      questions: letterQs
+    };
     if (em) {
       await API.put('/super/modules/' + encodeURIComponent(em.id), body);
       toast('Module updated', 'ok');
@@ -2914,6 +3010,28 @@ async function onAction(btn, e) {
       case 'm-prompt-del': {
         const row = btn.closest('.pr-row');
         if (row) row.remove();
+        break;
+      }
+      /* the letter pool — at most ten rows, blank rows are dropped on save */
+      case 'm-letter-q-add': {
+        const box = $('mfLetterQs');
+        if (!box) break;
+        const count = box.querySelectorAll('.lq-row').length;
+        if (count >= 10) { toast('The pool holds at most 10 questions', 'err'); break; }
+        box.insertAdjacentHTML('beforeend', letterQuestionRowHTML(blankLetterQuestion(), count));
+        break;
+      }
+      case 'm-letter-q-del': {
+        const row = btn.closest('.lq-row');
+        const box = $('mfLetterQs');
+        if (row) row.remove();
+        /* renumber the remaining rows so the labels always read 1..n */
+        if (box) {
+          box.querySelectorAll('.lq-row').forEach(function (r, i) {
+            const lab = r.querySelector('label.muted.small');
+            if (lab) lab.textContent = 'Question ' + (i + 1);
+          });
+        }
         break;
       }
       case 'm-edit':

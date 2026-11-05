@@ -518,6 +518,10 @@ table.nested td { font-size: 12px; }
 /* the note is in the page for good and is hidden while the reader is on the last
    page — its own display would otherwise beat the browser's [hidden] rule */
 .read-gate[hidden] { display: none; }
+/* our own `button { display: inline-block }` beats the browser's [hidden] rule too,
+   so a button put away with .hidden = true (the letter's start button while the
+   questions are open) is really taken off the screen */
+button[hidden], .btn[hidden] { display: none; }
 .read-gate .lock { font-size: 18px; line-height: 1; }
 .read-gate b { display: block; }
 .read-gate .small { display: block; margin-top: 2px; }
@@ -539,6 +543,31 @@ table.nested td { font-size: 12px; }
 #chapterBody.answering .chapter-body .narrator { opacity: .4; pointer-events: none; }
 .chapter-body textarea[disabled] { background: #f2f5fa; color: var(--muted); cursor: not-allowed; }
 .obj.locked { opacity: .6; }
+
+/* The letter that closes a module. While the learner's TWO questions are open
+   the letter (its clip, its text and its read-aloud) is veiled exactly like a
+   chapter that has been set aside; "Back to the letter" lifts the veil. */
+.letter-stage .letter-sheet { transition: filter .2s ease; }
+.letter-sheet.veiled { position: relative; }
+.letter-sheet.veiled .letter-box,
+.letter-sheet.veiled .content,
+.letter-sheet.veiled .attached-media,
+.letter-sheet.veiled .narrator { filter: blur(6px); user-select: none; pointer-events: none; }
+.letter-sheet.veiled .letter-box::after {
+  content: "✍️ Answering — the letter is set aside";
+  position: absolute; inset: auto 0 0 0; text-align: center; padding: 8px;
+  font-size: 13px; font-weight: 700; color: var(--brand); filter: none;
+}
+.letter-q { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line);
+  border-radius: 12px; background: #fff; }
+.letter-q b { display: block; margin-bottom: 6px; }
+.letter-q.submitted { background: #fbfcfe; }
+.letter-q .ml-text { width: 100%; min-height: 90px; }
+.ml-opts { display: grid; gap: 6px; }
+.ml-opt { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 10px; background: #fafbfd; cursor: pointer; }
+.ml-opt:hover { border-color: var(--gold); background: #fffdf3; }
+.ml-opt input { margin-top: 3px; }
 
 /* Voice typing: a mic button tucked into the corner of every textarea. */
 .speech-field { position: relative; }

@@ -93,13 +93,18 @@ node tools/chapter-read-gate-browser-check.js http://127.0.0.1:3000 # the same r
 node tools/analytics-api-check.js http://127.0.0.1:3000 # analytics scope: each account sees
                                                     # only itself, supervisors only their
                                                     # members, copy flags name both people
+node tools/letter-browser-check.js http://127.0.0.1:3000 # the letter that closes a module in a
+                                                    # REAL browser: the pool of questions never
+                                                    # reaches the page, the learner is issued
+                                                    # only their own pair, and the letter is
+                                                    # veiled while the answers are open
 ```
 
 Handy npm shortcuts: `npm run check:routes`, `npm run check:ui`, `npm run check:api`,
 `npm run check:api:php`, `npm run check:live`, `npm run check:pages`, `npm run check:keywords`,
 `npm run check:browser`, `npm run check:chapter-lock`, `npm run check:read-gate`,
 `npm run check:read-gate-ui`, `npm run check:analytics`, `npm run check:reading`,
-`npm run check:http`.
+`npm run check:letter`, `npm run check:http`.
 
 `npm run check:http` covers the answers a bad request earns: a body that is not
 JSON, a broken %-escape in the path and a path the URL parser refuses are 400s
@@ -127,7 +132,9 @@ adds the supervisor waitlist flag and messaging, conversation, and notification
 tables, and marks existing unassigned learners for automatic placement. It also
 creates the `chapter_reads` table that remembers how far a learner has read each
 chapter — the record behind a chapter's answer area, which is open only while the
-reader is on that chapter's last page (`chapter.reading-gate`).
+reader is on that chapter's last page (`chapter.reading-gate`). It also adds
+`modules.letter_json`, the pool of questions for the letter that closes a module
+(`letter.after-module`).
 
 ### "Unknown endpoint: GET /api/..." — the server is running older code
 
@@ -381,6 +388,19 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
    best-book prompt → completion video → **GAMMA CERTIFICATE**. Each chapter
    shows the **key words** of its own text and the typed answer is scored on how
    many of them it uses (score + words still missing are shown straight away).
+   **A module may also close with a letter of its own** (`letter.after-module`):
+   the super admin writes a pool of up to **ten** questions for that letter
+   (answer by picking one of the options, or by writing a few lines), switches it
+   on and picks which library letter it carries. The stage order becomes
+   `work → letter → best book → video → certified`, and each learner is issued
+   only **two** of the ten questions — the pair is drawn from the pool with the
+   learner's own account as the seed, in their own stable order, so every student
+   answers a different pair and the same student always answers the same two. The
+   pool of ten never leaves the server as a whole. While those two questions are
+   open the letter is **veiled** (its text, its clip and its read-aloud are
+   blurred, and the text cannot be selected), so the answers come from what the
+   learner read; *Back to the letter* lifts the veil again. Typed answers are
+   scored against the module's own chapters, exactly like a chapter summary.
    While a chapter is open only **that chapter's pages** may be read: clicking
    the chapter opens its page range straight away (with a **Close** button that
    leaves a cover to reopen it), the reader can only turn pages — never scroll —
