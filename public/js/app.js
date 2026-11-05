@@ -725,6 +725,17 @@ function readGateNote(ch) {
       esc(ch.pageEnd) + ' — the last page of this chapter. Turn to it whenever you are ready.</span>' +
     '</span></div>';
 }
+/* The other side of the same rule: once the answer area is open the chapter itself
+   is veiled (see veilChapter below), so an answer is written from what was read and
+   never copied from the page in front of the learner. */
+function answerOpenNote() {
+  return '<div class="read-gate answer-open" id="answerOpenNote" hidden>' +
+    '<span class="lock" aria-hidden="true">✍️</span>' +
+    '<span><b>Answering now — the chapter is set aside</b>' +
+      '<span class="small muted">The pages and the written text are blurred so nothing is copied while ' +
+      'you answer. Turn back a page to read — or hear — them again.</span>' +
+    '</span></div>';
+}
 function chapterPanel(d, ch) {
   /* An inactive (locked) chapter is only a heading and the reason: no text, no
      pages and no form — nothing here can be clicked or opened. */
@@ -753,7 +764,7 @@ function chapterPanel(d, ch) {
       : (d.book.pdf
           ? '<p class="muted small mt">This chapter has no page range yet — ask your office to set it.</p>'
           : '')) +
-    (!ch.submission && ch.requiresReading ? readGateNote(ch) : '');
+    (!ch.submission && ch.requiresReading ? readGateNote(ch) + answerOpenNote() : '');
 
   if (ch.submission) {
     html += '<hr><p class="timestamp">Submitted: <b>' + fmtDate(ch.submission.submittedAt || ch.submission.createdAt) + '</b></p>' +
@@ -844,7 +855,33 @@ function applyAnswerGate(ch, shutHard) {
     if (shut) note.removeAttribute('hidden');
     else note.setAttribute('hidden', '');
   }
+  veilChapter(ch, !shut);
   return !shut;
+}
+
+/* While the answer area is open the chapter is SET ASIDE: the sheet in the reader
+   and the written text are blurred, and their read-aloud is stopped, so an answer is
+   written from what was read — never copied from the page in front of the learner.
+   Turning away from the last page shuts the answer area and lifts the veil again, so
+   the chapter can always be read (and heard) once more. A chapter with no pages of
+   its own has no gate, so it is never veiled. */
+function veilChapter(ch, on) {
+  const gated = !!(ch && ch.requiresReading && Number(ch.pageEnd));
+  const veil = gated && on === true;
+  const panel = $('chapterBody');
+  if (panel && panel.classList) panel.classList.toggle('answering', veil);
+  if (veil) {
+    const reader = ch && ch.id
+      ? document.querySelector('#view-book .book-reader[data-chapter="' + ch.id + '"]') : null;
+    if (reader && typeof stopBookNarration === 'function') stopBookNarration(reader);
+    if (typeof stopNarratorsIn === 'function') stopNarratorsIn(panel || reader);
+  }
+  const note = $('answerOpenNote');
+  if (note) {
+    if (veil) note.removeAttribute('hidden');
+    else note.setAttribute('hidden', '');
+  }
+  return veil;
 }
 
 /* the chapter (of the book on screen) that a reader belongs to */

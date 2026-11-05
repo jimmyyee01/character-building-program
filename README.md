@@ -402,6 +402,13 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
    `Read "…" to its last page (page N) before answering` (403). A chapter whose
    book has no PDF, or that has no page range of its own, has nothing to read and
    stays answerable as before.
+   **While that answer area is open the chapter itself is set aside**: the sheet in
+   the reader and the written chapter text are blurred (`.answering` on the chapter
+   panel), the page's read-aloud is stopped and greyed out, and a note says so — so
+   the answer is written from what was read, never copied off the page in front of
+   the learner. The page-turn buttons are untouched, and turning back one page
+   shuts the answer area and lifts the blur again, so the chapter can always be
+   read (and heard) once more. A chapter with no page range is never veiled.
    Only the chapter that is open **now** responds to clicks: a chapter that has been
    **submitted** and one that is **not unlocked yet** are both **inactive** — drawn
    as disabled buttons (dimmed, lock glyph on the locked ones, the reason on

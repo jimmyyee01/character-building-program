@@ -521,6 +521,22 @@ table.nested td { font-size: 12px; }
 .read-gate .lock { font-size: 18px; line-height: 1; }
 .read-gate b { display: block; }
 .read-gate .small { display: block; margin-top: 2px; }
+/* While the answer area is open the chapter is SET ASIDE: the sheet in the reader
+   and the written text blur, and their read-aloud is greyed out, so nothing is read
+   or copied from the page in front of the learner while they answer. The turn
+   buttons are left alone — turning away from the last page lifts the veil. */
+.read-gate.answer-open { border-style: solid; border-color: #b7dfc0; background: #f1f8f2; }
+#chapterBody.answering .book-frame-wrap { filter: blur(7px); }
+#chapterBody.answering .book-page::after {
+  content: "✍️ Answering — the chapter is set aside";
+  position: absolute; inset: 0; z-index: 4; display: flex;
+  align-items: center; justify-content: center; text-align: center; padding: 12px;
+  font-size: 13px; font-weight: 700; color: var(--brand); line-height: 1.4;
+  background: rgba(255, 255, 255, .62); border-radius: 10px; pointer-events: none;
+}
+#chapterBody.answering .chapter-body .content { filter: blur(6px); user-select: none; }
+#chapterBody.answering .book-narrator,
+#chapterBody.answering .chapter-body .narrator { opacity: .4; pointer-events: none; }
 .chapter-body textarea[disabled] { background: #f2f5fa; color: var(--muted); cursor: not-allowed; }
 .obj.locked { opacity: .6; }
 

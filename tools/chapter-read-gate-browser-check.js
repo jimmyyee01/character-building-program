@@ -3,6 +3,9 @@
    the reader is on the chapter's LAST page — shut everywhere else, opened the
    moment that page is reached, shut again as soon as the learner turns away — and
    the reader still lets the learner go back and forward as often as they like.
+   While the area is open the chapter itself is VEILED (the sheet and the written
+   text are blurred, with the page-turn buttons still working), so nothing is read
+   off the page while the answer is typed; turning away lifts it again.
 
    Usage: node tools/chapter-read-gate-browser-check.js [base]
    It signs in as the seeded student STU-002 and creates a throw-away book (with
@@ -48,7 +51,8 @@ async function login(slug, identifier, password) {
    the real learner screen. It reports the answer area BEFORE and AFTER the
    learner turns the pages to the chapter's last page. */
 function probeHtml(bookId, pageEnd) {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>read gate probe</title></head>
+  return `<!doctype html><html><head><meta charset="utf-8"><title>read gate probe</title>
+<link rel="stylesheet" href="/css/style.css?v=66"></head>
 <body>
 <div class="app-side"><button data-view="home"></button><b id="sideName"></b>
 <img id="sideLogo" class="hidden"><button id="logoutBtn"></button></div>
@@ -86,6 +90,10 @@ try {
         return !g.hasAttribute('hidden') && getComputedStyle(g).display !== 'none';
       }
       function now() {
+        /* the boot sequence parks the learner on HOME once the token is checked:
+           put the book back on screen, so what is measured below is really drawn */
+        var box = document.getElementById('view-book');
+        if (box && box.classList.contains('hidden') && typeof show === 'function') show('book');
         var t = answerArea();
         var b = document.getElementById('chSubmit');
         var r = document.querySelector('#view-book .book-reader');
@@ -93,7 +101,39 @@ try {
         return { textarea: !!t, disabled: t ? t.disabled === true : null,
           buttonDisabled: b ? b.disabled === true : null,
           gate: gateShown(), gateText: ((g || {}).textContent || '').trim(),
-          page: r ? Number(r.dataset.page) : null };
+          page: r ? Number(r.dataset.page) : null, veil: veilNow() };
+      }
+      /* The chapter is VEILED while the answer area is open: the sheet in the reader
+         and the written text are blurred, so nothing can be read off the page while
+         the learner types — and the page-turn buttons keep working underneath. */
+      function filterOf(el) { return el ? (getComputedStyle(el).filter || 'none') : null; }
+      /* an element that is really drawn (not hidden, not collapsed to nothing) */
+      function visible(el) {
+        if (!el) return false;
+        var b = el.getBoundingClientRect();
+        return b.width > 0 && b.height > 0 && el.offsetParent !== null;
+      }
+      function veilNow() {
+        var panel = document.getElementById('chapterBody');
+        var sheet = document.querySelector('#view-book .book-frame-wrap');
+        var text = document.querySelector('#view-book .chapter-body .content');
+        var note = document.getElementById('answerOpenNote');
+        var back = document.querySelector('#view-book .book-reader [data-book-turn="-1"]');
+        return {
+          panel: !!(panel && panel.classList && panel.classList.contains('answering')),
+          page: filterOf(sheet), text: filterOf(text),
+          form: filterOf(answerArea()),
+          note: note ? (!note.hasAttribute('hidden') && getComputedStyle(note).display !== 'none') : null,
+          canTurnBack: back ? back.disabled !== true : null,
+          shown: visible(sheet), noteShown: visible(note),
+          /* the page's read-aloud is out of reach while the answer is typed */
+          narratorOff: (function () {
+            var n = document.querySelector('#view-book .book-narrator');
+            if (!n) return null;
+            var s = getComputedStyle(n);
+            return s.pointerEvents === 'none' && Number(s.opacity) < 0.5;
+          })()
+        };
       }
       function turn(delta) {
         var r = document.querySelector('#view-book .book-reader');
@@ -211,10 +251,30 @@ try {
       check('a lock note tells the learner to read to the last page',
         r.before.gate === true && /last page/i.test(r.before.gateText || ''), JSON.stringify(r.before));
       check('the chapter pages can still be turned', r.turns >= 2, 'turns ' + r.turns);
+      check('before reading, nothing of the chapter is veiled',
+        r.before.veil.panel === false && r.before.veil.page === 'none' &&
+          r.before.veil.text === 'none' && r.before.veil.note === false,
+        JSON.stringify(r.before.veil));
       check('on the last page the answer area is open',
         r.atLast.disabled === false && r.atLast.buttonDisabled === false, JSON.stringify(r.atLast));
       check('the lock note is out of sight on the last page', r.atLast.gate === false,
         JSON.stringify(r.atLast));
+      check('on the last page the chapter sheet is blurred out',
+        /blur/.test(r.atLast.veil.page || '') && r.atLast.veil.panel === true &&
+          r.atLast.veil.shown === true,
+        JSON.stringify(r.atLast.veil));
+      check('the written chapter text is blurred too',
+        /blur/.test(r.atLast.veil.text || ''), JSON.stringify(r.atLast.veil));
+      check('the answer box itself is never blurred',
+        r.atLast.veil.form === 'none', JSON.stringify(r.atLast.veil));
+      check('a note says the chapter is set aside while answering',
+        r.atLast.veil.note === true && r.atLast.veil.noteShown === true,
+        JSON.stringify(r.atLast.veil));
+      check('the page can still be turned while the chapter is veiled',
+        r.atLast.veil.canTurnBack === true, JSON.stringify(r.atLast.veil));
+      check('the page read-aloud cannot be used while answering',
+        r.atLast.veil.narratorOff === true && r.back.veil.narratorOff === false,
+        JSON.stringify({ atLast: r.atLast.veil, back: r.back.veil }));
       check('the server recorded the chapter as read', r.read === true && r.requiresReading === true,
         JSON.stringify({ read: r.read, requiresReading: r.requiresReading }));
       check('the reader stays on the last page it reached', r.pageAfter === 3, 'page ' + r.pageAfter);
@@ -223,9 +283,15 @@ try {
         JSON.stringify(r.back));
       check('the lock note is back away from the last page',
         r.back.gate === true && /last page/i.test(r.back.gateText || ''), JSON.stringify(r.back));
+      check('one page back lifts the veil — the chapter is readable again',
+        r.back.veil.page === 'none' && r.back.veil.text === 'none' &&
+          r.back.veil.panel === false && r.back.veil.note === false,
+        JSON.stringify(r.back.veil));
       check('turning to the last page again opens the answer area again',
         r.again.page === 3 && r.again.disabled === false && r.again.buttonDisabled === false &&
           r.again.gate === false, JSON.stringify(r.again));
+      check('and veils the chapter again', /blur/.test(r.again.veil.page || ''),
+        JSON.stringify(r.again.veil));
       check('the learner can still go back and read the chapter again', r.canGoBack === true);
     }
   }
