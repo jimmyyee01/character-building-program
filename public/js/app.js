@@ -3,9 +3,10 @@ const S = {
   me: null, flow: null, videos: [],
   view: 'home', currentModuleId: null, currentBookId: null,
   bookData: null, finalData: null, letterDone: false,
-  /* where each chapter's reader was left (so a redraw keeps the page) and which
-     chapters have already told the server they were read to the last page */
-  chapterPage: {}, readSent: {}
+  /* where each chapter's reader is right now — a chapter's answer area is open
+     only while that page is the chapter's last one — and which chapters have
+     already told the server they were read to the last page */
+  chapterPage: {}, readSent: {}, gateWired: false
 };
 
 function $(id) { return document.getElementById(id); }
@@ -411,8 +412,11 @@ function startLetterFlow() {
   };
 }
 
-$('pinClose').onclick = function () { $('pinnedVideo').classList.add('hidden'); };
-$('pinExpand').onclick = function () {
+/* the two pinned-video buttons; a page that does not carry them still loads */
+const pinCloseBtn = $('pinClose');
+if (pinCloseBtn) pinCloseBtn.onclick = function () { $('pinnedVideo').classList.add('hidden'); };
+const pinExpandBtn = $('pinExpand');
+if (pinExpandBtn) pinExpandBtn.onclick = function () {
   const src = $('pinnedPlayer').src;
   $('pinnedVideo').classList.add('hidden');
   modal('<video class="video-frame" controls autoplay src="' + esc(src) + '"></video>' +
@@ -694,18 +698,32 @@ function backToModule() {
 }
 
 /* ------------------------------------------------- chapter panel + form -- */
-/* A chapter's answer area opens only when its own pages have been read to the
-   LAST page. The server keeps that fact (POST /chapter/:id/read), so a reload
-   cannot skip the reading; a chapter with no pages of its own is always open. */
+/* A chapter's answer area is open ONLY while the learner's reader is on that
+   chapter's LAST page: turn away from that page and the area shuts again, turn
+   back and it opens again. Every page the reader reaches is reported to the
+   server (POST /chapter/:id/read), so the reading itself is still recorded and
+   cannot be skipped; the open/shut state follows the page on screen right now.
+   A chapter with no pages of its own has nothing to read and is always open. */
+function chapterLivePage(ch) {
+  const page = Number(S.chapterPage[ch.id]) || 0;
+  return page || Number(ch.pageStart) || 0;
+}
+function chapterAtLastPage(ch) {
+  const end = Number(ch && ch.pageEnd) || 0;
+  /* no page range, or no PDF behind it: there is nothing to read */
+  if (!ch || !end || !ch.requiresReading) return true;
+  return chapterLivePage(ch) >= end;
+}
 function chapterNeedsReading(ch) {
-  return !!(ch && ch.requiresReading && !ch.read);
+  return !!(ch && !chapterAtLastPage(ch));
 }
 function readGateNote(ch) {
-  return '<div class="read-gate">' +
+  return '<div class="read-gate" id="readGateNote"' + (chapterNeedsReading(ch) ? '' : ' hidden') + '>' +
     '<span class="lock" aria-hidden="true">🔒</span>' +
     '<span><b>Read this chapter to its last page to answer</b>' +
-      '<span class="small muted">Turn to page ' + esc(ch.pageEnd) + ' of the chapter pages. ' +
-      'You can always come back and read it again.</span></span></div>';
+      '<span class="small muted">The answer area is open only while you are on page ' +
+      esc(ch.pageEnd) + ' — the last page of this chapter. Turn to it whenever you are ready.</span>' +
+    '</span></div>';
 }
 function chapterPanel(d, ch) {
   /* An inactive (locked) chapter is only a heading and the reason: no text, no
@@ -735,7 +753,7 @@ function chapterPanel(d, ch) {
       : (d.book.pdf
           ? '<p class="muted small mt">This chapter has no page range yet — ask your office to set it.</p>'
           : '')) +
-    (locked ? readGateNote(ch) : '');
+    (!ch.submission && ch.requiresReading ? readGateNote(ch) : '');
 
   if (ch.submission) {
     html += '<hr><p class="timestamp">Submitted: <b>' + fmtDate(ch.submission.submittedAt || ch.submission.createdAt) + '</b></p>' +
@@ -791,40 +809,103 @@ function keyWordsFeedback(ch, sub) {
   return keyWordsHint(ch);
 }
 
-/* The reader reports every page turn; the LAST page of the chapter marks it read
-   on the server, and the panel is drawn again with the answer area open. The
-   learner keeps their place, and may go back to read at any time. */
-function wireReadGate(ch) {
-  const root = document.querySelector('#view-book .book-reader[data-chapter="' + ch.id + '"]');
-  if (!root) return;
-  const pageEnd = Number(ch.pageEnd) || 0;
-  if (!pageEnd) return;
-  root.addEventListener('book:page', function (e) {
+/* Open or shut a chapter's answer area in place, for the page on screen now.
+   Nothing is drawn again here: a redraw would throw away an answer that is
+   already half typed, so the same controls are only enabled or disabled. */
+function applyAnswerGate(ch, shutHard) {
+  const shut = shutHard === true || !chapterAtLastPage(ch);
+  const end = Number(ch && ch.pageEnd) || 0;
+  const t = $('chText');
+  if (t) {
+    t.disabled = shut;
+    t.placeholder = shut
+      ? 'Turn to page ' + end + ' — the last page — to answer...'
+      : 'At least 30 characters...';
+  }
+  const btn = $('chSubmit');
+  if (btn) {
+    btn.disabled = shut;
+    if (shut) btn.title = 'Read the chapter to its last page first';
+    else btn.removeAttribute('title');
+  }
+  const box = $('objBox');
+  if (box) {
+    box.querySelectorAll('.obj').forEach(function (o) { o.classList.toggle('locked', shut); });
+    box.querySelectorAll('input[type="radio"]').forEach(function (r) { r.disabled = shut; });
+  }
+  const ob = $('objSubmit');
+  if (ob) {
+    ob.disabled = shut;
+    if (shut) ob.title = 'Read the chapter to its last page first';
+    else ob.removeAttribute('title');
+  }
+  const note = $('readGateNote');
+  if (note) {
+    if (shut) note.removeAttribute('hidden');
+    else note.setAttribute('hidden', '');
+  }
+  return !shut;
+}
+
+/* the chapter (of the book on screen) that a reader belongs to */
+function chapterOfReader(el) {
+  const id = el && el.dataset ? el.dataset.chapter : null;
+  const chapters = (S.bookData && S.bookData.chapters) || [];
+  if (!id) return null;
+  return chapters.filter(function (c) { return c.id === id; })[0] || null;
+}
+
+/* Every page turn of a chapter reader is heard here, wherever that reader is: the
+   answer area follows the page on screen — open on the chapter's LAST page, shut
+   the moment the learner leaves that page or closes the book — and the first
+   arrival at the last page is reported to the server, which records the chapter as
+   read. The listeners sit on the document (the events bubble), so a chapter book
+   that is closed and opened again is followed as well. */
+function wireChapterGate() {
+  if (S.gateWired) return;
+  S.gateWired = true;
+  document.addEventListener('book:page', function (e) {
+    const ch = chapterOfReader(e.target);
+    if (!ch) return;
     const page = Number((e.detail || {}).page) || 0;
     if (page) S.chapterPage[ch.id] = page;
-    if (page < pageEnd || S.readSent[ch.id]) return;
+    const atLast = applyAnswerGate(ch);
+    const pageEnd = Number(ch.pageEnd) || 0;
+    if (!atLast || !pageEnd || S.readSent[ch.id]) return;
     S.readSent[ch.id] = true;
     API.post('/chapter/' + ch.id + '/read', { page: page, pageEnd: pageEnd })
-      .then(function () {
-        toast('Chapter read to the last page — the answer area is open now.', 'ok');
-        return refreshBook();
+      .then(function (r) {
+        ch.read = !!(r && r.read);
+        toast('Last page reached — you can answer while this page is open.', 'ok');
       })
       .catch(function (err) {
         S.readSent[ch.id] = false;
         toast(err.message, 'err');
       });
   });
+  /* a closed book is not on its last page any more */
+  document.addEventListener('book:close', function (e) {
+    const ch = chapterOfReader(e.target);
+    if (ch) applyAnswerGate(ch, true);
+  });
 }
+/* attached here, and again (a no-op) as soon as a chapter panel is drawn, so the
+   gate cannot be lost to anything else that happens while this file loads */
+wireChapterGate();
 
 function wireChapterPanel(d, ch) {
+  wireChapterGate();            /* the reader's page turns must be heard either way */
   if (!ch || ch.submission || ch.status === 'locked') return;
   const locked = chapterNeedsReading(ch);
-  if (locked) wireReadGate(ch);
   const t = $('chText');
   if (t) {
     blockPaste(t);
     const btn = $('chSubmit');
-    if (btn && !locked) btn.onclick = async function () {
+    if (btn) btn.onclick = async function () {
+      if (!chapterAtLastPage(ch)) {
+        toast('Read to page ' + ch.pageEnd + ' — the last page — to answer.', 'err');
+        return;
+      }
       try {
         const r = await API.post('/submissions',
           { type: 'chapter_summary', chapterId: ch.id, text: t.value });
@@ -839,6 +920,7 @@ function wireChapterPanel(d, ch) {
   }
   const box = $('objBox');
   if (box) loadObjectives(ch, box, locked);
+  applyAnswerGate(ch);        /* the state of the page the reader is on right now */
 }
 
 async function refreshBook() {
@@ -883,9 +965,11 @@ async function loadObjectives(ch, box, locked) {
       ? '<button id="objSubmit" disabled title="Read the chapter to its last page first">Submit objectives</button>'
       : '<button id="objSubmit">Submit objectives</button>');
 
-    if (locked) return;    /* the answer area opens at the chapter's last page */
-
     $('objSubmit').onclick = async function () {
+      if (!chapterAtLastPage(ch)) {
+        toast('Read to page ' + ch.pageEnd + ' — the last page — to answer.', 'err');
+        return;
+      }
       const answers = data.objectives.map(function (o) {
         const sel = document.querySelector('input[name="o_' + o.id + '"]:checked');
         return { objectiveId: o.id, choice: sel ? Number(sel.value) : -1 };
@@ -902,6 +986,8 @@ async function loadObjectives(ch, box, locked) {
         await refreshBook();
       } catch (e) { toast(e.message, 'err'); }
     };
+    /* the objectives arrived after the page was known — match them to it */
+    applyAnswerGate(ch);
   } catch (e) { box.innerHTML = '<p class="muted">' + esc(e.message) + '</p>'; }
 }
 

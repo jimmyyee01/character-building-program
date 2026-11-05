@@ -510,11 +510,14 @@ table.nested td { font-size: 12px; }
 .chapter-body .content { white-space: pre-wrap; font-size: 16px; line-height: 1.7; }
 .no-paste { background: #fffdf3; border: 1px dashed var(--gold); }
 
-/* A chapter's answer area stays shut until its own pages have been read to the
-   last page (feature chapter.reading-gate). The reader stays usable the whole
-   time, so a learner can always go back and read the chapter again. */
+/* A chapter's answer area is open only while the reader is on the chapter's LAST
+   page (feature chapter.reading-gate); the reader stays usable the whole time, so
+   a learner can always turn back to it. */
 .read-gate { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px;
   padding: 12px 14px; border: 1px dashed var(--gold); border-radius: 12px; background: #fffdf3; }
+/* the note is in the page for good and is hidden while the reader is on the last
+   page — its own display would otherwise beat the browser's [hidden] rule */
+.read-gate[hidden] { display: none; }
 .read-gate .lock { font-size: 18px; line-height: 1; }
 .read-gate b { display: block; }
 .read-gate .small { display: block; margin-top: 2px; }

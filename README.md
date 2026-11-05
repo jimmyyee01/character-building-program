@@ -87,8 +87,9 @@ node tools/chapter-read-gate-check.js   # a chapter's answer area opens only at 
                                         # (throw-away database; whole learner journey)
 node tools/chapter-read-gate-browser-check.js http://127.0.0.1:3000 # the same rule in a REAL
                                                     # browser: the answer area is drawn but shut,
-                                                    # opens when the last page is reached, and the
-                                                    # reader still allows going back to re-read
+                                                    # opens on the chapter's last page, shuts again
+                                                    # as soon as the reader leaves that page, and
+                                                    # the reader still allows going back to re-read
 node tools/analytics-api-check.js http://127.0.0.1:3000 # analytics scope: each account sees
                                                     # only itself, supervisors only their
                                                     # members, copy flags name both people
@@ -125,8 +126,8 @@ receive their transcript the next time their certificates are loaded. It also
 adds the supervisor waitlist flag and messaging, conversation, and notification
 tables, and marks existing unassigned learners for automatic placement. It also
 creates the `chapter_reads` table that remembers how far a learner has read each
-chapter — the record that opens a chapter's answer area at its last page
-(`chapter.reading-gate`).
+chapter — the record behind a chapter's answer area, which is open only while the
+reader is on that chapter's last page (`chapter.reading-gate`).
 
 ### "Unknown endpoint: GET /api/..." — the server is running older code
 
@@ -387,19 +388,20 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
    the page's **own shape** and to the space it has, so the whole page is visible:
    the page is scaled down (its print gets smaller) instead of being cropped, and
    it changes shape for a square or landscape page rather than assuming A4.
-   **The answer area of a chapter opens only when the reader reaches the LAST
-   page of that chapter** (`chapter.reading-gate`). Until then the answer area is
-   drawn but shut — a disabled box/textarea with a lock note naming the page to
-   reach — and the reader is fully usable: the learner turns the pages, may go
-   back and forward as often as they like, and the moment the last page is shown
-   the answer area opens (the reader reports the page it reached, and the server
-   records the chapter as read). That record lives on the server
-   (`chapter_reads`), so reloading, signing in again or calling the API directly
-   cannot skip the reading; both backends also refuse an answer with
-   `Read "…" to its last page (page N) before answering` (403). Reading is never
-   taken away once done, so a chapter can always be re-read. A chapter whose book
-   has no PDF, or that has no page range of its own, has nothing to read and stays
-   answerable as before.
+   **The answer area of a chapter is open only while the reader is on the LAST
+   page of that chapter** (`chapter.reading-gate`). Everywhere else it is drawn
+   but shut — a disabled box/textarea with a lock note naming the page to reach —
+   and the reader is fully usable: the learner turns the pages as often as they
+   like, the moment the last page is shown the answer area opens, and the moment
+   the learner turns away from that page (or closes the book) it shuts again —
+   nothing is redrawn, so a half-typed answer is kept. The reader reports every
+   page it reaches and the server records the chapter as read at its last page;
+   that record lives on the server (`chapter_reads`), so reloading, signing in
+   again or calling the API directly cannot skip the reading, and both backends
+   also refuse an answer with
+   `Read "…" to its last page (page N) before answering` (403). A chapter whose
+   book has no PDF, or that has no page range of its own, has nothing to read and
+   stays answerable as before.
    Only the chapter that is open **now** responds to clicks: a chapter that has been
    **submitted** and one that is **not unlocked yet** are both **inactive** — drawn
    as disabled buttons (dimmed, lock glyph on the locked ones, the reason on

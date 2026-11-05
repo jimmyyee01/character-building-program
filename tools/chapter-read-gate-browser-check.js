@@ -1,7 +1,8 @@
 /* Drives the real learner screen in a REAL browser (headless Chrome/Edge) and
-   checks the requirement end to end: the answer area of a chapter is shut until
-   the reader reaches the chapter's LAST page, opens the moment it is reached,
-   and the reader still lets the learner go back to read the chapter again.
+   checks the requirement end to end: a chapter's answer area is open ONLY while
+   the reader is on the chapter's LAST page — shut everywhere else, opened the
+   moment that page is reached, shut again as soon as the learner turns away — and
+   the reader still lets the learner go back and forward as often as they like.
 
    Usage: node tools/chapter-read-gate-browser-check.js [base]
    It signs in as the seeded student STU-002 and creates a throw-away book (with
@@ -77,39 +78,62 @@ try {
       S.bookData = await API.get('/book/' + bookId);
       S.selectedChapterId = null;
       renderBook();
-      var ta = answerArea();
-      var btn = document.getElementById('chSubmit');
-      var before = { textarea: !!ta, disabled: ta ? ta.disabled === true : null,
-        buttonDisabled: btn ? btn.disabled === true : null,
-        gate: !!document.querySelector('#view-book .read-gate'),
-        gateText: ((document.querySelector('#view-book .read-gate') || {}).textContent || '').trim() };
+      function gateEl() { return document.querySelector('#view-book .read-gate'); }
+      /* the note stays in the page; "shown" means it is really visible on screen */
+      function gateShown() {
+        var g = gateEl();
+        if (!g) return null;
+        return !g.hasAttribute('hidden') && getComputedStyle(g).display !== 'none';
+      }
+      function now() {
+        var t = answerArea();
+        var b = document.getElementById('chSubmit');
+        var r = document.querySelector('#view-book .book-reader');
+        var g = gateEl();
+        return { textarea: !!t, disabled: t ? t.disabled === true : null,
+          buttonDisabled: b ? b.disabled === true : null,
+          gate: gateShown(), gateText: ((g || {}).textContent || '').trim(),
+          page: r ? Number(r.dataset.page) : null };
+      }
+      function turn(delta) {
+        var r = document.querySelector('#view-book .book-reader');
+        var b = r ? r.querySelector('[data-book-turn="' + delta + '"]') : null;
+        if (!b || b.disabled) return false;
+        b.click();
+        return true;
+      }
+      var before = now();
       var turns = 0;
       for (var i = 0; i < 20; i++) {
         var reader = document.querySelector('#view-book .book-reader');
         if (!reader) break;
         if (Number(reader.dataset.page) >= pageEnd) break;
-        var next = reader.querySelector('[data-book-turn="1"]');
-        if (!next) break;
-        next.click();
+        if (!turn(1)) break;
         turns++;
         await wait(400);
       }
-      var opened = false;
-      for (var j = 0; j < 60; j++) {
-        var t2 = answerArea();
-        if (t2 && !t2.disabled) { opened = true; break; }
-        await wait(250);
+      await wait(400);
+      var atLast = now();                    /* the last page: the answer area is open */
+      /* the rule has two sides: one page back shuts the area, one page forward
+         opens it again — with nothing redrawn and nothing typed thrown away */
+      var back = { skipped: true };
+      var again = { skipped: true };
+      if (turn(-1)) {
+        await wait(300);
+        back = now();
+        if (turn(1)) {
+          await wait(300);
+          again = now();
+        }
       }
-      var after = document.querySelector('#view-book .book-reader');
       var fresh = await API.get('/book/' + bookId);
       var chapter = (fresh.chapters || [])[0] || {};
-      var b2 = document.getElementById('chSubmit');
+      var lastReader = document.querySelector('#view-book .book-reader');
+      var backBtn = lastReader ? lastReader.querySelector('[data-book-turn="-1"]') : null;
       out(JSON.stringify({
-        before: before, turns: turns, opened: opened,
-        gateAfter: !!document.querySelector('#view-book .read-gate'),
-        pageAfter: after ? Number(after.dataset.page) : null,
-        canGoBack: after ? after.querySelector('[data-book-turn="-1"]').disabled !== true : null,
-        buttonAfter: b2 ? b2.disabled !== true : null,
+        before: before, turns: turns, atLast: atLast, back: back, again: again,
+        pageAfter: atLast.page,
+        canGoBack: backBtn ? backBtn.disabled !== true : null,
         read: chapter.read, requiresReading: chapter.requiresReading
       }));
     } catch (e) { out('error: ' + e.message); }
@@ -187,12 +211,21 @@ try {
       check('a lock note tells the learner to read to the last page',
         r.before.gate === true && /last page/i.test(r.before.gateText || ''), JSON.stringify(r.before));
       check('the chapter pages can still be turned', r.turns >= 2, 'turns ' + r.turns);
-      check('reaching the last page opens the answer area',
-        r.opened === true && r.buttonAfter === true, JSON.stringify({ opened: r.opened, button: r.buttonAfter }));
-      check('the lock note is gone once the chapter has been read', r.gateAfter === false);
+      check('on the last page the answer area is open',
+        r.atLast.disabled === false && r.atLast.buttonDisabled === false, JSON.stringify(r.atLast));
+      check('the lock note is out of sight on the last page', r.atLast.gate === false,
+        JSON.stringify(r.atLast));
       check('the server recorded the chapter as read', r.read === true && r.requiresReading === true,
         JSON.stringify({ read: r.read, requiresReading: r.requiresReading }));
       check('the reader stays on the last page it reached', r.pageAfter === 3, 'page ' + r.pageAfter);
+      check('one page back shuts the answer area again',
+        r.back.page === 2 && r.back.disabled === true && r.back.buttonDisabled === true && r.back.gate === true,
+        JSON.stringify(r.back));
+      check('the lock note is back away from the last page',
+        r.back.gate === true && /last page/i.test(r.back.gateText || ''), JSON.stringify(r.back));
+      check('turning to the last page again opens the answer area again',
+        r.again.page === 3 && r.again.disabled === false && r.again.buttonDisabled === false &&
+          r.again.gate === false, JSON.stringify(r.again));
       check('the learner can still go back and read the chapter again', r.canGoBack === true);
     }
   }

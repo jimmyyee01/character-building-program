@@ -1716,6 +1716,7 @@ function bookCoverHtml(url, opts) {
     ? 'Pages ' + opts.from + '–' + opts.to + ' of the book only.'
     : 'PDF book — it only opens when you click it.');
   return '<div class="book-open-card" data-book-url="' + esc(url) + '" data-book-title="' + esc(label) + '"' +
+    (opts.chapter ? ' data-book-chapter="' + esc(opts.chapter) + '"' : '') +
     (opts.from ? ' data-book-from="' + esc(String(opts.from)) + '"' : '') +
     (opts.to ? ' data-book-to="' + esc(String(opts.to)) + '"' : '') + '>' +
     '<span class="book-open-icon" aria-hidden="true">📖</span>' +
@@ -2203,7 +2204,9 @@ if (typeof document !== 'undefined' && document.addEventListener) {
       const to = cover.getAttribute('data-book-to') || '';
       const holder = cover.parentNode;
       if (url && holder && cover.insertAdjacentHTML) {
-        cover.insertAdjacentHTML('beforebegin', bookReaderHtml(url, { title: title, from: from, to: to }));
+        /* the chapter a closed book belonged to travels with its cover */
+        const backChapter = cover.getAttribute('data-book-chapter') || '';
+        cover.insertAdjacentHTML('beforebegin', bookReaderHtml(url, { title: title, from: from, to: to, chapter: backChapter }));
         if (cover.remove) cover.remove(); else if (holder.removeChild) holder.removeChild(cover);
         bookFitAll();
         const fresh = holder ? holder.querySelector('.book-reader') : null;
@@ -2254,10 +2257,18 @@ if (typeof document !== 'undefined' && document.addEventListener) {
         e.preventDefault();
         stopBookNarration(root);
         root.classList.remove('book-full');
+        /* a chapter's answer area hears that the book is shut (see app.js) */
+        try {
+          if (typeof CustomEvent === 'function' && root.dispatchEvent) {
+            root.dispatchEvent(new CustomEvent('book:close', { bubbles: true,
+              detail: { chapter: root.dataset.chapter || null } }));
+          }
+        } catch (closeErr) { /* a close never fails on an event */ }
         const holder = root.parentNode;
         if (root.dataset.bookBack === '1' && holder && root.insertAdjacentHTML) {
           root.insertAdjacentHTML('beforebegin', bookCoverHtml(root.dataset.book, {
             title: root.dataset.bookTitle || 'Book',
+            chapter: root.dataset.chapter || '',
             from: root.dataset.bookMin,
             to: root.dataset.bookMax || '',
             button: 'Open chapter pages',
