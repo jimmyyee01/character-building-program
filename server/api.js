@@ -18,7 +18,7 @@ function need(cond, message, status) { if (!cond) throw new HttpError(message, s
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-const BUILD = '2026-11-05-letter-after-module';
+const BUILD = '2026-11-05-letter-mandatory';
 const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.students', 'reports.student-roster',
   'reports.student-detail', 'reports.student-assessment', 'reports.module-performers', 'reports.top-performers',
   'public.top-performers', 'reading.activity', 'reading.video-alerts',
@@ -646,10 +646,15 @@ function moduleProgress(user, module) {
   const letterOn = letterMeta.enabled && letterMeta.pool > 0;
   const letterSub = letterOn ? findSub(user.id, 'module_letter', { moduleId: module.id }) : null;
 
+  /* THE ORDER OF THESE FOUR TESTS IS THE RULE: the letter the admin switched on
+     outranks a best-book pick that was made before it was switched on, so a
+     learner cannot reach the video, the certificate — or the next module —
+     with the letter still unanswered. A certificate already issued is history
+     and is never taken back. */
   let stage = 'work';
   if (cert) stage = 'certified';
-  else if (bestPick) stage = 'video';
   else if (allBooks && letterOn && !letterSub) stage = 'letter';
+  else if (bestPick) stage = 'video';
   else if (allBooks) stage = 'best_book';
 
   let total = 2; // best book pick + certificate
@@ -674,9 +679,10 @@ function moduleProgress(user, module) {
       certificateName: module.certificateName, summaryPrompts: module.summaryPrompts || [],
       completionVideoId: module.completionVideoId || null },
     books: states, stage, bestPick: subMeta(bestPick), certificate: cert || null,
-    /* the closing letter: on/off, how many questions, and the learner's result */
+    /* the closing letter: on/off, how many questions, the learner's result and
+       where they go once it is answered */
     letter: letterOn ? { meta: letterMeta, open: !letterSub,
-      submission: subMeta(letterSub) } : null,
+      next: moduleLetterNext(user, module), submission: subMeta(letterSub) } : null,
     percent: total ? Math.round(100 * done / total) : 0,
     objectiveScore: objTotal ? Math.round(100 * objScore / objTotal) : null
   };
@@ -858,6 +864,13 @@ function normalizeLetterQuestions(list) {
   }).filter(Boolean).slice(0, LETTER_POOL_MAX)
     .map((q, i) => ({ id: q.id || ('q' + (i + 1)), question: q.question,
       options: q.options, answerIndex: q.answerIndex }));
+}
+
+/* Where a learner goes once the letter is answered: if a best book was already
+   picked (before the admin switched the letter on) the certificate is next,
+   otherwise the best-book pick is. */
+function moduleLetterNext(user, mod) {
+  return findSub(user.id, 'best_book', { moduleId: mod.id }) ? 'video' : 'best_book';
 }
 
 /* The authored pool of one module (empty when nothing has been written yet). */
@@ -1279,6 +1292,7 @@ route('GET', '/api/module/([a-z0-9_-]+)/letter', ({ user, token, params }) => {
     return { ok: true, submitted: true, live: false, stage: st.progress.stage,
       letter: moduleLetterDoc(module), mode: meta.mode,
       counts: { pool: meta.pool, pick: meta.pick }, submission: subMeta(done),
+      next: moduleLetterNext(user, module),
       questions: (done.answers || []).map(a => ({
         id: a.questionId, question: a.question, options: [],
         yourChoice: a.chosen || null, yourText: a.text || null,
@@ -1291,7 +1305,8 @@ route('GET', '/api/module/([a-z0-9_-]+)/letter', ({ user, token, params }) => {
     'The letter opens once every book of this module is finished', 403);
   const out = moduleLetterFor(user, module, { token });
   return { ok: true, submitted: false, live: true, stage: st.progress.stage,
-    letter: out.letter, mode: out.mode, counts: out.counts, questions: out.questions };
+    letter: out.letter, mode: out.mode, counts: out.counts, questions: out.questions,
+    next: moduleLetterNext(user, module) };
 });
 
 /* Book detail: stages, chapter gating, letter and colour summaries. */
@@ -1536,6 +1551,8 @@ route('POST', '/api/submissions', ({ user, token, body }) => {
     need(mod, 'Module not found', 404);
     activeModule(mod);
     const mp = moduleProgress(user, mod);
+    /* the letter closes the module before the best book is chosen */
+    need(mp.stage !== 'letter', 'Answer the letter that closes this module first', 403);
     need(mp.stage === 'best_book', 'Complete every book in this module before choosing the best book', 403);
     const book = dbm.byId('books', body.bookId);
     need(book && (book.scope === 'global' || book.scope === tenantId), 'Book not found', 404);
@@ -1646,6 +1663,8 @@ route('POST', '/api/certificates/issue', ({ user, body }) => {
   const mod = dbm.byId('modules', body.moduleId);
   need(mod, 'Module not found', 404);
   const mp = moduleProgress(user, mod);
+  /* a certificate is the end of a module, so the letter must be answered first */
+  need(mp.stage !== 'letter', 'Answer the letter that closes this module first', 403);
   need(mp.stage === 'video', 'Complete every book and pick the best book first', 403);
   if (body.videoId && dbm.byId('library', body.videoId)) {
     user.watchedVideos = user.watchedVideos || [];

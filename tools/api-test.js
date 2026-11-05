@@ -35,7 +35,7 @@ async function main() {
     (r.data.features || []).indexOf('admin.analytics') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
   check('the login serves the live top-performers build and its features',
-    r.ok && r.data.build === '2026-11-05-letter-after-module' &&
+    r.ok && r.data.build === '2026-11-05-letter-mandatory' &&
       (r.data.features || []).indexOf('reports.module-performers') !== -1 &&
       (r.data.features || []).indexOf('reports.top-performers') !== -1 &&
       (r.data.features || []).indexOf('public.top-performers') !== -1 &&
@@ -650,6 +650,124 @@ async function part3(r, tok, check) {
     lr.ok && !((offListed.progress || {}).letter), JSON.stringify((offListed.progress || {}).letter || null));
   lr = await call('/super/modules/' + encodeURIComponent(letterMod.id), { method: 'DELETE' }, suTok);
   check('the letter test module is removed again', lr.ok, 'status ' + lr.status + ' ' + JSON.stringify(lr.data).slice(0, 160));
+
+  /* --------- the letter is mandatory once the super admin switches it on --- */
+  /* The rule: with a letter switched on, a module cannot close — no video, no
+     certificate, and so no next module — until the learner has answered it.
+     Even a learner who picked the best book BEFORE the letter was switched on
+     is pulled back to it. A throwaway student walks the first module to prove
+     it; the module is put back the way it was afterwards. */
+  const gateRun = Date.now().toString(36).slice(-5);
+  const gateNum = 'STU-GATE-' + gateRun;
+  const gateNew = await call('/users', { method: 'POST', body: { role: 'student',
+    fullName: 'Letter Gate Student', studentNumber: gateNum, password: 'Student@123' } }, tok.schools);
+  const gateId = ((gateNew.data && (gateNew.data.user || gateNew.data)) || {}).id || null;
+  const gateLogin = await call('/auth/login', { method: 'POST', body: {
+    slug: 'greenfield-academy', identifier: gateNum, password: 'Student@123' } });
+  const gateTok = gateLogin.data && gateLogin.data.token;
+  check('a throwaway learner is created for the mandatory-letter walk',
+    gateNew.ok && !!gateId && !!gateTok,
+    'status ' + gateNew.status + ' ' + JSON.stringify(gateNew.data).slice(0, 140));
+  const gl = await call('/modules', null, gateTok);
+  const gateMods = ((gl.data && gl.data.modules) || []).slice()
+    .sort(function (a, b) { return (a.order || 0) - (b.order || 0); });
+  const gateMod = gateMods[0] || {};
+  const gateNextMod = gateMods[1] || {};
+  check('the first module is a typing (summary) module, so the walk can be driven',
+    !!gateMod.id && gateMod.mode === 'summary', 'mode ' + gateMod.mode);
+  /* self-healing: a run that was killed mid-walk can leave the letter switched
+     on, which would stop the walk at the letter before the best book exists */
+  await call('/super/modules/' + encodeURIComponent(gateMod.id), { method: 'PUT',
+    body: { letter: { enabled: false, mode: 'objectives', questions: [] } } }, suTok);
+  /* every chapter in order, then each book's own letter — the reading gate is
+     walked through properly, exactly as the screen would */
+  for (const b of (((gateMod.progress || {}).books) || [])) {
+    for (const c of (b.chapters || [])) {
+      if (c.requiresReading && !c.read) {
+        await call('/chapter/' + c.id + '/read', { method: 'POST', body: { page: c.pageEnd } }, gateTok);
+      }
+      if (!c.submission) {
+        await call('/submissions', { method: 'POST', body: { type: 'chapter_summary', chapterId: c.id,
+          text: 'My own answer for ' + c.title + ' — what the chapter said, in my own words (' + c.id + ').' } }, gateTok);
+      }
+    }
+    /* a summary-mode book closes with its own letter: the flag lives on the
+       book, because the letter document itself is only handed out once the
+       chapters are finished */
+    if (b.book && b.book.letterId && !b.letterSubmission) {
+      await call('/submissions', { method: 'POST', body: { type: 'letter_summary', bookId: b.book.id,
+        text: 'What ' + b.book.title + ' said to me, written from what I read, in my own words.' } }, gateTok);
+    }
+  }
+  let gg = await call('/module/' + gateMod.id, null, gateTok);
+  const gateP = (gg.data && gg.data.progress) || {};
+  check('the walked module now waits for its best book',
+    gateP.stage === 'best_book', 'stage ' + gateP.stage);
+  const gateBest = ((gateP.books || []).filter(function (b) { return b.complete; })[0] || {}).book || {};
+  const gatePick = await call('/submissions', { method: 'POST', body: { type: 'best_book',
+    moduleId: gateMod.id, bookId: gateBest.id } }, gateTok);
+  check('the best book is picked before any letter exists', gatePick.ok,
+    'status ' + gatePick.status + ' ' + JSON.stringify(gatePick.data).slice(0, 140));
+  gg = await call('/module/' + gateMod.id, null, gateTok);
+  check('with the best book picked the module waits on its certificate',
+    ((gg.data.progress || {}).stage) === 'video', 'stage ' + ((gg.data.progress || {}).stage));
+
+  /* now the super admin switches the module's letter on */
+  const gatePool = [
+    { question: 'What does the letter close?', options: ['The book', 'The module', 'The portal'], answerIndex: 1 },
+    { question: 'When may the next module open?', options: ['Before the letter', 'After the letter', 'Never'], answerIndex: 1 },
+    { question: 'Who answers the letter?', options: ['The learner', 'The teacher', 'Nobody'], answerIndex: 0 }
+  ];
+  const gateSwitch = await call('/super/modules/' + encodeURIComponent(gateMod.id), { method: 'PUT',
+    body: { letter: { enabled: true, letterId: null, mode: 'objectives', questions: gatePool } } }, suTok);
+  check('the super admin switches a letter on for a module already in progress',
+    gateSwitch.ok && ((((gateSwitch.data.module || gateSwitch.data) || {}).letter || {}).enabled === true),
+    'status ' + gateSwitch.status + ' ' + JSON.stringify(gateSwitch.data).slice(0, 140));
+  gg = await call('/module/' + gateMod.id, null, gateTok);
+  check('a pending letter pulls the learner back from the certificate',
+    ((gg.data.progress || {}).stage) === 'letter', 'stage ' + ((gg.data.progress || {}).stage));
+  const gateStalled = await call('/certificates/issue', { method: 'POST',
+    body: { moduleId: gateMod.id } }, gateTok);
+  check('no certificate can be claimed while the letter is unanswered',
+    !gateStalled.ok && gateStalled.status === 403 && /letter/i.test(JSON.stringify(gateStalled.data)),
+    'status ' + gateStalled.status + ' ' + JSON.stringify(gateStalled.data).slice(0, 140));
+  const gateRepeat = await call('/submissions', { method: 'POST', body: { type: 'best_book',
+    moduleId: gateMod.id, bookId: gateBest.id } }, gateTok);
+  check('re-picking the best book cannot get round the letter', !gateRepeat.ok,
+    'status ' + gateRepeat.status + ' ' + JSON.stringify(gateRepeat.data).slice(0, 140));
+  const gateNextNow = ((await call('/modules', null, gateTok)).data.modules || [])
+    .filter(function (m) { return m.id === gateNextMod.id; })[0] || {};
+  check('the next module stays locked until the letter is answered',
+    !!gateNextMod.id && gateNextNow.status === 'locked', 'status ' + gateNextNow.status);
+  const gateLetter = await call('/module/' + gateMod.id + '/letter', null, gateTok);
+  const gateQs = ((gateLetter.data && gateLetter.data.questions) || []);
+  check('the letter opens with this learner\'s two questions and points at the certificate',
+    gateLetter.ok && gateQs.length === 2 && gateLetter.data.next === 'video',
+    'status ' + gateLetter.status + ' ' + JSON.stringify(gateLetter.data).slice(0, 160));
+  const gateSub = await call('/submissions', { method: 'POST', body: { type: 'module_letter',
+    moduleId: gateMod.id,
+    answers: gateQs.map(function (q) { return { questionId: q.id, choice: 0 }; }) } }, gateTok);
+  check('the letter can be answered even when the best book was picked first',
+    gateSub.ok, 'status ' + gateSub.status + ' ' + JSON.stringify(gateSub.data).slice(0, 140));
+  gg = await call('/module/' + gateMod.id, null, gateTok);
+  check('answering the letter opens the certificate again',
+    ((gg.data.progress || {}).stage) === 'video', 'stage ' + ((gg.data.progress || {}).stage));
+  const gateCert = await call('/certificates/issue', { method: 'POST',
+    body: { moduleId: gateMod.id } }, gateTok);
+  check('the module certificate is issued once the letter is answered', gateCert.ok,
+    'status ' + gateCert.status + ' ' + JSON.stringify(gateCert.data).slice(0, 140));
+  const gateAfter = ((await call('/modules', null, gateTok)).data.modules || [])
+    .filter(function (m) { return m.id === gateNextMod.id; })[0] || {};
+  check('only now does the next module open', gateAfter.status === 'active',
+    'status ' + gateAfter.status);
+  /* put the module back the way it was, then drop the throwaway learner */
+  await call('/super/modules/' + encodeURIComponent(gateMod.id), { method: 'PUT',
+    body: { letter: { enabled: false, mode: 'objectives', questions: [] } } }, suTok);
+  const gateRestored = await call('/module/' + gateMod.id, null, stuTok);
+  check('the walked module is left without a letter again',
+    gateRestored.ok && !((gateRestored.data.progress || {}).letter),
+    JSON.stringify((gateRestored.data.progress || {}).letter || null));
+  if (gateId) await call('/users/' + encodeURIComponent(gateId), { method: 'DELETE' }, tok.schools);
 
   const certs = await call('/certificates', null, stuTok);
   const first = (certs.data.certificates || [])[0];

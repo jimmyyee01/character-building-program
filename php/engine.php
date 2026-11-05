@@ -259,10 +259,15 @@ function module_progress(array $user, array $module): array {
     $letterMeta = module_letter_meta($module);
     $letterOn = $letterMeta['enabled'] && $letterMeta['pool'] > 0;
     $letterSub = $letterOn ? find_sub($user['id'], 'module_letter', ['module_id' => $module['id']]) : null;
+    /* THE ORDER OF THESE FOUR TESTS IS THE RULE: the letter the admin switched on
+       outranks a best-book pick that was made before it was switched on, so a
+       learner cannot reach the video, the certificate — or the next module —
+       with the letter still unanswered. A certificate already issued is history
+       and is never taken back. */
     $stage = 'work';
     if ($cert) $stage = 'certified';
-    elseif ($bestPick) $stage = 'video';
     elseif ($allBooks && $letterOn && !$letterSub) $stage = 'letter';
+    elseif ($bestPick) $stage = 'video';
     elseif ($allBooks) $stage = 'best_book';
 
     $total = 2; $done = 0;
@@ -295,8 +300,10 @@ function module_progress(array $user, array $module): array {
             'completionVideoId' => $module['completionVideoId']],
         'books' => $states, 'stage' => $stage,
         'bestPick' => sub_meta($bestPick), 'certificate' => $cert,
-        /* the closing letter: on/off, how many questions, and the learner's result */
+        /* the closing letter: on/off, how many questions, the learner's result
+           and where they go once it is answered */
         'letter' => $letterOn ? ['meta' => $letterMeta, 'open' => !$letterSub,
+            'next' => module_letter_next($user, $module),
             'submission' => sub_meta($letterSub)] : null,
         'percent' => $total ? (int)round(100 * $done / $total) : 0,
         'objectiveScore' => $objTotal ? (int)round(100 * $objScore / $objTotal) : null];
@@ -796,6 +803,13 @@ function normalize_letter_questions($list): array {
         if (count($out) >= LETTER_POOL_MAX) break;
     }
     return $out;
+}
+/* Where a learner goes once the letter is answered: if a best book was already
+   picked (before the admin switched the letter on) the certificate is next,
+   otherwise the best-book pick is. */
+function module_letter_next(array $user, array $module): string {
+    return find_sub($user['id'], 'best_book', ['module_id' => $module['id']])
+        ? 'video' : 'best_book';
 }
 /* The authored pool of one module (empty when nothing has been written yet). */
 function letter_questions(array $module): array {

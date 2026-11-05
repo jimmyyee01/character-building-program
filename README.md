@@ -392,7 +392,13 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
    the super admin writes a pool of up to **ten** questions for that letter
    (answer by picking one of the options, or by writing a few lines), switches it
    on and picks which library letter it carries. The stage order becomes
-   `work → letter → best book → video → certified`, and each learner is issued
+   `work → letter → best book → video → certified`, and **the letter is
+   mandatory**: while it is switched on and unanswered the module cannot close,
+   so no video and no certificate can be claimed and the next module stays
+   locked. That holds even when the letter is switched on *after* the learner has
+   already picked their best book — the pending letter outranks that pick and
+   pulls the learner back to it (a certificate already issued is never taken
+   back). Each learner is issued
    only **two** of the ten questions — the pair is drawn from the pool with the
    learner's own account as the seed, in their own stable order, so every student
    answers a different pair and the same student always answers the same two. The

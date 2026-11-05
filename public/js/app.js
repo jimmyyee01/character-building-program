@@ -541,7 +541,8 @@ async function renderModules() {
         '<div class="top"><h4>' + esc(m.title) + '</h4>' + badge + '</div>' +
         '<div class="progress mt"><i style="width:' + p.percent + '%"></i></div>' +
         '<div class="small muted">' + p.percent + '% complete — ' + doneBooks + '/' + p.books.length + ' books finished' +
-        (p.objectiveScore != null ? ' — objectives ' + p.objectiveScore + '%' : '') + '</div>' +
+        (p.objectiveScore != null ? ' — objectives ' + p.objectiveScore + '%' : '') +
+        (p.stage === 'letter' ? ' — the letter must be answered before this module closes' : '') + '</div>' +
         '<div class="mt">' + action + '</div></div>';
     }).join('') + '</div>';
 
@@ -1132,7 +1133,8 @@ function renderModuleLetter(p) {
     '<div class="card mt letter-stage"><h3>' + esc(p.module.title) + ' — the letter 🎉</h3>' +
     '<p class="muted">Every book in this module is finished. Read the letter, then answer <b>' +
       esc(meta.pick) + ' of the ' + esc(meta.pool) + ' questions</b> set for this module. ' +
-      'Each student is given a different pair.</p>' +
+      'Each student is given a different pair. <b>This letter closes the module</b> — it must be ' +
+      'answered before the certificate and before the next module opens.</p>' +
     '<div id="moduleLetterBody"><p class="muted">Loading the letter…</p></div></div>';
   $('backModsLetter').onclick = renderModules;
   loadModuleLetter(p);
@@ -1164,7 +1166,9 @@ function moduleLetterHtml(d) {
       (d.questions || []).map(function (q, i) { return moduleLetterAnswerHtml(q, i); }).join('') +
       '<p class="timestamp mt">Submitted: ' +
         fmtDate(d.submission && (d.submission.submittedAt || d.submission.createdAt)) + '</p>' +
-      '<div class="mt"><button id="moduleLetterNext">Continue to the best book →</button></div>';
+      '<div class="mt"><button id="moduleLetterNext">' +
+        (d.next === 'video' ? 'Continue to my certificate →' : 'Continue to the best book →') +
+        '</button></div>';
     return html;
   }
 

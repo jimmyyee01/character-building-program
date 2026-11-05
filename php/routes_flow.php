@@ -128,6 +128,7 @@ function r_module_letter($user, $body, $params, $token, $query) {
     return ['submitted' => true, 'live' => false, 'stage' => $found['progress']['stage'],
       'letter' => module_letter_doc($module), 'mode' => $meta['mode'],
       'counts' => ['pool' => $meta['pool'], 'pick' => $meta['pick']],
+      'next' => module_letter_next($user, $module),
       'submission' => sub_meta($done), 'questions' => $answers];
   }
   need(($found['progress']['stage'] ?? '') === 'letter',
@@ -135,6 +136,7 @@ function r_module_letter($user, $body, $params, $token, $query) {
   $out = module_letter_for($user, $module, $token);
   return ['submitted' => false, 'live' => true, 'stage' => $found['progress']['stage'],
     'letter' => $out['letter'], 'mode' => $out['mode'], 'counts' => $out['counts'],
+    'next' => module_letter_next($user, $module),
     'questions' => $out['questions']];
 }
 
@@ -487,6 +489,8 @@ function r_submissions($user, $body, $params, $token, $query) {
     $mrow = $st->fetch(); need($mrow, 'Module not found', 404);
     $module = n_module($mrow);
     $mp = module_progress($user, $module);
+    /* the letter closes the module before the best book is chosen */
+    need(($mp['stage'] ?? '') !== 'letter', 'Answer the letter that closes this module first', 403);
     need(($mp['stage'] ?? '') === 'best_book', 'Best book pick is not available yet', 403);
     need(!find_sub($user['id'], 'best_book', ['module_id' => $moduleId]), 'Already submitted', 400);
     $st = $pdo->prepare('SELECT * FROM books WHERE id=? AND module_id=? LIMIT 1'); $st->execute([$bookId, $moduleId]);
@@ -634,6 +638,8 @@ function r_cert_issue($user, $body, $params, $token, $query) {
   $mrow = $st->fetch(); need($mrow, 'Module not found', 404);
   $module = n_module($mrow);
   $mp = module_progress($user, $module);
+  /* a certificate is the end of a module, so the letter must be answered first */
+  need(($mp['stage'] ?? '') !== 'letter', 'Answer the letter that closes this module first', 403);
   need(($mp['stage'] ?? '') === 'video', 'Certificate is not available yet', 403);
   $watched = is_array($user['watched_videos'] ?? null) ? $user['watched_videos'] : jdec($user['watched_videos_json'] ?? null, []);
   if (!empty($module['completionVideoId'])) {
