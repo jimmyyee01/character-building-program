@@ -97,7 +97,13 @@ node tools/analytics-api-check.js http://127.0.0.1:3000 # analytics scope: each 
 Handy npm shortcuts: `npm run check:routes`, `npm run check:ui`, `npm run check:api`,
 `npm run check:api:php`, `npm run check:live`, `npm run check:pages`, `npm run check:keywords`,
 `npm run check:browser`, `npm run check:chapter-lock`, `npm run check:read-gate`,
-`npm run check:read-gate-ui`, `npm run check:analytics`, `npm run check:reading`.
+`npm run check:read-gate-ui`, `npm run check:analytics`, `npm run check:reading`,
+`npm run check:http`.
+
+`npm run check:http` covers the answers a bad request earns: a body that is not
+JSON, a broken %-escape in the path and a path the URL parser refuses are 400s
+(they used to be 500s, which made a scanner probe look like a server fault), an
+upload over the body limit is a 413, an unknown endpoint stays a 404.
 
 `npm run check:reading` covers the reading features on a throw-away database: the
 best-performer ribbon at the top of the students page (top 50 of ONE account, ranked

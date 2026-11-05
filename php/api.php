@@ -20,7 +20,7 @@ $ADMINS = ['super', 'tenant_admin'];
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-define('APP_BUILD', '2026-10-30-library-media-letters');
+define('APP_BUILD', '2026-11-05-http-status-fixes');
 define('APP_FEATURES', 'health,super.analytics,admin.analytics,reports.students,reports.student-roster,reports.student-detail,reports.student-assessment,reports.module-performers,reports.top-performers,'
     . 'public.top-performers,users.supervisor-auto-assignment,messaging,notifications,keywords,reading.activity,reading.video-alerts,'
     . 'reader.book,library.lock,library.media,library.letters,certificates,chapter.pages,exports,assessment,assessment.admin,read-aloud');
@@ -162,6 +162,13 @@ try {
 
     $raw = file_get_contents('php://input');
     $body = ($raw !== '' && $raw !== false) ? json_decode($raw, true) : null;
+    /* A body that claims to be JSON but is not is the caller's mistake: answer
+       400 the way the Node backend does. It used to be read as an empty body,
+       which turned a typo in a client into a confusing "field is required". */
+    if ($raw !== '' && $raw !== false && json_last_error() !== JSON_ERROR_NONE
+        && stripos($_SERVER['CONTENT_TYPE'] ?? '', 'application/json') !== false) {
+        send_json(400, ['ok' => false, 'error' => 'Invalid JSON body']);
+    }
     if (!is_array($body)) $body = [];
 
     $user = current_user();

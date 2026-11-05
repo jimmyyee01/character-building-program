@@ -15,7 +15,9 @@ const ROOT = path.join(__dirname, '..');
 const PUBLIC = path.join(ROOT, 'public');
 const UPLOADS = path.join(ROOT, 'uploads');
 const PORT = Number(process.env.PORT) || 3000;
-const BODY_LIMIT = 400 * 1024 * 1024; // 400 MB (photo/logo/file uploads arrive base64-encoded in JSON)
+/* 400 MB by default (photo/logo/file uploads arrive base64-encoded in JSON).
+   Overridable so a check can prove the 413 answer without moving 400 MB. */
+const BODY_LIMIT = Number(process.env.BODY_LIMIT) || 400 * 1024 * 1024;
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -42,6 +44,14 @@ function sendJSON(res, code, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
   res.end(body);
+}
+
+/* A caller's mistake is not a server fault: carry the status the answer earns,
+   so one catch-all can tell a bad request (400) from a real crash (500). */
+function httpError(status, message) {
+  const e = new Error(message);
+  e.status = status;
+  return e;
 }
 
 function safeJoin(base, target) {
@@ -116,17 +126,27 @@ function parseBody(req) {
   return new Promise((resolve, reject) => {
     if (req.method === 'GET' || req.method === 'HEAD') return resolve(null);
     let size = 0;
+    let stopped = false;
     const chunks = [];
     req.on('data', c => {
+      if (stopped) return;
       size += c.length;
-      if (size > BODY_LIMIT) { reject(new Error('Payload too large')); req.destroy(); }
-      else chunks.push(c);
+      if (size > BODY_LIMIT) {
+        /* Stop buffering, but keep the socket alive until the 413 has been
+           written: destroying it here would reset the connection and the caller
+           would never learn why the upload failed. */
+        stopped = true;
+        req.pause();
+        reject(httpError(413, 'Payload too large'));
+        return;
+      }
+      chunks.push(c);
     });
     req.on('end', () => {
-      if (!chunks.length) return resolve(null);
+      if (stopped || !chunks.length) return resolve(null);
       const raw = Buffer.concat(chunks).toString('utf8');
       try { resolve(raw ? JSON.parse(raw) : null); }
-      catch (e) { reject(new Error('Invalid JSON body')); }
+      catch (e) { reject(httpError(400, 'Invalid JSON body')); }
     });
     req.on('error', reject);
   });
@@ -142,8 +162,16 @@ const PAGES = {
 
 const handler = async (req, res) => {
   try {
-    const url = new URL(req.url, 'http://localhost');
-    const p = decodeURIComponent(url.pathname);
+    /* A path Node refuses to parse ("//%2e%2e%2f%2eenv") or a broken escape
+       ("/%zz", "/%E0%A4%A") is the caller's mistake, not a crash: those used to
+       raise URIError/ERR_INVALID_URL and answer 500. */
+    let url, p;
+    try {
+      url = new URL(req.url, 'http://localhost');
+      p = decodeURIComponent(url.pathname);
+    } catch (e) {
+      throw httpError(400, 'Malformed request path');
+    }
 
     if (p.startsWith('/api/')) {
       const body = await parseBody(req);
@@ -162,11 +190,16 @@ const handler = async (req, res) => {
     if (!f) return sendJSON(res, 403, { ok: false, error: 'Forbidden' });
     return serveFile(req, res, f);
   } catch (e) {
-    console.error('[server]', e);
+    const code = e.status || 500;
+    /* A caller's mistake is answered, not logged: a scanner probing "/%zz" used
+       to fill the journal with stack traces for a request that was simply bad.
+       Only a genuine fault (5xx) is worth a log line. */
+    if (code >= 500) console.error('[server]', e);
     if (!res.headersSent) {
-      const code = e.message === 'Payload too large' ? 413 : 500;
       sendJSON(res, code, { ok: false, error: e.message || 'Server error' });
     }
+    /* An oversized upload was stopped mid-stream: answer first, then hang up. */
+    if (code === 413) res.once('finish', () => { try { req.destroy(); } catch (err) { /* gone */ } });
   }
 };
 
