@@ -2,7 +2,10 @@
 const S = {
   me: null, flow: null, videos: [],
   view: 'home', currentModuleId: null, currentBookId: null,
-  bookData: null, finalData: null, letterDone: false
+  bookData: null, finalData: null, letterDone: false,
+  /* where each chapter's reader was left (so a redraw keeps the page) and which
+     chapters have already told the server they were read to the last page */
+  chapterPage: {}, readSent: {}
 };
 
 function $(id) { return document.getElementById(id); }
@@ -691,6 +694,19 @@ function backToModule() {
 }
 
 /* ------------------------------------------------- chapter panel + form -- */
+/* A chapter's answer area opens only when its own pages have been read to the
+   LAST page. The server keeps that fact (POST /chapter/:id/read), so a reload
+   cannot skip the reading; a chapter with no pages of its own is always open. */
+function chapterNeedsReading(ch) {
+  return !!(ch && ch.requiresReading && !ch.read);
+}
+function readGateNote(ch) {
+  return '<div class="read-gate">' +
+    '<span class="lock" aria-hidden="true">🔒</span>' +
+    '<span><b>Read this chapter to its last page to answer</b>' +
+      '<span class="small muted">Turn to page ' + esc(ch.pageEnd) + ' of the chapter pages. ' +
+      'You can always come back and read it again.</span></span></div>';
+}
 function chapterPanel(d, ch) {
   /* An inactive (locked) chapter is only a heading and the reason: no text, no
      pages and no form — nothing here can be clicked or opened. */
@@ -698,6 +714,7 @@ function chapterPanel(d, ch) {
     return '<div class="chapter-body"><h3>🔒 ' + esc(ch.title) + '</h3>' +
       '<p class="muted mt">Submit the previous chapter to unlock this one.</p></div>';
   }
+  const locked = chapterNeedsReading(ch);
   const pages = (ch.pageStart && ch.pageEnd) ? ' (pages ' + ch.pageStart + '–' + ch.pageEnd + ')' : '';
   let html = '<div class="chapter-body">' +
     '<h3>' + esc(ch.title) + '</h3>' +
@@ -709,14 +726,16 @@ function chapterPanel(d, ch) {
        Close button; the rest of the book is never offered on this page */
     (d.book.pdf && (ch.pageStart || ch.pageEnd)
       ? '<div class="chapter-book">' + pdfHtml(d.book.pdf, {
-          open: true, back: true,
+          open: true, back: true, chapter: ch.id,
+          page: S.chapterPage[ch.id],
           title: (ch.pageStart && ch.pageEnd)
             ? 'Chapter pages ' + ch.pageStart + '–' + ch.pageEnd : 'Chapter pages',
           from: ch.pageStart, to: ch.pageEnd
         }) + '</div>'
       : (d.book.pdf
           ? '<p class="muted small mt">This chapter has no page range yet — ask your office to set it.</p>'
-          : ''));
+          : '')) +
+    (locked ? readGateNote(ch) : '');
 
   if (ch.submission) {
     html += '<hr><p class="timestamp">Submitted: <b>' + fmtDate(ch.submission.submittedAt || ch.submission.createdAt) + '</b></p>' +
@@ -731,12 +750,15 @@ function chapterPanel(d, ch) {
     html += '<hr><h4>Summary of your understanding</h4>' +
       '<p class="muted small">Type in your own words — paste/cut is disabled and your work is compared with other students’ submissions.</p>' +
       keyWordsHint(ch) +
-      '<textarea id="chText" class="no-paste" placeholder="At least 30 characters..."></textarea>' +
-      '<div class="mt"><button id="chSubmit">Submit chapter summary</button></div>';
+      (locked
+        ? '<textarea id="chText" class="no-paste" disabled placeholder="Read the chapter to its last page first..."></textarea>' +
+          '<div class="mt"><button id="chSubmit" disabled title="Read the chapter to its last page first">Submit chapter summary</button></div>'
+        : '<textarea id="chText" class="no-paste" placeholder="At least 30 characters..."></textarea>' +
+          '<div class="mt"><button id="chSubmit">Submit chapter summary</button></div>');
   } else {
     html += '<hr><h4>Objectives for this chapter</h4>' +
       '<p class="muted small">Answer every objective. The order reshuffles each time you log in.</p>' +
-      '<div id="objBox">Loading objectives…</div>';
+      '<div id="objBox"' + (locked ? ' data-locked="1"' : '') + '>Loading objectives…</div>';
   }
   return html + '</div>';
 }
@@ -769,12 +791,40 @@ function keyWordsFeedback(ch, sub) {
   return keyWordsHint(ch);
 }
 
+/* The reader reports every page turn; the LAST page of the chapter marks it read
+   on the server, and the panel is drawn again with the answer area open. The
+   learner keeps their place, and may go back to read at any time. */
+function wireReadGate(ch) {
+  const root = document.querySelector('#view-book .book-reader[data-chapter="' + ch.id + '"]');
+  if (!root) return;
+  const pageEnd = Number(ch.pageEnd) || 0;
+  if (!pageEnd) return;
+  root.addEventListener('book:page', function (e) {
+    const page = Number((e.detail || {}).page) || 0;
+    if (page) S.chapterPage[ch.id] = page;
+    if (page < pageEnd || S.readSent[ch.id]) return;
+    S.readSent[ch.id] = true;
+    API.post('/chapter/' + ch.id + '/read', { page: page, pageEnd: pageEnd })
+      .then(function () {
+        toast('Chapter read to the last page — the answer area is open now.', 'ok');
+        return refreshBook();
+      })
+      .catch(function (err) {
+        S.readSent[ch.id] = false;
+        toast(err.message, 'err');
+      });
+  });
+}
+
 function wireChapterPanel(d, ch) {
   if (!ch || ch.submission || ch.status === 'locked') return;
+  const locked = chapterNeedsReading(ch);
+  if (locked) wireReadGate(ch);
   const t = $('chText');
   if (t) {
     blockPaste(t);
-    $('chSubmit').onclick = async function () {
+    const btn = $('chSubmit');
+    if (btn && !locked) btn.onclick = async function () {
       try {
         const r = await API.post('/submissions',
           { type: 'chapter_summary', chapterId: ch.id, text: t.value });
@@ -788,7 +838,7 @@ function wireChapterPanel(d, ch) {
     };
   }
   const box = $('objBox');
-  if (box) loadObjectives(ch, box);
+  if (box) loadObjectives(ch, box, locked);
 }
 
 async function refreshBook() {
@@ -799,7 +849,7 @@ async function refreshBook() {
   } catch (e) { toast(e.message, 'err'); }
 }
 
-async function loadObjectives(ch, box) {
+async function loadObjectives(ch, box, locked) {
   try {
     const data = await API.get('/chapter/' + ch.id + '/objectives');
     if (!data.objectives.length) {
@@ -823,12 +873,17 @@ async function loadObjectives(ch, box) {
       return;
     }
     box.innerHTML = data.objectives.map(function (o, i) {
-      return '<div class="obj"><div class="q">' + (i + 1) + '. ' + esc(o.question) + '</div>' +
+      return '<div class="obj' + (locked ? ' locked' : '') + '"><div class="q">' + (i + 1) + '. ' + esc(o.question) + '</div>' +
         o.options.map(function (opt, oi) {
-          return '<label class="opt"><input type="radio" name="o_' + esc(o.id) + '" value="' + oi + '"> ' +
+          return '<label class="opt"><input type="radio" name="o_' + esc(o.id) + '" value="' + oi + '"' +
+            (locked ? ' disabled' : '') + '> ' +
             '<span>' + esc(opt) + '</span></label>';
         }).join('') + '</div>';
-    }).join('') + '<button id="objSubmit">Submit objectives</button>';
+    }).join('') + (locked
+      ? '<button id="objSubmit" disabled title="Read the chapter to its last page first">Submit objectives</button>'
+      : '<button id="objSubmit">Submit objectives</button>');
+
+    if (locked) return;    /* the answer area opens at the chapter's last page */
 
     $('objSubmit').onclick = async function () {
       const answers = data.objectives.map(function (o) {

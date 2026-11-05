@@ -9,18 +9,20 @@ function can_edit(array $user, ?string $rowScope): bool {
     return $rowScope !== null && $rowScope === ($user['tenant_id'] ?? null);
 }
 function lib_row(array $r): array {
-    return ['id'=>$r['id'],'type'=>(($r['type'] ?? '') === 'mp3' ? 'audio' : ($r['type'] ?? null)),'title'=>$r['title'],'scope'=>$r['scope'],
+    $row = ['id'=>$r['id'],'type'=>(($r['type'] ?? '') === 'mp3' ? 'audio' : ($r['type'] ?? null)),'title'=>$r['title'],'scope'=>$r['scope'],
         'text'=>$r['text'],'url'=>$r['url'],'fileName'=>$r['file_name'],
         'fileSize'=>isset($r['file_size']) && $r['file_size'] !== null ? (int)$r['file_size'] : null,
         'media'=>media_out($r),
         'createdAt'=>iso($r['created_at'] ?? null)];
+    return $row + media_flat($r);
 }
 function book_row(array $r): array {
-    return ['id'=>$r['id'],'moduleId'=>$r['module_id'],'scope'=>$r['scope'],
+    $row = ['id'=>$r['id'],'moduleId'=>$r['module_id'],'scope'=>$r['scope'],
         'order'=>(int)$r['order'],'title'=>$r['title'],
         'libraryId'=>$r['library_id'],'letterId'=>$r['letter_id'],
         'media'=>media_out($r),
         'createdAt'=>iso($r['created_at'] ?? null)];
+    return $row + media_flat($r);
 }
 function chap_row(array $r): array {
     $own = clean_keywords(jdec($r['keywords_json'] ?? null, []));
@@ -1221,20 +1223,42 @@ function message_attach_kind(string $name): string {
     if (in_array($ext, $image, true)) return 'image';
     return 'file';   /* pdf, txt, doc, docx, rtf, odt and anything else */
 }
+function message_conversation_visible(array $user, ?array $conversation): bool {
+    if (!$conversation) return false;
+    $participants = jdec($conversation['participant_ids_json'] ?? null, []);
+    if (!in_array((string)$user['id'], $participants, true)) return false;
+    if ((string)($conversation['tenant_id'] ?? '') === (string)($user['tenant_id'] ?? '')) return true;
+    if ($conversation['tenant_id'] !== null) return false;
+    /* Preserve conversations created by the old super-admin tenant bug without
+       weakening isolation for any other conversation. */
+    $st = db()->prepare("SELECT 1 FROM users WHERE id=? AND role='super' LIMIT 1");
+    foreach ($participants as $id) {
+        $st->execute([$id]);
+        if ($st->fetchColumn()) return true;
+    }
+    return false;
+}
 function conversation_for_users(array $user, array $recipient): array {
     $participants = [(string)$user['id'], (string)$recipient['id']];
     sort($participants, SORT_STRING);
     $json = jenc($participants);
     $key = hash('sha256', implode('|', $participants));
-    $st = db()->prepare('SELECT * FROM conversations WHERE tenant_id=? AND participant_key=? LIMIT 1');
-    $st->execute([$user['tenant_id'], $key]);
+    $tenantId = $user['role'] === 'super' ? $recipient['tenant_id'] : $user['tenant_id'];
+    $st = db()->prepare('SELECT * FROM conversations WHERE participant_key=? AND (tenant_id=? OR tenant_id IS NULL) LIMIT 1');
+    $st->execute([$key, $tenantId]);
     $conversation = $st->fetch();
-    if ($conversation) return $conversation;
+    if ($conversation) {
+        if ($conversation['tenant_id'] === null && $tenantId !== null) {
+            db()->prepare('UPDATE conversations SET tenant_id=? WHERE id=?')->execute([$tenantId, $conversation['id']]);
+            $conversation['tenant_id'] = $tenantId;
+        }
+        return $conversation;
+    }
     $id = uid('cnv');
     $now = now_dt();
     db()->prepare('INSERT IGNORE INTO conversations (id,tenant_id,participant_key,participant_ids_json,created_at,updated_at) VALUES (?,?,?,?,?,?)')
-        ->execute([$id, $user['tenant_id'], $key, $json, $now, $now]);
-    $st->execute([$user['tenant_id'], $key]);
+        ->execute([$id, $tenantId, $key, $json, $now, $now]);
+    $st->execute([$key, $tenantId]);
     $conversation = $st->fetch();
     need((bool)$conversation, 'Could not create conversation', 500);
     return $conversation;
@@ -1247,11 +1271,10 @@ function require_conversation(array $user, string $id): array {
         need((bool)$conversation, 'Conversation not found', 404);
         return $conversation;
     }
-    $st = db()->prepare('SELECT * FROM conversations WHERE id=? AND tenant_id=? LIMIT 1');
-    $st->execute([$id, $user['tenant_id']]);
+    $st = db()->prepare('SELECT * FROM conversations WHERE id=? LIMIT 1');
+    $st->execute([$id]);
     $conversation = $st->fetch();
-    $participants = $conversation ? jdec($conversation['participant_ids_json'], []) : [];
-    need($conversation && in_array((string)$user['id'], $participants, true), 'Conversation not found', 404);
+    need(message_conversation_visible($user, $conversation ?: null), 'Conversation not found', 404);
     return $conversation;
 }
 
@@ -1262,13 +1285,14 @@ function r_messages_list(array $user, array $body, array $params, ?string $token
         $st = $pdo->prepare('SELECT * FROM conversations ORDER BY updated_at DESC');
         $st->execute([]);
     } else {
-        $st = $pdo->prepare('SELECT * FROM conversations WHERE tenant_id=? ORDER BY updated_at DESC');
+        $st = $pdo->prepare('SELECT * FROM conversations WHERE tenant_id=? OR tenant_id IS NULL ORDER BY updated_at DESC');
         $st->execute([$user['tenant_id']]);
     }
     $conversations = [];
+    $sentMessages = [];
     foreach ($st->fetchAll() as $conversation) {
         $participants = jdec($conversation['participant_ids_json'], []);
-        if ($user['role'] !== 'super' && !in_array((string)$user['id'], $participants, true)) continue;
+        if ($user['role'] !== 'super' && !message_conversation_visible($user, $conversation)) continue;
         if ($user['role'] === 'super') {
             $peerNames = [];
             foreach ($participants as $pid) {
@@ -1285,18 +1309,30 @@ function r_messages_list(array $user, array $body, array $params, ?string $token
             $peer = $peerSt->fetch();
             if (!$peer) continue;
         }
-        $msgSt = $pdo->prepare('SELECT id,sender_id,body,created_at,read_at FROM conversation_messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT 1');
+        $recipient = ['id'=>$peer['id'], 'fullName'=>$peer['full_name'], 'role'=>$peer['role']];
+        $sentSt = $pdo->prepare('SELECT id,body,attachments_json,created_at,read_at FROM conversation_messages WHERE conversation_id=? AND sender_id=? ORDER BY created_at DESC');
+        $sentSt->execute([$conversation['id'], $user['id']]);
+        foreach ($sentSt->fetchAll() as $sent) {
+            $sentMessages[] = [
+                'id'=>$sent['id'], 'conversationId'=>$conversation['id'], 'recipient'=>$recipient,
+                'body'=>$sent['body'], 'attachments'=>jdec($sent['attachments_json'] ?? null, []),
+                'createdAt'=>iso($sent['created_at']), 'readAt'=>iso($sent['read_at']),
+            ];
+        }
+        $msgSt = $pdo->prepare('SELECT id,sender_id,body,attachments_json,created_at,read_at FROM conversation_messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT 1');
         $msgSt->execute([$conversation['id']]);
         $latest = $msgSt->fetch();
         $countSt = $pdo->prepare('SELECT COUNT(*) FROM conversation_messages WHERE conversation_id=? AND sender_id<>? AND read_at IS NULL');
         $countSt->execute([$conversation['id'], $user['id']]);
         $conversations[] = [
-            'id'=>$conversation['id'], 'participant'=>['id'=>$peer['id'], 'fullName'=>$peer['full_name'], 'role'=>$peer['role']],
-            'latestMessage'=>$latest ? ['body'=>$latest['body'], 'createdAt'=>iso($latest['created_at']), 'senderId'=>$latest['sender_id']] : null,
+            'id'=>$conversation['id'], 'participant'=>$recipient,
+            'latestMessage'=>$latest ? ['body'=>$latest['body'], 'attachments'=>jdec($latest['attachments_json'] ?? null, []),
+                'createdAt'=>iso($latest['created_at']), 'senderId'=>$latest['sender_id']] : null,
             'unread'=>(int)$countSt->fetchColumn(), 'updatedAt'=>iso($conversation['updated_at']),
         ];
     }
-    return ['conversations'=>$conversations, 'recipients'=>message_recipients($user)];
+    usort($sentMessages, fn($a, $b) => strcmp((string)$b['createdAt'], (string)$a['createdAt']));
+    return ['conversations'=>$conversations, 'sentMessages'=>$sentMessages, 'recipients'=>message_recipients($user)];
 }
 function r_messages_send(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin','supervisor','student','member','teacher']);
@@ -2253,8 +2289,10 @@ function r_books_delete(array $user, array $body, array $params, ?string $token,
     if (count($cids)) {
         $ph = implode(',', array_fill(0, count($cids), '?'));
         db()->prepare("DELETE FROM objectives WHERE chapter_id IN ($ph)")->execute($cids);
+        if (has_table('chapter_reads')) db()->prepare("DELETE FROM chapter_reads WHERE chapter_id IN ($ph)")->execute($cids);
         db()->prepare('DELETE FROM chapters WHERE book_id=?')->execute([$id]);
     }
+    if (has_table('chapter_reads')) db()->prepare('DELETE FROM chapter_reads WHERE book_id=?')->execute([$id]);
     db()->prepare('DELETE FROM books WHERE id=?')->execute([$id]);
     return ['deleted' => true];
 }
@@ -2312,6 +2350,7 @@ function r_chapters_delete(array $user, array $body, array $params, ?string $tok
     $st = db()->prepare('SELECT * FROM chapters WHERE id=?'); $st->execute([$id]); $c = $st->fetch();
     need($c, 'Chapter not found', 404); need(can_edit($user, $c['scope']), 'Not permitted', 403);
     db()->prepare('DELETE FROM objectives WHERE chapter_id=?')->execute([$id]);
+    if (has_table('chapter_reads')) db()->prepare('DELETE FROM chapter_reads WHERE chapter_id=?')->execute([$id]);
     db()->prepare('DELETE FROM chapters WHERE id=?')->execute([$id]);
     return ['deleted' => true];
 }

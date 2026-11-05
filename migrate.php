@@ -127,6 +127,21 @@ try {
             INDEX (tenant_id, opened_at), INDEX (user_id, opened_at),
             INDEX (book_id), INDEX (library_id)
         ) ENGINE=InnoDB',
+        /* How far a learner has read a chapter: the answer area of a chapter
+           opens only at its last page (chapter.reading-gate). */
+        'CREATE TABLE IF NOT EXISTS chapter_reads (
+            id VARCHAR(64) PRIMARY KEY,
+            tenant_id VARCHAR(64) NOT NULL,
+            user_id VARCHAR(64) NOT NULL,
+            chapter_id VARCHAR(64) NOT NULL,
+            book_id VARCHAR(64) NULL,
+            last_page INT NOT NULL DEFAULT 0,
+            page_end INT NOT NULL DEFAULT 0,
+            completed_at DATETIME NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_chapter_reads (user_id, chapter_id),
+            INDEX (tenant_id), INDEX (book_id)
+        ) ENGINE=InnoDB',
         'CREATE TABLE IF NOT EXISTS video_alerts (
             id VARCHAR(64) PRIMARY KEY,
             tenant_id VARCHAR(64) NOT NULL,

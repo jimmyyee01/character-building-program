@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server/server.js",
     "fresh": "node server/seed.js --fresh",
-    "check:ui": "node tools/ui-picker-check.js && node tools/ui-report-check.js && node tools/ui-pdf-check.js && node tools/smoke-pages.js",
+    "check:ui": "node tools/ui-picker-check.js && node tools/ui-report-check.js && node tools/ui-pdf-check.js && node tools/ui-messaging-check.js && node tools/smoke-pages.js",
     "check:api": "node tools/api-test.js http://127.0.0.1:3000",
     "check:api:php": "node tools/api-test.js http://127.0.0.1:8080",
     "check:live": "node tools/ui-live-check.js http://127.0.0.1:3000",
@@ -16,10 +16,12 @@
     "check:browser": "node tools/reader-browser-check.js http://127.0.0.1:3000",
     "check:narration": "node tools/narration-browser-check.js http://127.0.0.1:3000",
     "check:chapter-lock": "node tools/chapter-lock-browser-check.js http://127.0.0.1:3000",
+    "check:read-gate-ui": "node tools/chapter-read-gate-browser-check.js http://127.0.0.1:3000",
     "check:analytics": "node tools/analytics-api-check.js http://127.0.0.1:3000",
     "check:supervisor-assignment": "node tools/supervisor-assignment-check.js",
     "check:messaging": "node tools/messaging-api-check.js",
-    "check:reading": "node tools/reading-api-check.js"
+    "check:reading": "node tools/reading-api-check.js",
+    "check:read-gate": "node tools/chapter-read-gate-check.js"
   },
   "engines": {
     "node": ">=16"

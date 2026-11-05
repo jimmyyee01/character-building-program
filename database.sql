@@ -111,6 +111,23 @@ CREATE TABLE IF NOT EXISTS book_opens (
   INDEX (tenant_id, opened_at), INDEX (user_id, opened_at),
   INDEX (book_id), INDEX (library_id)
 ) ENGINE=InnoDB;
+
+/* How far a learner has read a chapter. A chapter's answer area opens only at
+   its LAST page (feature chapter.reading-gate); reaching an earlier page just
+   moves the bookmark, so a learner can always go back and re-read. */
+CREATE TABLE IF NOT EXISTS chapter_reads (
+  id VARCHAR(64) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  user_id VARCHAR(64) NOT NULL,
+  chapter_id VARCHAR(64) NOT NULL,
+  book_id VARCHAR(64) NULL,
+  last_page INT NOT NULL DEFAULT 0,
+  page_end INT NOT NULL DEFAULT 0,
+  completed_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_chapter_reads (user_id, chapter_id),
+  INDEX (tenant_id), INDEX (book_id)
+) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS modules (
   id VARCHAR(64) PRIMARY KEY,
   `key` VARCHAR(60) NOT NULL,

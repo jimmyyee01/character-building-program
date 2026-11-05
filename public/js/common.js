@@ -207,8 +207,8 @@ const LIB_MAX_UPLOAD = 40 * 1024 * 1024;
 
 /* ---------------------------------------------- message attachments ------- */
 /* A message may carry files — documents (PDF/text/Word), audio and video. They
-   are saved to /uploads like every other upload and shown in the thread as an
-   inline player (audio/video/image) or a download link (documents). */
+   are saved to /uploads like every other upload. Every attachment opens a popup
+   with a preview where supported and explicit download/open actions. */
 const MSG_ACCEPT = (function () {
   const exts = ['pdf', 'txt', 'doc', 'docx', 'rtf', 'odt',
     'mp4', 'm4v', 'mov', 'webm', 'ogv', 'mkv', 'avi', 'wmv', 'mpeg', 'mpg', 'm2ts', 'ts', 'vob', '3gp',
@@ -224,17 +224,64 @@ function messageAttachmentHtml(a) {
   const kind = a.kind || mediaKindByUrl(a.name || a.url);
   const label = esc(a.name || 'attachment') +
     (a.size ? ' <span class="muted small">(' + fmtBytes(a.size) + ')</span>' : '');
-  if (kind === 'video' || kind === 'audio') {
-    return '<div class="cbp-comms-att">' +
-      mediaTag({ url: a.url, kind: kind, name: a.name, size: a.size }) + '</div>';
-  }
-  if (kind === 'image') {
-    return '<div class="cbp-comms-att"><a href="' + esc(a.url) + '" target="_blank" rel="noopener">' +
-      '<img src="' + esc(a.url) + '" alt="' + esc(a.name || 'image') + '"></a></div>';
-  }
-  return '<div class="cbp-comms-att"><a class="cbp-comms-att-link" href="' + esc(a.url) +
-    '" download="' + esc(a.name || '') + '" target="_blank" rel="noopener">' + label + '</a></div>';
+  return '<div class="cbp-comms-att"><button type="button" class="cbp-comms-att-link"' +
+    ' data-comms-attachment="' + esc(a.url) + '" data-attachment-name="' + esc(a.name || 'attachment') +
+    '" data-attachment-kind="' + esc(kind) + '" data-attachment-size="' + esc(a.size || '') +
+    '" aria-label="Open attachment ' + esc(a.name || '') + '">Attachment: ' + label + '</button></div>';
 }
+
+function messagePreview(message) {
+  if (!message) return 'No messages yet';
+  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+  const fileSummary = attachments.length
+    ? attachments.length + ' attachment' + (attachments.length === 1 ? '' : 's') +
+      (attachments[0].name ? ': ' + attachments[0].name : '')
+    : '';
+  return [String(message.body || '').trim(), fileSummary].filter(Boolean).join(' · ') || 'No messages yet';
+}
+
+let messageAttachmentReturnFocus = null;
+function closeMessageAttachment() {
+  const modal = document.getElementById('cbpMessageAttachmentModal');
+  if (modal) modal.remove();
+  if (messageAttachmentReturnFocus && messageAttachmentReturnFocus.focus) messageAttachmentReturnFocus.focus();
+  messageAttachmentReturnFocus = null;
+}
+function openMessageAttachment(a) {
+  if (!a || !a.url) return;
+  closeMessageAttachment();
+  messageAttachmentReturnFocus = document.activeElement || null;
+  const kind = a.kind || mediaKindByUrl(a.name || a.url);
+  const name = a.name || 'attachment';
+  let preview = '<p class="muted">Use Download to save this file, or open it in a new tab.</p>';
+  if (kind === 'image') preview = '<img src="' + esc(a.url) + '" alt="' + esc(name) + '">';
+  if (kind === 'video') preview = '<video controls playsinline preload="metadata" src="' + esc(a.url) + '"></video>';
+  if (kind === 'audio') preview = '<audio controls preload="metadata" src="' + esc(a.url) + '"></audio>';
+  if (kind === 'pdf' || fileExt(name) === 'pdf') {
+    preview = '<iframe src="' + esc(a.url) + '" title="' + esc(name) + '"></iframe>';
+  }
+  const modal = document.createElement('div');
+  modal.id = 'cbpMessageAttachmentModal';
+  modal.className = 'modal-bg';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-labelledby', 'cbpMessageAttachmentTitle');
+  modal.innerHTML = '<div class="modal"><button type="button" class="x" data-message-modal-close aria-label="Close attachment">×</button>' +
+    '<h3 id="cbpMessageAttachmentTitle">' + esc(name) + '</h3>' +
+    (a.size ? '<p class="muted small">' + esc(fmtBytes(a.size)) + '</p>' : '') +
+    '<div class="cbp-attachment-preview">' + preview + '</div>' +
+    '<div class="cbp-attachment-actions"><a href="' + esc(a.url) + '" download="' + esc(name) + '">Download</a>' +
+    '<a class="ghost" href="' + esc(a.url) + '" target="_blank" rel="noopener">Open in new tab</a></div></div>';
+  modal.addEventListener('click', function (event) {
+    if (event.target === modal || event.target.closest('[data-message-modal-close]')) closeMessageAttachment();
+  });
+  document.body.appendChild(modal);
+  const close = modal.querySelector('[data-message-modal-close]');
+  if (close) close.focus();
+}
+document.addEventListener('keydown', function (event) {
+  if (event.key === 'Escape' && document.getElementById('cbpMessageAttachmentModal')) closeMessageAttachment();
+});
 
 /* The file picker + pending list + progress bar shared by compose and reply. */
 function messageAttachFieldHtml(prefix) {
@@ -1618,12 +1665,18 @@ function bookReaderHtml(url, opts) {
   const label = opts.title || 'Book';
   const from = Math.max(1, Number(opts.from) || 1);
   const to = Number(opts.to) > from ? Number(opts.to) : 0;   /* 0 = no upper limit */
+  /* opts.page re-opens the reader where the learner left it (a chapter keeps
+     its place when the panel is drawn again); the range itself never changes,
+     so going back to the chapter's first page always works. */
+  let start = Math.max(from, Number(opts.page) || from);
+  if (to && start > to) start = to;
   const rangeNote = to ? 'Chapter pages ' + from + '–' + to + ' only'
     : 'Turn the pages — the sheet never scrolls; scroll to read a tall page';
-  return '<div class="book-reader" data-book="' + esc(url) + '" data-page="' + from + '"' +
+  return '<div class="book-reader" data-book="' + esc(url) + '" data-page="' + start + '"' +
       ' data-book-title="' + esc(label) + '"' +
+      (opts.chapter ? ' data-chapter="' + esc(opts.chapter) + '"' : '') +
       (opts.back ? ' data-book-back="1"' : '') +
-      ' data-book-rendered="' + from + '"' +
+      ' data-book-rendered="' + start + '"' +
       ' data-book-min="' + from + '"' + (to ? ' data-book-max="' + to + '"' : '') + '>' +
     '<div class="book-stage">' +
       '<button type="button" class="page-turn prev" data-book-turn="-1" aria-label="Previous page"' +
@@ -1632,7 +1685,7 @@ function bookReaderHtml(url, opts) {
         /* the sheet is clipped and covered by a shield, so the viewer inside can
            only be moved a page at a time (wheel / swipe / arrows), never scrolled.
            Its shape is fitted to the page itself (bookFit), so nothing is cut. */
-        '<div class="book-frame-wrap">' + bookFrameHtml(url, from, label) + '</div>' +
+        '<div class="book-frame-wrap">' + bookFrameHtml(url, start, label) + '</div>' +
         '<div class="book-shield" data-book-shield aria-hidden="true"' +
           ' title="Scroll to read a tall page — flick at its end to turn"></div>' +
       '</div>' +
@@ -1644,7 +1697,7 @@ function bookReaderHtml(url, opts) {
     '</div>' +
     '<div class="book-bar">' +
       '<button type="button" class="ghost small" data-book-turn="-1">‹ Previous</button>' +
-      '<span class="book-page-no">Page <b data-book-page>' + from + '</b>' +
+      '<span class="book-page-no">Page <b data-book-page>' + start + '</b>' +
         '<span data-book-total>' + (to ? ' of ' + to : '') + '</span></span>' +
       '<button type="button" class="ghost small" data-book-turn="1">Next ›</button>' +
       '<span class="book-spacer"></span>' +
@@ -2104,6 +2157,14 @@ function bookGo(root, delta) {
   root.querySelectorAll('[data-book-turn="1"]').forEach(function (b) {
     b.disabled = !!total && page >= total;
   });
+  /* Whoever owns the reader (a chapter) hears every page turn, so it can act when
+     the learner reaches the last page of the range. */
+  try {
+    if (typeof CustomEvent === 'function' && root.dispatchEvent) {
+      root.dispatchEvent(new CustomEvent('book:page', { bubbles: true,
+        detail: { page: page, from: min, to: total || 0, changed: changed } }));
+    }
+  } catch (e) { /* a page turn never fails on an event */ }
   return page;
 }
 function bookCount(root) {
@@ -2622,13 +2683,20 @@ function initCommunicationWidget() {
   const toggle = document.getElementById('cbpCommsToggle');
   const panel = document.getElementById('cbpCommsPanel');
   const count = document.getElementById('cbpCommsCount');
-  const state = { screen: 'alerts', conversations: [], recipients: [], notifications: [], activeId: null };
+  const state = { screen: 'inbox', conversations: [], sentMessages: [], recipients: [],
+    notifications: [], activeId: null, threadReturn: 'inbox' };
 
   async function load() {
-    const result = await Promise.all([API.get('/messages'), API.get('/notifications')]);
-    state.conversations = result[0].conversations || [];
-    state.recipients = result[0].recipients || [];
-    state.notifications = result[1].notifications || [];
+    /* Messages are the primary payload. Alerts are supplementary and must never
+       prevent a student, supervisor or account admin from reading their inbox. */
+    const messages = await API.get('/messages');
+    let alerts = { notifications: [] };
+    try { alerts = await API.get('/notifications'); }
+    catch (e) { console.error('[messages] Failed to load alerts:', e); }
+    state.conversations = messages.conversations || [];
+    state.sentMessages = messages.sentMessages || [];
+    state.recipients = messages.recipients || [];
+    state.notifications = alerts.notifications || [];
     const unread = state.notifications.filter(function (n) {
       return !n.readAt && n.type !== 'message';
     }).length + state.conversations.reduce(function (n, c) { return n + Number(c.unread || 0); }, 0);
@@ -2643,9 +2711,15 @@ function initCommunicationWidget() {
   }
 
   function tabs() {
+    const inboxUnread = state.conversations.reduce(function (total, conversation) {
+      return total + Number(conversation.unread || 0);
+    }, 0);
     return '<nav class="cbp-comms-tabs">' +
       '<button type="button" data-comms-screen="alerts">Alerts</button>' +
-      '<button type="button" data-comms-screen="inbox">Inbox</button>' +
+      '<button type="button" data-comms-screen="inbox">Inbox' +
+      (inboxUnread ? ' <span class="cbp-comms-count" aria-label="' + inboxUnread + ' unread messages">' +
+        inboxUnread + '</span>' : '') + '</button>' +
+      '<button type="button" data-comms-screen="sent">Sent</button>' +
       '<button type="button" data-comms-screen="compose">New message</button></nav>';
   }
 
@@ -2653,7 +2727,8 @@ function initCommunicationWidget() {
     const active = state.activeId && state.conversations.find(function (c) { return c.id === state.activeId; });
     if (state.screen === 'thread' && active) {
       panel.innerHTML = header(active.participant.fullName) +
-        '<div class="cbp-comms-toolbar"><button type="button" class="ghost small" data-comms-screen="inbox">Back to inbox</button></div>' +
+        '<div class="cbp-comms-toolbar"><button type="button" class="ghost small" data-comms-screen="' + state.threadReturn +
+        '">Back to ' + state.threadReturn + '</button></div>' +
         '<div id="cbpCommsMessages" class="cbp-comms-messages"><p class="muted">Loading conversation…</p></div>' +
         '<form id="cbpCommsReply" class="cbp-comms-form"><textarea name="body" maxlength="5000" placeholder="Write a reply…"></textarea>' +
         messageAttachFieldHtml('cbpReply') +
@@ -2673,8 +2748,9 @@ function initCommunicationWidget() {
       return;
     }
     const isInbox = state.screen === 'inbox';
-    panel.innerHTML = header(isInbox ? 'Inbox' : 'Alerts') + tabs() +
-      (isInbox ? renderConversations() : renderNotifications());
+    const isSent = state.screen === 'sent';
+    panel.innerHTML = header(isInbox ? 'Inbox' : isSent ? 'Sent messages' : 'Alerts') + tabs() +
+      (isInbox ? renderConversations() : isSent ? renderSentMessages() : renderNotifications());
   }
 
   function renderConversations() {
@@ -2682,9 +2758,21 @@ function initCommunicationWidget() {
     return '<div class="cbp-comms-list">' + state.conversations.map(function (c) {
       const latest = c.latestMessage;
       return '<button type="button" class="cbp-comms-item" data-comms-thread="' + esc(c.id) + '">' +
-        '<b>' + esc(c.participant.fullName) + '</b><span>' + esc(latest ? latest.body : 'No messages yet') + '</span>' +
+        '<b>' + esc(c.participant.fullName) + '</b><span>' + esc(messagePreview(latest)) + '</span>' +
         '<small>' + esc(latest ? fmtDate(latest.createdAt) : '') + '</small>' +
         (c.unread ? '<i>' + esc(c.unread) + ' unread</i>' : '') + '</button>';
+    }).join('') + '</div>';
+  }
+
+  function renderSentMessages() {
+    if (!state.sentMessages.length) return '<p class="muted cbp-comms-empty">No sent messages yet.</p>';
+    return '<div class="cbp-comms-list">' + state.sentMessages.map(function (m) {
+      const atts = (m.attachments || []).map(messageAttachmentHtml).join('');
+      return '<div class="cbp-comms-item cbp-comms-sent-item">' +
+        '<button type="button" class="cbp-comms-sent-open" data-comms-thread="' + esc(m.conversationId) + '">' +
+        '<b>To: ' + esc(m.recipient ? m.recipient.fullName : 'Unknown recipient') + '</b>' +
+        '<span>' + esc(m.body || messagePreview(m)) + '</span>' +
+        '<small>' + esc(fmtDate(m.createdAt)) + ' · Open conversation</small></button>' + atts + '</div>';
     }).join('') + '</div>';
   }
 
@@ -2725,7 +2813,7 @@ function initCommunicationWidget() {
     panel.classList.toggle('hidden', !open);
     toggle.setAttribute('aria-expanded', String(open));
     if (open) {
-      try { await load(); state.screen = 'alerts'; state.activeId = null; draw(); }
+      try { await load(); state.screen = 'inbox'; state.activeId = null; draw(); }
       catch (e) { panel.innerHTML = header('Messages') + '<p class="err-text">' + esc(e.message) + '</p>'; }
     }
   });
@@ -2738,7 +2826,14 @@ function initCommunicationWidget() {
     if (target.dataset.commsScreen) {
       state.screen = target.dataset.commsScreen; state.activeId = null; draw(); return;
     }
+    if (target.dataset.commsAttachment) {
+      openMessageAttachment({ url: target.dataset.commsAttachment,
+        name: target.dataset.attachmentName, kind: target.dataset.attachmentKind,
+        size: Number(target.dataset.attachmentSize) || null });
+      return;
+    }
     if (target.dataset.commsThread) {
+      state.threadReturn = state.screen === 'sent' ? 'sent' : 'inbox';
       state.activeId = target.dataset.commsThread; state.screen = 'thread'; draw(); return;
     }
     if (target.dataset.commsNotification) {
@@ -2795,7 +2890,7 @@ function initCommunicationWidget() {
         payload.recipientIds = recipientIds;
         await uploadWithProgress('/messages', payload, barId, 'POST');
         toast('Message sent.', 'ok');
-        state.screen = 'inbox'; state.activeId = null;
+        state.screen = 'sent'; state.activeId = null;
       } else if (form.id === 'cbpCommsReply' && state.activeId) {
         await uploadWithProgress('/messages/' + encodeURIComponent(state.activeId), payload, barId, 'POST');
       }

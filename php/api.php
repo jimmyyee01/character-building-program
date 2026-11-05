@@ -70,6 +70,7 @@ route('GET',  '/api/modules', 'r_modules');
 route('GET',  '/api/module/([a-zA-Z0-9_-]+)', 'r_module_one');
 route('GET',  '/api/book/([a-zA-Z0-9_-]+)', 'r_book_one');
 route('GET',  '/api/chapter/([a-zA-Z0-9_-]+)/objectives', 'r_chapter_objectives');
+route('POST', '/api/chapter/([a-zA-Z0-9_-]+)/read', 'r_chapter_read');
 route('POST', '/api/submissions', 'r_submissions');
 route('POST', '/api/certificates/issue', 'r_cert_issue');
 route('GET',  '/api/certificates', 'r_certificates');

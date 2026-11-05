@@ -447,6 +447,58 @@ async function part2(r, tok, check) {
   check('no token -> 401 (not 500)', r.status === 401, 'status ' + r.status);
   r = await call('/admin/branding', { method: 'PUT', body: { themeColor: '#123456' } });
   check('no token on PUT -> 401 (not 500)', r.status === 401, 'status ' + r.status);
+
+  /* -------------------------------------------------- chapter reading gate -- */
+  /* A chapter's answer area opens only at its own LAST page. The whole learner
+     journey (and the "no pages, no gate" case) is checked by
+     tools/chapter-read-gate-check.js; here both backends must at least expose
+     the same payload and the same refusal. */
+  const gateFile = await call('/library', { method: 'POST', body: {
+    type: 'book', title: 'Reading gate check', url: '/uploads/read-gate-check.pdf' } }, tok.schools);
+  const gateItem = gateFile.data.item || gateFile.data;
+  const gateModule = (((await call('/modules', null, tok.schools)).data).modules || [])[0];
+  const gateBookRes = await call('/books', { method: 'POST', body: {
+    moduleId: gateModule.id, title: 'Reading gate check', libraryId: gateItem.id } }, tok.schools);
+  const gateBook = gateBookRes.data.book || gateBookRes.data;
+  const gateChapterRes = await call('/books/' + gateBook.id + '/chapters', { method: 'POST', body: {
+    title: 'Paged chapter', content: 'Read these pages.', pageStart: 2, pageEnd: 5 } }, tok.schools);
+  const gateChapter = gateChapterRes.data.chapter || gateChapterRes.data;
+  check('a book with a PDF and a paged chapter can be set up for the gate',
+    !!gateItem && !!gateItem.id && !!gateBook && !!gateChapter && !!gateChapter.id,
+    JSON.stringify(gateChapterRes.data).slice(0, 160));
+
+  r = await call('/book/' + gateBook.id, null, stu.data.token);
+  const gateMode = ((r.data || {}).module || {}).mode;
+  const gateState = ((r.data || {}).chapters || [])[0] || {};
+  check('a chapter with its own pages must be read before it can be answered',
+    r.ok && gateState.requiresReading === true && gateState.read === false &&
+      Number(gateState.pageEnd) === 5,
+    JSON.stringify(gateState).slice(0, 220));
+
+  const earlyAnswer = gateMode === 'objectives'
+    ? { type: 'objectives', chapterId: gateChapter.id, answers: [] }
+    : { type: 'chapter_summary', chapterId: gateChapter.id,
+      text: 'An answer typed before the chapter pages have been read to their very last page.' };
+  r = await call('/submissions', { method: 'POST', body: earlyAnswer }, stu.data.token);
+  check('answering before the last page is refused and asks for the last page',
+    r.status === 403 && /last page/i.test(r.data.error || ''),
+    r.status + ' ' + JSON.stringify(r.data).slice(0, 200));
+
+  r = await call('/chapter/' + gateChapter.id + '/read', { method: 'POST', body: { page: 3 } }, stu.data.token);
+  check('a page before the last one only bookmarks the chapter',
+    r.ok && r.data.read === false && Number(r.data.lastPage) === 3, JSON.stringify(r.data).slice(0, 160));
+
+  r = await call('/chapter/' + gateChapter.id + '/read', { method: 'POST', body: { page: 5 } }, stu.data.token);
+  check('reaching the last page marks the chapter as read',
+    r.ok && r.data.read === true && Number(r.data.pageEnd) === 5, JSON.stringify(r.data).slice(0, 160));
+
+  r = await call('/book/' + gateBook.id, null, stu.data.token);
+  const gateAfter = ((r.data || {}).chapters || [])[0] || {};
+  check('the learner\'s own book view reports the chapter as read',
+    gateAfter.read === true && !!gateAfter.readAt, JSON.stringify(gateAfter).slice(0, 220));
+
+  await call('/books/' + gateBook.id, { method: 'DELETE' }, tok.schools);
+  await call('/library/' + gateItem.id, { method: 'DELETE' }, tok.schools);
 }
 
 

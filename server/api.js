@@ -24,7 +24,7 @@ const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.stude
   'public.top-performers', 'reading.activity', 'reading.video-alerts',
   'messaging', 'notifications', 'users.supervisor-auto-assignment', 'keywords',
   'reader.book', 'library.lock', 'library.media', 'library.letters', 'certificates', 'chapter.pages',
-  'exports', 'assessment', 'assessment.admin', 'read-aloud'];
+  'chapter.reading-gate', 'exports', 'assessment', 'assessment.admin', 'read-aloud'];
 
 function send(res, code, obj) {
   const body = JSON.stringify(obj);
@@ -493,6 +493,43 @@ function findSub(userId, type, match) {
   return dbm.where('submissions', s => s.userId === userId && s.type === type &&
     keys.every(k => s[k] === match[k]))[0] || null;
 }
+/* ------------------------------------------------ chapter reading gate --- */
+/* A chapter's work may only be answered once its OWN pages have been read to
+   the LAST page. The reader reports every page it reaches; the last page marks
+   the chapter read. The mark is kept on the server, so a reload (or a direct
+   call to the API) cannot skip the reading, and it is never taken away — a
+   learner may always go back and read the chapter again.
+   The gate only applies where there is something to read: a chapter needs its
+   own page range AND its book needs a PDF. A chapter without pages stays
+   answerable, exactly as before. */
+function chapterPageRange(chapter) {
+  const from = Number(chapter && chapter.pageStart) || 0;
+  const to = Number(chapter && chapter.pageEnd) || 0;
+  return (from > 0 && to >= from) ? { from, to } : null;
+}
+function bookPdfUrl(book) {
+  const lib = book && book.libraryId ? dbm.byId('library', book.libraryId) : null;
+  return lib && lib.type === 'book' ? String(lib.url || '') : '';
+}
+/* the pages a learner must read before answering, or null when there are none */
+function readingRangeOf(book, chapter) {
+  const pages = chapterPageRange(chapter);
+  return pages && bookPdfUrl(book) ? pages : null;
+}
+function findChapterRead(userId, chapterId) {
+  return dbm.where('chapter_reads', r => r.userId === userId && r.chapterId === chapterId)[0] || null;
+}
+function chapterReadDone(userId, chapterId) {
+  const row = findChapterRead(userId, chapterId);
+  return !!(row && row.completedAt);
+}
+function requireChapterRead(user, book, chapter) {
+  const range = readingRangeOf(book, chapter);
+  if (!range) return;
+  need(chapterReadDone(user.id, chapter.id),
+    'Read "' + String((chapter && chapter.title) || 'this chapter') + '" to its last page (page ' +
+    range.to + ') before answering. Open the chapter pages and turn to page ' + range.to + '.', 403);
+}
 /* Key-word assessment of a submission: the stored score, or computed from the
    text for submissions made before the key-word feature existed. */
 function assessOf(s) {
@@ -537,11 +574,19 @@ function bookProgress(user, module, book) {
     const sub = findSub(user.id, type, { chapterId: ch.id });
     const unlocked = prevDone;
     const kwords = chapterKeywords(ch);
+    /* the answer area opens only at the chapter's last page (see the reading
+       gate above); a chapter with no pages of its own is always answerable */
+    const range = readingRangeOf(book, ch);
+    const readRow = findChapterRead(user.id, ch.id);
     const state = {
       id: ch.id, title: ch.title, content: ch.content,
       pageStart: ch.pageStart, pageEnd: ch.pageEnd, order: ch.order,
       objectiveCount: objectivesOf(ch.id, tenantId).length,
       keywords: kwords.list, keywordsSource: kwords.source,
+      requiresReading: !!range,
+      read: !range || !!(readRow && readRow.completedAt),
+      readAt: readRow && readRow.completedAt ? readRow.completedAt : null,
+      lastPage: readRow && readRow.lastPage != null ? Number(readRow.lastPage) : null,
       submission: subMeta(sub),
       status: sub ? 'done' : (unlocked ? 'active' : 'locked')
     };
@@ -1148,6 +1193,50 @@ route('GET', '/api/chapter/([a-z0-9_-]+)/objectives', ({ user, token, params }) 
     objectives: shuffled.map(o => ({ id: o.id, question: o.question, options: shuffleWithSeed(o.options, o.id + token) })) };
 });
 
+/* The reader reports the page it has reached. Reaching the chapter's LAST page
+   records that the chapter has been read; that record is what opens the answer
+   area. Earlier pages only update the bookmark, so a learner can go back and
+   re-read without losing the unlock. */
+route('POST', '/api/chapter/([a-z0-9_-]+)/read', ({ user, params, body }) => {
+  requireRole(user, PARTICIPANTS);
+  const chapter = dbm.byId('chapters', params[0]);
+  need(chapter, 'Chapter not found', 404);
+  const book = dbm.byId('books', chapter.bookId);
+  need(book && (book.scope === 'global' || book.scope === user.tenantId), 'Not available', 403);
+  const module = dbm.byId('modules', book.moduleId);
+  const st = moduleStatuses(user).find(m => m.id === module.id);
+  need(st, 'Module not found', 404);
+  need(st.status === 'active', 'This module is not active for you right now', 403);
+
+  body = body || {};
+  const range = readingRangeOf(book, chapter);
+  const page = Math.max(0, Number(body.page) || 0);
+  const existing = findChapterRead(user.id, chapter.id);
+  if (!range) {
+    /* nothing to read: an answer area that has no pages stays open */
+    return { ok: true, required: false, read: true, lastPage: page, pageEnd: null,
+      readAt: existing && existing.completedAt ? existing.completedAt : null };
+  }
+  const reached = Math.min(Math.max(page, range.from), range.to);
+  const done = reached >= range.to;
+  let row = existing;
+  if (!row) {
+    row = { id: dbm.uid('crd'), tenantId: user.tenantId, userId: user.id,
+      chapterId: chapter.id, bookId: book.id, lastPage: reached, pageEnd: range.to,
+      completedAt: done ? dbm.nowISO() : null, createdAt: dbm.nowISO() };
+    dbm.collection('chapter_reads').push(row);
+    dbm.save();
+  } else {
+    let touched = false;
+    if (reached > (Number(row.lastPage) || 0)) { row.lastPage = reached; touched = true; }
+    if (done && !row.completedAt) { row.completedAt = dbm.nowISO(); touched = true; }
+    if (Number(row.pageEnd) !== range.to) { row.pageEnd = range.to; touched = true; }
+    if (touched) dbm.save();
+  }
+  return { ok: true, required: true, read: !!row.completedAt,
+    lastPage: Number(row.lastPage) || 0, pageEnd: range.to, readAt: row.completedAt || null };
+});
+
 /* ------------------------------------------------------- submissions ----- */
 route('POST', '/api/submissions', ({ user, token, body }) => {
   requireRole(user, PARTICIPANTS);
@@ -1228,6 +1317,7 @@ route('POST', '/api/submissions', ({ user, token, body }) => {
     need(mod.mode === 'summary', 'This module uses objectives, not typed chapter summaries', 403);
     activeModule(mod);
     chapterGates(book, chapter);
+    requireChapterRead(user, book, chapter);
     need(!findSub(user.id, 'chapter_summary', { chapterId: chapter.id }), 'You already submitted this chapter');
     requireText();
     store({ type, chapterId: chapter.id, bookId: book.id, moduleId: mod.id }, { chapterId: chapter.id });
@@ -1241,6 +1331,7 @@ route('POST', '/api/submissions', ({ user, token, body }) => {
     need(mod.mode === 'objectives', 'This module uses typed summaries, not objectives', 403);
     activeModule(mod);
     chapterGates(book, chapter);
+    requireChapterRead(user, book, chapter);
     need(!findSub(user.id, 'objectives', { chapterId: chapter.id }), 'You already submitted this chapter');
     const objs = objectivesOf(chapter.id, tenantId);
     need(objs.length, 'No objectives have been set for this chapter yet. Ask your administrator.');
@@ -2458,6 +2549,9 @@ route('DELETE', '/api/books/([a-z0-9_-]+)', ({ user, params }) => {
   const chIds = dbm.db.chapters.filter(c => c.bookId === book.id).map(c => c.id);
   dbm.db.objectives = dbm.db.objectives.filter(o => chIds.indexOf(o.chapterId) === -1);
   dbm.db.chapters = dbm.db.chapters.filter(c => c.bookId !== book.id);
+  /* a deleted book takes its chapter reading marks with it */
+  dbm.db.chapter_reads = dbm.collection('chapter_reads').filter(r =>
+    r.bookId !== book.id && chIds.indexOf(r.chapterId) === -1);
   dbm.remove('books', book.id);
   return { ok: true };
 });
@@ -2505,6 +2599,7 @@ route('DELETE', '/api/chapters/([a-z0-9_-]+)', ({ user, params }) => {
   need(ch, 'Chapter not found', 404);
   need(canEdit(user, ch), 'Not permitted', 403);
   dbm.db.objectives = dbm.db.objectives.filter(o => o.chapterId !== ch.id);
+  dbm.db.chapter_reads = dbm.collection('chapter_reads').filter(r => r.chapterId !== ch.id);
   dbm.remove('chapters', ch.id);
   return { ok: true };
 });
@@ -3389,13 +3484,28 @@ function canMessage(user, recipient) {
   return false;
 }
 
+function conversationVisibleTo(user, conversation) {
+  if (!conversation || !Array.isArray(conversation.participantIds) ||
+    !conversation.participantIds.includes(user.id)) return false;
+  if (conversation.tenantId === user.tenantId) return true;
+  /* Older super-admin messages were saved with a null tenant. Keep those
+     conversations accessible, but never relax isolation for other accounts. */
+  if (conversation.tenantId != null) return false;
+  return conversation.participantIds.some(id => {
+    const person = dbm.byId('users', id);
+    return person && person.role === 'super';
+  });
+}
+
 function conversationFor(user, recipient) {
   const participants = [user.id, recipient.id].sort();
+  const tenantId = user.role === 'super' ? recipient.tenantId : user.tenantId;
   let conversation = dbm.collection('conversations').find(c =>
-    c.tenantId === user.tenantId && Array.isArray(c.participantIds) &&
+    (c.tenantId === tenantId || c.tenantId == null) && Array.isArray(c.participantIds) &&
     c.participantIds.length === 2 && c.participantIds.slice().sort().join('|') === participants.join('|'));
+  if (conversation && conversation.tenantId == null) conversation.tenantId = tenantId;
   if (!conversation) {
-    conversation = { id: dbm.uid('cnv'), tenantId: user.tenantId,
+    conversation = { id: dbm.uid('cnv'), tenantId: tenantId,
       participantIds: participants, createdAt: dbm.nowISO(), updatedAt: dbm.nowISO() };
     dbm.collection('conversations').push(conversation);
   }
@@ -3437,10 +3547,11 @@ function messageAttachKind(name) {
   return 'file';   /* pdf, txt, doc, docx, rtf, odt and anything else */
 }
 
-function conversationsFor(user) {
-  let list = dbm.collection('conversations').filter(c =>
-    user.role === 'super' || (c.tenantId === user.tenantId && Array.isArray(c.participantIds) && c.participantIds.includes(user.id)));
-  return list.map(c => {
+function messageInboxFor(user) {
+  const sentMessages = [];
+  const list = dbm.collection('conversations').filter(c =>
+    user.role === 'super' || conversationVisibleTo(user, c));
+  const conversations = list.map(c => {
       const messages = dbm.collection('messages').filter(m => m.conversationId === c.id)
         .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
       const peerId = user.role === 'super' ? null : c.participantIds.find(id => id !== user.id);
@@ -3448,34 +3559,44 @@ function conversationsFor(user) {
       const superLabel = user.role === 'super'
         ? (c.participantIds || []).map(id => { const u = dbm.byId('users', id); return u ? u.fullName : id; }).join(' ↔ ')
         : null;
+      const participant = user.role === 'super'
+        ? { id: (c.participantIds || [])[0], fullName: superLabel, role: 'conversation' }
+        : (peer ? { id: peer.id, fullName: peer.fullName, role: peer.role } : null);
+      messages.forEach(m => {
+        if (m.senderId === user.id) sentMessages.push({
+          id: m.id, conversationId: c.id, recipient: participant, body: m.body,
+          attachments: m.attachments || [], createdAt: m.createdAt, readAt: m.readAt || null
+        });
+      });
       const unread = messages.filter(m => m.senderId !== user.id && !m.readAt).length;
       const latest = messages[messages.length - 1];
       return {
         id: c.id,
-        participant: user.role === 'super'
-          ? { id: (c.participantIds || [])[0], fullName: superLabel, role: 'conversation' }
-          : (peer ? { id: peer.id, fullName: peer.fullName, role: peer.role } : null),
-        latestMessage: latest ? { body: latest.body, createdAt: latest.createdAt, senderId: latest.senderId } : null,
+        participant,
+        latestMessage: latest ? { body: latest.body, attachments: latest.attachments || [],
+          createdAt: latest.createdAt, senderId: latest.senderId } : null,
         unread,
         updatedAt: c.updatedAt || (latest && latest.createdAt) || c.createdAt
       };
     })
     .filter(c => c.participant)
     .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  sentMessages.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  return { conversations, sentMessages };
 }
 
 function conversationForUser(user, conversationId) {
   const conversation = dbm.byId('conversations', conversationId);
   if (user.role === 'super') { need(conversation, 'Conversation not found', 404); return conversation; }
-  need(conversation && conversation.tenantId === user.tenantId &&
-    Array.isArray(conversation.participantIds) && conversation.participantIds.includes(user.id),
-    'Conversation not found', 404);
+  need(conversationVisibleTo(user, conversation), 'Conversation not found', 404);
   return conversation;
 }
 
 route('GET', '/api/messages', ({ user }) => {
   requireRole(user, ['super', 'tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
-  return { ok: true, conversations: conversationsFor(user), recipients: messagingUsers(user) };
+  const inbox = messageInboxFor(user);
+  return { ok: true, conversations: inbox.conversations, sentMessages: inbox.sentMessages,
+    recipients: messagingUsers(user) };
 });
 
 route('POST', '/api/messages', ({ user, body }) => {

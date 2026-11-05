@@ -261,6 +261,66 @@ function maybe_send_video_alert(array $user, array $submission): ?array {
         'milestone' => $milestone, 'chaptersCompleted' => $chapters, 'createdAt' => iso($createdAt)];
 }
 
+/* The reader reports the page it has reached. The chapter's LAST page records
+   that the chapter has been read — that record opens its answer area (mirrors
+   the Node route). Earlier pages only move the bookmark, so a learner can go
+   back and re-read without losing the unlock. Returns nothing when the chapter
+   has no pages of its own (or the mark cannot be stored): nothing to read. */
+function r_chapter_read($user, $body, $params, $token, $query) {
+    global $PARTICIPANTS;
+    require_role($user, $PARTICIPANTS);
+    $id = $params[0] ?? null;
+    need($id, 'Chapter id required', 400);
+    $pdo = db();
+    $st = $pdo->prepare('SELECT * FROM chapters WHERE id=? LIMIT 1');
+    $st->execute([$id]);
+    $ch = $st->fetch();
+    need($ch, 'Chapter not found', 404);
+    need(($ch['scope'] === 'global' || $ch['scope'] === $user['tenant_id']), 'Not permitted', 403);
+    $st = $pdo->prepare('SELECT * FROM books WHERE id=? LIMIT 1');
+    $st->execute([$ch['book_id']]);
+    $brow = $st->fetch();
+    need($brow, 'Book not found', 404);
+    need(($brow['scope'] === 'global' || $brow['scope'] === $user['tenant_id']), 'Not permitted', 403);
+    $st = $pdo->prepare('SELECT * FROM modules WHERE id=? LIMIT 1');
+    $st->execute([$brow['module_id']]);
+    $mrow = $st->fetch();
+    need($mrow, 'Module not found', 404);
+    $module = n_module($mrow);
+    $book = n_book($brow);
+    $chapter = n_chapter($ch);
+    $mst = null;
+    foreach (module_statuses($user) as $s) if ($s['id'] === $module['id']) { $mst = $s; break; }
+    need($mst, 'Module not found', 404);
+    need($mst['status'] === 'active', 'This module is not active for you right now', 403);
+
+    $range = chapter_reading_range($book, $chapter);
+    $page = max(0, (int)($body['page'] ?? 0));
+    $row = find_chapter_read($user['id'], $ch['id']);
+    if (!$range) {
+        return ['required' => false, 'read' => true, 'lastPage' => $page, 'pageEnd' => null,
+            'readAt' => ($row && !empty($row['completed_at'])) ? iso($row['completed_at']) : null];
+    }
+    $reached = min(max($page, $range['from']), $range['to']);
+    $done = $reached >= $range['to'];
+    if (!$row) {
+        $pdo->prepare('INSERT INTO chapter_reads
+            (id,tenant_id,user_id,chapter_id,book_id,last_page,page_end,completed_at,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?)')->execute([uid('crd'), $user['tenant_id'], $user['id'],
+                $ch['id'], $brow['id'], $reached, $range['to'], $done ? now_dt() : null, now_dt()]);
+    } else {
+        $lastPage = max((int)$row['last_page'], $reached);
+        $completed = !empty($row['completed_at']) ? $row['completed_at'] : ($done ? now_dt() : null);
+        $pdo->prepare('UPDATE chapter_reads SET last_page=?, page_end=?, completed_at=? WHERE id=?')
+            ->execute([$lastPage, $range['to'], $completed, $row['id']]);
+    }
+    $row = find_chapter_read($user['id'], $ch['id']);
+    $doneNow = $row !== null && !empty($row['completed_at']);
+    return ['required' => true, 'read' => $doneNow,
+        'lastPage' => $row ? (int)$row['last_page'] : $reached, 'pageEnd' => $range['to'],
+        'readAt' => $doneNow ? iso($row['completed_at']) : null];
+}
+
 function r_submissions($user, $body, $params, $token, $query) {
   global $PARTICIPANTS;
   require_role($user, $PARTICIPANTS);
@@ -291,6 +351,9 @@ function r_submissions($user, $body, $params, $token, $query) {
     need($cur, 'Chapter not found', 404);
     need(!$cur['submission'], 'Already submitted', 400);
     need($cur['status'] === 'active', 'Submit previous chapters first', 403);
+    /* the answer area only opens once the chapter's pages have been read to the
+       last page (no-op for a chapter without pages of its own) */
+    require_chapter_read($user, $book, n_chapter($ch));
     $ex = find_sub($user['id'], $type, ['chapter_id' => $ch['id']]);
     need(!$ex, 'Already submitted', 400);
     if ($type === 'chapter_summary') {

@@ -83,6 +83,12 @@ node tools/chapter-lock-browser-check.js http://127.0.0.1:3000 # submits a chapt
                                                     # browser and proves that chapter then becomes
                                                     # inactive: disabled, and clicks do nothing
                                                     # (uses STU-002 — reseed after three runs)
+node tools/chapter-read-gate-check.js   # a chapter's answer area opens only at its LAST page
+                                        # (throw-away database; whole learner journey)
+node tools/chapter-read-gate-browser-check.js http://127.0.0.1:3000 # the same rule in a REAL
+                                                    # browser: the answer area is drawn but shut,
+                                                    # opens when the last page is reached, and the
+                                                    # reader still allows going back to re-read
 node tools/analytics-api-check.js http://127.0.0.1:3000 # analytics scope: each account sees
                                                     # only itself, supervisors only their
                                                     # members, copy flags name both people
@@ -90,8 +96,8 @@ node tools/analytics-api-check.js http://127.0.0.1:3000 # analytics scope: each 
 
 Handy npm shortcuts: `npm run check:routes`, `npm run check:ui`, `npm run check:api`,
 `npm run check:api:php`, `npm run check:live`, `npm run check:pages`, `npm run check:keywords`,
-`npm run check:browser`, `npm run check:chapter-lock`, `npm run check:analytics`,
-`npm run check:reading`.
+`npm run check:browser`, `npm run check:chapter-lock`, `npm run check:read-gate`,
+`npm run check:read-gate-ui`, `npm run check:analytics`, `npm run check:reading`.
 
 `npm run check:reading` covers the reading features on a throw-away database: the
 best-performer ribbon at the top of the students page (top 50 of ONE account, ranked
@@ -111,7 +117,10 @@ It adds the key-word columns used to assess typed answers and the transcript
 snapshot stored with the general graduation certificate. Existing graduates
 receive their transcript the next time their certificates are loaded. It also
 adds the supervisor waitlist flag and messaging, conversation, and notification
-tables, and marks existing unassigned learners for automatic placement.
+tables, and marks existing unassigned learners for automatic placement. It also
+creates the `chapter_reads` table that remembers how far a learner has read each
+chapter — the record that opens a chapter's answer area at its last page
+(`chapter.reading-gate`).
 
 ### "Unknown endpoint: GET /api/..." — the server is running older code
 
@@ -371,8 +380,21 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
    and **no full-book PDF is offered on that page** at all. The sheet is fitted to
    the page's **own shape** and to the space it has, so the whole page is visible:
    the page is scaled down (its print gets smaller) instead of being cropped, and
-   it changes shape for a square or landscape page rather than assuming A4. Only
-   the chapter that is open **now** responds to clicks: a chapter that has been
+   it changes shape for a square or landscape page rather than assuming A4.
+   **The answer area of a chapter opens only when the reader reaches the LAST
+   page of that chapter** (`chapter.reading-gate`). Until then the answer area is
+   drawn but shut — a disabled box/textarea with a lock note naming the page to
+   reach — and the reader is fully usable: the learner turns the pages, may go
+   back and forward as often as they like, and the moment the last page is shown
+   the answer area opens (the reader reports the page it reached, and the server
+   records the chapter as read). That record lives on the server
+   (`chapter_reads`), so reloading, signing in again or calling the API directly
+   cannot skip the reading; both backends also refuse an answer with
+   `Read "…" to its last page (page N) before answering` (403). Reading is never
+   taken away once done, so a chapter can always be re-read. A chapter whose book
+   has no PDF, or that has no page range of its own, has nothing to read and stays
+   answerable as before.
+   Only the chapter that is open **now** responds to clicks: a chapter that has been
    **submitted** and one that is **not unlocked yet** are both **inactive** — drawn
    as disabled buttons (dimmed, lock glyph on the locked ones, the reason on
    hover) with **no click handler at all**, so clicking them changes nothing, and

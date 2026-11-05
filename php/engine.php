@@ -141,6 +141,49 @@ function get_library(?string $id): ?array {
     $r = $stmt->fetch();
     return $r ? n_library($r) : null;
 }
+/* ---------------------------------------------- chapter reading gate ----- */
+/* A chapter's work may only be answered once its OWN pages have been read to
+   the LAST page. This mirrors readingRangeOf()/requireChapterRead() in the Node
+   build, so both backends answer the same way. The mark is kept in
+   chapter_reads, so a reload (or a direct API call) cannot skip the reading,
+   and it is never taken away — a learner may always go back and re-read.
+   The gate only applies where there is something to read: a chapter needs its
+   own page range AND its book needs a PDF. */
+function chapter_page_range(?array $chapter): ?array {
+    $from = (int)($chapter['pageStart'] ?? 0);
+    $to = (int)($chapter['pageEnd'] ?? 0);
+    return ($from > 0 && $to >= $from) ? ['from' => $from, 'to' => $to] : null;
+}
+function chapter_read_store(): bool {
+    /* before migrate.php there is nowhere to keep a reading mark, so no gate */
+    return has_table('chapter_reads');
+}
+function chapter_reading_range(?array $book, ?array $chapter): ?array {
+    if (!chapter_read_store()) return null;
+    $pages = chapter_page_range($chapter);
+    if (!$pages) return null;
+    $lib = ($book && !empty($book['libraryId'])) ? get_library((string)$book['libraryId']) : null;
+    $url = ($lib && ($lib['type'] ?? '') === 'book') ? trim((string)($lib['url'] ?? '')) : '';
+    return $url !== '' ? $pages : null;
+}
+function find_chapter_read(string $userId, string $chapterId): ?array {
+    if (!chapter_read_store()) return null;
+    $st = db()->prepare('SELECT * FROM chapter_reads WHERE user_id=? AND chapter_id=? LIMIT 1');
+    $st->execute([$userId, $chapterId]);
+    $r = $st->fetch();
+    return $r ?: null;
+}
+function chapter_read_done(string $userId, string $chapterId): bool {
+    $row = find_chapter_read($userId, $chapterId);
+    return $row !== null && !empty($row['completed_at']);
+}
+function require_chapter_read(array $user, array $book, array $chapter): void {
+    $range = chapter_reading_range($book, $chapter);
+    if (!$range) return;
+    need(chapter_read_done($user['id'], $chapter['id']),
+        'Read "' . ($chapter['title'] ?: 'this chapter') . '" to its last page (page ' .
+        $range['to'] . ') before answering. Open the chapter pages and turn to page ' . $range['to'] . '.', 403);
+}
 function book_progress(array $user, array $module, array $book): array {
     $tenantId = $user['tenant_id'];
     $chapters = chapters_of($book['id'], $tenantId);
@@ -150,10 +193,18 @@ function book_progress(array $user, array $module, array $book): array {
         $sub = find_sub($user['id'], $type, ['chapter_id' => $ch['id']]);
         $unlocked = $prevDone;
         $kwList = chapter_keywords($ch);
+        /* the answer area opens only at the chapter's last page (see the reading
+           gate above); a chapter with no pages of its own is always answerable */
+        $range = chapter_reading_range($book, $ch);
+        $readRow = $range ? find_chapter_read($user['id'], $ch['id']) : null;
+        $readDone = $readRow !== null && !empty($readRow['completed_at']);
         $states[] = ['id' => $ch['id'], 'title' => $ch['title'], 'content' => $ch['content'],
             'pageStart' => $ch['pageStart'], 'pageEnd' => $ch['pageEnd'], 'order' => $ch['order'],
             'keywords' => $kwList['list'], 'keywordsSource' => $kwList['source'],
             'objectiveCount' => count(objectives_of($ch['id'], $tenantId)),
+            'requiresReading' => (bool)$range, 'read' => !$range || $readDone,
+            'readAt' => $readDone ? iso($readRow['completed_at']) : null,
+            'lastPage' => ($readRow && $readRow['last_page'] !== null) ? (int)$readRow['last_page'] : null,
             'submission' => sub_meta($sub),
             'status' => $sub ? 'done' : ($unlocked ? 'active' : 'locked')];
         $prevDone = (bool)$sub;

@@ -1,5 +1,5 @@
 {
-  "build": "2026-10-29-reading-ribbon",
+  "build": "2026-10-30-library-media-letters",
   "features": [
     "health",
     "super.analytics",
@@ -19,8 +19,11 @@
     "keywords",
     "reader.book",
     "library.lock",
+    "library.media",
+    "library.letters",
     "certificates",
     "chapter.pages",
+    "chapter.reading-gate",
     "exports",
     "assessment",
     "assessment.admin",

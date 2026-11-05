@@ -242,6 +242,21 @@ tr:hover td { background: #f8faff; }
   text-decoration: none; color: var(--brand, #24508c); font-size: 13px;
 }
 .cbp-comms-att-link:hover { background: var(--brand-soft, #e7eefb); }
+button.cbp-comms-att-link { cursor: pointer; text-align: left; }
+.cbp-comms-sent-item { padding: 0; overflow: hidden; }
+.cbp-comms-sent-open {
+  display: grid; gap: 3px; width: 100%; padding: 10px 12px; text-align: left;
+  color: var(--ink); background: transparent; border: 0; border-radius: 0;
+}
+.cbp-comms-sent-open:hover { background: var(--brand-tint); color: var(--ink); }
+.cbp-comms-sent-open span, .cbp-comms-sent-open small { overflow-wrap: anywhere; }
+.cbp-comms-sent-item > .cbp-comms-att { margin: 0; padding: 0 12px 10px; }
+.cbp-attachment-preview { display: grid; place-items: center; margin: 16px 0; }
+.cbp-attachment-preview img { max-width: 100%; max-height: 60vh; border-radius: 10px; }
+.cbp-attachment-preview video { width: 100%; max-height: 60vh; background: #000; border-radius: 10px; }
+.cbp-attachment-preview audio { width: 100%; }
+.cbp-attachment-preview iframe { width: 100%; height: 60vh; border: 1px solid var(--line); border-radius: 10px; }
+.cbp-attachment-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .err-text { color: var(--bad); font-size: 13px; }
 
 .muted { color: var(--muted); }
@@ -494,6 +509,17 @@ table.nested td { font-size: 12px; }
 .chapter-body { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; }
 .chapter-body .content { white-space: pre-wrap; font-size: 16px; line-height: 1.7; }
 .no-paste { background: #fffdf3; border: 1px dashed var(--gold); }
+
+/* A chapter's answer area stays shut until its own pages have been read to the
+   last page (feature chapter.reading-gate). The reader stays usable the whole
+   time, so a learner can always go back and read the chapter again. */
+.read-gate { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px;
+  padding: 12px 14px; border: 1px dashed var(--gold); border-radius: 12px; background: #fffdf3; }
+.read-gate .lock { font-size: 18px; line-height: 1; }
+.read-gate b { display: block; }
+.read-gate .small { display: block; margin-top: 2px; }
+.chapter-body textarea[disabled] { background: #f2f5fa; color: var(--muted); cursor: not-allowed; }
+.obj.locked { opacity: .6; }
 
 /* Voice typing: a mic button tucked into the corner of every textarea. */
 .speech-field { position: relative; }
