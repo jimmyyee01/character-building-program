@@ -263,6 +263,19 @@ function media_out(?array $row): ?array {
         'kind' => ($row['media_kind'] ?? '') === 'audio' ? 'audio' : 'video',
         'name' => $row['media_name'] ?? null, 'size' => isset($row['media_size']) ? (int)$row['media_size'] : null];
 }
+/* The same clip as FLAT fields, which is how the Node backend keeps it on the
+   record itself (mediaFieldsFrom in server/api.js). The API tests read these, so
+   a PHP row must carry them too — nested `media` alone is not parity. */
+function media_flat(?array $row): array {
+    $url = $row['media_url'] ?? null;
+    return [
+        'mediaUrl' => $url ?: null,
+        'mediaName' => $url ? ($row['media_name'] ?? null) : null,
+        'mediaSize' => ($url && isset($row['media_size']) && $row['media_size'] !== null)
+            ? (int)$row['media_size'] : null,
+        'mediaKind' => $url ? (($row['media_kind'] ?? '') === 'audio' ? 'audio' : 'video') : null,
+    ];
+}
 
 /* ------------------------------------------------------------ rich text -- */
 /* Letters are written in a small editor on the admin pages. Only this allow-list

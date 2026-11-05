@@ -76,6 +76,16 @@ function prepareGraduationDatabase() {
       performance: 100, issuedAt: new Date().toISOString()
     });
   });
+  const superUser = data.users.find(user => user.role === 'super') || {
+    id: 'test_super_admin', tenantId: null, role: 'super', fullName: 'Super Administrator'
+  };
+  if (!data.users.some(user => user.id === superUser.id)) data.users.push(superUser);
+  (data.conversations = data.conversations || []).push({ id: 'test_legacy_super_conversation', tenantId: null,
+    participantIds: [superUser.id, graduate.id].sort(),
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  (data.messages = data.messages || []).push({ id: 'test_legacy_super_message', conversationId: 'test_legacy_super_conversation',
+    senderId: superUser.id, body: 'Legacy super admin delivery.', attachments: [],
+    createdAt: new Date().toISOString(), readAt: null });
   fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf8');
   return graduate.id;
 }
@@ -98,6 +108,10 @@ async function main() {
   check('seeded account admin, supervisor, learner and separate-account logins',
     !!admin && !!supervisor && !!graduate && !!schoolAdmin);
   if (!admin || !supervisor || !graduate || !schoolAdmin) throw new Error('Missing seeded messaging test account');
+
+  const legacyInbox = await call(base, '/messages', graduate);
+  check('existing super-admin conversation with no tenant remains in the recipient inbox',
+    (legacyInbox.data.conversations || []).some(c => c.id === 'test_legacy_super_conversation' && c.unread === 1));
 
   await call(base, '/certificates', graduate);
   const completionAlerts = await call(base, '/notifications', supervisor);
@@ -167,7 +181,8 @@ async function main() {
     'submission ' + submissionResult.status + ' ' + JSON.stringify(submissionResult.data));
 
   let result = await call(base, '/messages', admin, {
-    method: 'POST', body: { recipientIds: [memberMe.data.user.id], body: 'Welcome to the programme.' }
+    method: 'POST', body: { recipientIds: [memberMe.data.user.id], body: 'Welcome to the programme.',
+      attachments: [{ name: 'welcome.txt', base64: Buffer.from('Welcome attachment').toString('base64') }] }
   });
   check('account admin can message a learner in the account', result.status === 200 && result.data.sent === 1);
   const memberInbox = await call(base, '/messages', member);
@@ -192,6 +207,18 @@ async function main() {
   const adminConversation = (adminInbox.data.conversations || []).find(c =>
     c.participant && c.participant.id === memberMe.data.user.id);
   check('reply appears for the account admin', !!adminConversation && adminConversation.unread === 1);
+  const adminSentMessage = (adminInbox.data.sentMessages || []).find(m =>
+    m.body === 'Welcome to the programme.');
+  check('sent folder keeps the original message and attachment after a reply',
+    !!adminSentMessage && adminSentMessage.conversationId === memberConversation.id &&
+      adminSentMessage.recipient && adminSentMessage.recipient.id === memberMe.data.user.id &&
+      (adminSentMessage.attachments || []).length === 1 &&
+      adminSentMessage.attachments[0].name === 'welcome.txt' &&
+      /^\/uploads\//.test(adminSentMessage.attachments[0].url));
+  if (adminSentMessage && adminSentMessage.attachments && adminSentMessage.attachments[0]) {
+    const testUpload = path.join(ROOT, adminSentMessage.attachments[0].url.replace(/^\/+/, ''));
+    if (testUpload.indexOf(path.join(ROOT, 'uploads') + path.sep) === 0) fs.rmSync(testUpload, { force: true });
+  }
   result = await call(base, '/messages/' + memberConversation.id, supervisor);
   check('a non-participant cannot read another conversation', result.status === 404);
   result = await call(base, '/notifications/' + adminMessageAlert.id + '/read', supervisor, { method: 'PUT' });
@@ -245,6 +272,34 @@ async function main() {
     method: 'POST', body: { recipientIds: [memberMe.data.user.id], body: 'Cross-account attempt.' }
   });
   check('account isolation blocks messages across tenants', result.status === 403);
+
+  const superLogin = await call(base, '/auth/super-login', null, {
+    method: 'POST', body: { username: 'superadmin', password: 'SuperAdmin@123' }
+  });
+  const superToken = superLogin.data.token;
+  const adminMe = await call(base, '/me', admin);
+  const superDelivery = await call(base, '/messages', superToken, { method: 'POST', body: {
+    recipientIds: [adminMe.data.user.id, supervisorMe.data.user.id, memberMe.data.user.id],
+    body: 'Super admin delivery check.'
+  } });
+  check('super admin can send to an account admin, supervisor and learner',
+    !!superToken && superDelivery.status === 200 && superDelivery.data.sent === 3);
+  for (const recipient of [
+    { name: 'account admin', token: admin, id: adminMe.data.user.id },
+    { name: 'supervisor', token: supervisor, id: supervisorMe.data.user.id },
+    { name: 'learner', token: member, id: memberMe.data.user.id }
+  ]) {
+    const inbox = await call(base, '/messages', recipient.token);
+    const delivered = (inbox.data.conversations || []).find(c =>
+      c.latestMessage && c.latestMessage.body === 'Super admin delivery check.');
+    check('super-admin message appears in the ' + recipient.name + ' inbox',
+      !!delivered && delivered.unread === 1 && delivered.participant && delivered.participant.role === 'super');
+    if (delivered) {
+      const thread = await call(base, '/messages/' + delivered.id, recipient.token);
+      check(recipient.name + ' can open the super-admin conversation',
+        thread.status === 200 && (thread.data.messages || []).some(m => m.body === 'Super admin delivery check.'));
+    }
+  }
 
   console.log('\n' + (failures ? failures + ' messaging check(s) failed' : 'Messaging checks passed'));
   if (failures) process.exitCode = 1;
