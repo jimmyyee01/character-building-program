@@ -116,7 +116,9 @@ best-performer ribbon at the top of the students page (top 50 of ONE account, ra
 by marks and coverage), the book-open counts behind the account's Reading activity
 card (opens, books opened at least once, most liked, one learner's own books), and
 the video alert a learner receives in their messages after every third finished
-chapter (never the same video twice for the same learner).
+chapter (never the same video twice for the same learner unless the super admin
+chose that video for the point). The video each point unlocks is the super admin's
+choice — see **Video alerts** in the Super Admin console below.
 
 If you are updating an **existing PHP database**, run the migration once after
 pulling (it adds missing fields and preserves existing records):
@@ -323,6 +325,15 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
   long scrolling document. Every page is shown WHOLE inside the sheet (the
   viewer fits the page, so the text may be smaller but nothing is cut off) and
   the viewer's scrollbar strip is covered rather than cropped.
+- **Video alerts** — every third finished chapter opens a **point** and puts one
+  library video in the learner's messages (point 1 = after 3 chapters, point 2 =
+  after 6, and so on). The super admin chooses the video each point unlocks in
+  this screen, so nothing is handed out anonymously; a point left at
+  *automatic* still sends a video the learner has never had, so a milestone is
+  never lost. A point belongs to every account, which is why only a program-wide
+  (Global) library video can be chosen. The screen also lists the alerts handed
+  out lately, with the learner, the point and whether the video was chosen or
+  automatic.
 - **Books & Chapters** — set chapters (title, content, page ranges) and enter
   the objective questions (question, options, correct answer). A chapter of an
   objectives module may hold **as many questions as the administrators care to

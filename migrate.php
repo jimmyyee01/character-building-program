@@ -49,6 +49,11 @@ $wanted = [
         'library_id' => 'VARCHAR(64) NULL',
         'video_url' => 'VARCHAR(1000) NULL',
     ],
+    'video_alerts' => [
+        /* whether the super admin chose the video for that point ('super') or it
+           was drawn automatically ('auto') */
+        'chosen_by' => 'VARCHAR(10) NULL',
+    ],
     'library' => [
         /* how big an uploaded video/audio/file is, shown while it uploads */
         'file_size' => 'BIGINT NULL',
@@ -156,9 +161,18 @@ try {
             video_url VARCHAR(1000) NULL,
             milestone VARCHAR(64) NOT NULL,
             chapters_completed INT NOT NULL DEFAULT 0,
+            chosen_by VARCHAR(10) NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE KEY uq_video_alert_milestone (user_id, milestone),
             INDEX (user_id, created_at), INDEX (library_id)
+        ) ENGINE=InnoDB',
+        /* The video each point unlocks, chosen by the super admin: point 1 is
+           unlocked by the third finished chapter, point 2 by the sixth … */
+        'CREATE TABLE IF NOT EXISTS video_alert_plan (
+            chapters INT PRIMARY KEY,
+            library_id VARCHAR(64) NOT NULL,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by VARCHAR(64) NULL
         ) ENGINE=InnoDB',
     ];
     foreach ($communicationTables as $ddl) db()->exec($ddl);

@@ -81,7 +81,8 @@ const RENDERERS = {
   modules: renderModules, library: renderLibrary, books: renderBooks,
   users: renderUsers, reports: renderReports, progress: renderProgress,
   assessment: renderAssessment, analytics: renderAnalytics,
-  settings: renderSettings, lessons: renderLessons
+  settings: renderSettings, lessons: renderLessons,
+  videos: renderVideoAlerts
 };
 
 function showView(name) {
@@ -1888,6 +1889,84 @@ async function deleteLibrary(id) {
     drop('library');
     renderLibrary();
   } catch (err) { fail(err); }
+}
+/* ============================================ video alerts / points ====== */
+/* A learner unlocks ONE library video every third finished chapter. The super
+   admin chooses which video each point opens (point 1 = after 3 chapters, point
+   2 = after 6 …), so nothing is picked anonymously. A point left at
+   "automatic" still sends a video the learner has never had. A point belongs to
+   every account, so the picker offers the program-wide (global) videos only. */
+async function renderVideoAlerts() {
+  const v = $('view-videos');
+  if (!v) return;
+  v.innerHTML = loadMsg();
+  let d;
+  try { d = await API.get('/super/video-alerts'); }
+  catch (e) { v.innerHTML = errBox(e); return; }
+  const points = d.points || [];
+  const videos = d.videos || [];
+  const recent = d.recent || [];
+  if (!videos.length) {
+    v.innerHTML = '<h2>Video alerts</h2><div class="card">' +
+      '<p class="muted">The library holds no program-wide video yet. Upload a video in ' +
+      'the <b>Library</b> (scope: Global) and it appears here.</p></div>';
+    return;
+  }
+  const auto = points.filter(function (p) { return !p.libraryId; }).length;
+  const broken = points.filter(function (p) { return p.libraryId && !p.ok; }).length;
+  const opts = function (selected) {
+    return '<option value="">— automatic —</option>' + videos.map(function (i) {
+      const sel = String(i.id) === String(selected) ? ' selected' : '';
+      return '<option value="' + esc(String(i.id)) + '"' + sel + '>' +
+        esc(i.title || i.id) + '</option>';
+    }).join('');
+  };
+  const pointRows = points.map(function (p) {
+    const badge = !p.libraryId
+      ? '<span class="badge off">AUTOMATIC</span>'
+      : (p.ok ? '<span class="badge ok">CHOSEN</span>'
+        : '<span class="badge warn">VIDEO GONE</span>');
+    return '<tr><td><b>Point ' + esc(String(p.point)) + '</b>' +
+      '<div class="small muted">after ' + esc(String(p.chapters)) + ' chapters</div></td>' +
+      '<td>' + badge + (p.title ? ' <span class="small">' + esc(p.title) + '</span>' : '') + '</td>' +
+      '<td><select class="va-pick" data-chapters="' + esc(String(p.chapters)) + '">' +
+        opts(p.libraryId) + '</select></td></tr>';
+  }).join('');
+  const recentRows = recent.length ? recent.map(function (a) {
+    return '<tr><td>' + esc(a.learner || 'Learner') + '</td>' +
+      '<td>Point ' + esc(String(a.point || '—')) + '</td>' +
+      '<td>' + esc(a.title || '—') + ' ' +
+        (a.chosenBy === 'super' ? '<span class="badge ok">CHOSEN</span>'
+          : '<span class="badge off">AUTOMATIC</span>') + '</td>' +
+      '<td class="small">' + esc(a.createdAt ? fmtDate(a.createdAt) : '—') + '</td></tr>';
+  }).join('') : '<tr><td colspan="4" class="muted">No video has been unlocked yet.</td></tr>';
+  v.innerHTML = '<h2>Video alerts</h2>' +
+    '<div class="card"><h3>Which video each point unlocks</h3>' +
+      '<p class="small muted">Every third finished chapter opens a point and puts one ' +
+      'library video in the learner\'s messages. Choose the video here instead of leaving ' +
+      'it to a random pick — <b>point 1</b> is the third chapter, <b>point 2</b> the sixth, ' +
+      'and so on. A point left at <i>automatic</i> still sends a video the learner has ' +
+      'never had.</p>' +
+      (broken ? '<p class="badge warn">' + broken + ' chosen video(s) are no longer in the ' +
+        'library — pick another.</p>' : '') +
+      (auto ? '<p class="small muted">' + auto + ' of ' + points.length +
+        ' point(s) still automatic.</p>' : '') +
+      '<table><thead><tr><th>Point</th><th>Chosen video</th><th>Select a video</th>' +
+      '</tr></thead><tbody>' + pointRows + '</tbody></table></div>' +
+    '<div class="card"><h3>Unlocked lately</h3><table><thead><tr>' +
+      '<th>Learner</th><th>Point</th><th>Video</th><th>When</th>' +
+      '</tr></thead><tbody>' + recentRows + '</tbody></table></div>';
+  v.querySelectorAll('.va-pick').forEach(function (sel) {
+    sel.addEventListener('change', async function () {
+      const chapters = Number(sel.dataset.chapters) || 0;
+      try {
+        await API.put('/super/video-alerts', { chapters: chapters, libraryId: sel.value || '' });
+        toast(sel.value ? 'Video chosen for point ' + (chapters / 3)
+          : 'Point ' + (chapters / 3) + ' is automatic again', 'ok');
+        renderVideoAlerts();
+      } catch (e) { fail(e); renderVideoAlerts(); }
+    });
+  });
 }
 /* ================================================ books & chapters ======= */
 async function renderBooks() {

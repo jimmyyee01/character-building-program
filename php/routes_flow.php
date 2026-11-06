@@ -268,14 +268,40 @@ function r_reading_open(array $user, array $body, array $params, ?string $token,
     return ['key' => $key, 'timesOpened' => (int)$st->fetchColumn()];
 }
 
-/* Every third completed chapter earns one library video, chosen at random from
-   the ones this learner has never been sent. It arrives as an alert in the
-   messages, where the learner can play it. */
+/* Every third completed chapter opens a "point" and earns one library video.
+   The SUPER ADMIN chooses the video for each point in the console (point 1 =
+   after three chapters, point 2 = after six …), so nothing is handed out
+   anonymously. A point without a choice still sends a video this learner has
+   never had, so a milestone is never lost. */
 function completed_chapter_count(array $user): int {
     $st = db()->prepare("SELECT COUNT(DISTINCT chapter_id) FROM submissions
         WHERE user_id=? AND chapter_id IS NOT NULL AND type IN ('chapter_summary','objectives')");
     $st->execute([$user['id']]);
     return (int)$st->fetchColumn();
+}
+
+function video_alert_plan(): array {
+    if (!has_table('video_alert_plan')) return [];
+    $plan = [];
+    foreach (db()->query('SELECT chapters, library_id FROM video_alert_plan')->fetchAll() as $row) {
+        $plan[(int)$row['chapters']] = (string)($row['library_id'] ?? '');
+    }
+    return $plan;
+}
+function video_alert_point(int $chapters): int {
+    return max(1, (int)round($chapters / 3));
+}
+/* The video the super admin chose for this point — only when it is still a
+   playable GLOBAL video. One plan serves every account, so an account-only
+   video would leak into another school. */
+function planned_video(int $chapters): ?array {
+    $plan = video_alert_plan();
+    $id = $plan[$chapters] ?? '';
+    if ($id === '') return null;
+    $video = get_library($id);
+    if (!$video || ($video['type'] ?? '') !== 'video' || empty($video['url'])) return null;
+    if (($video['scope'] ?? '') !== 'global') return null;
+    return $video;
 }
 
 function maybe_send_video_alert(array $user, array $submission): ?array {
@@ -290,31 +316,49 @@ function maybe_send_video_alert(array $user, array $submission): ?array {
     $st = $pdo->prepare('SELECT 1 FROM video_alerts WHERE user_id=? AND milestone=? LIMIT 1');
     $st->execute([$user['id'], $milestone]);
     if ($st->fetchColumn()) return null;
-    $st = $pdo->prepare('SELECT library_id FROM video_alerts WHERE user_id=?');
-    $st->execute([$user['id']]);
-    $sent = array_map('strval', array_column($st->fetchAll(), 'library_id'));
-    $st = $pdo->prepare("SELECT id,title,url FROM library WHERE type='video'
-        AND url IS NOT NULL AND url<>'' AND (scope='global' OR scope=?)");
-    $st->execute([$user['tenant_id']]);
-    $videos = array_values(array_filter($st->fetchAll(),
-        fn($video) => !in_array((string)$video['id'], $sent, true)));
-    if (!count($videos)) return null;
-    $video = $videos[random_int(0, count($videos) - 1)];
+    $point = video_alert_point($chapters);
+    /* the super admin's choice wins; a point left automatic still sends a video
+       this learner has never had */
+    $chosen = planned_video($chapters);
+    if ($chosen) {
+        $video = $chosen;
+    } else {
+        $st = $pdo->prepare('SELECT library_id FROM video_alerts WHERE user_id=?');
+        $st->execute([$user['id']]);
+        $sent = array_map('strval', array_column($st->fetchAll(), 'library_id'));
+        $st = $pdo->prepare("SELECT id,title,url FROM library WHERE type='video'
+            AND url IS NOT NULL AND url<>'' AND (scope='global' OR scope=?)");
+        $st->execute([$user['tenant_id']]);
+        $videos = array_values(array_filter($st->fetchAll(),
+            fn($row) => !in_array((string)$row['id'], $sent, true)));
+        if (!count($videos)) return null;
+        $video = $videos[random_int(0, count($videos) - 1)];
+    }
     $id = uid('val');
     $createdAt = now_dt();
-    $pdo->prepare('INSERT INTO video_alerts (id,tenant_id,user_id,library_id,title,video_url,
-        milestone,chapters_completed,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-        ->execute([$id, $user['tenant_id'], $user['id'], $video['id'], $video['title'],
-            $video['url'], $milestone, $chapters, $createdAt]);
+    $columns = ['id','tenant_id','user_id','library_id','title','video_url',
+        'milestone','chapters_completed','created_at'];
+    $values = [$id, $user['tenant_id'], $user['id'], $video['id'], $video['title'], $video['url'],
+        $milestone, $chapters, $createdAt];
+    /* which video a point opens is the super admin's call now, so the pick is
+       recorded next to the alert */
+    if (has_column('video_alerts', 'chosen_by')) {
+        $columns[] = 'chosen_by';
+        $values[] = $chosen ? 'super' : 'auto';
+    }
+    $pdo->prepare('INSERT INTO video_alerts (' . implode(',', $columns) . ') VALUES (' .
+        implode(',', array_fill(0, count($columns), '?')) . ')')->execute($values);
     create_notification($user['id'], [
-        'type' => 'video_alert', 'title' => 'A video has been unlocked for you',
-        'body' => 'You finished ' . $chapters . ' chapters. Watch "' . $video['title'] .
-            '" from the library whenever you like.',
+        'type' => 'video_alert', 'title' => 'Point ' . $point . ' unlocked — a video for you',
+        'body' => 'You finished ' . $chapters . ' chapters, so point ' . $point . ' is open. ' .
+            ($chosen ? 'The video chosen for this point: "' : 'A video from the library: "') .
+            $video['title'] . '". Watch it whenever you like.',
         'libraryId' => $video['id'], 'videoUrl' => $video['url'],
     ]);
     return ['id' => $id, 'tenantId' => $user['tenant_id'], 'userId' => $user['id'],
         'libraryId' => $video['id'], 'title' => $video['title'], 'videoUrl' => $video['url'],
-        'milestone' => $milestone, 'chaptersCompleted' => $chapters, 'createdAt' => iso($createdAt)];
+        'milestone' => $milestone, 'chaptersCompleted' => $chapters, 'point' => $point,
+        'chosenBy' => $chosen ? 'super' : 'auto', 'createdAt' => iso($createdAt)];
 }
 
 /* The reader reports the page it has reached. The chapter's LAST page records

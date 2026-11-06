@@ -35,12 +35,13 @@ async function main() {
     (r.data.features || []).indexOf('admin.analytics') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
   check('the login serves the live top-performers build and its features',
-    r.ok && r.data.build === '2026-11-06-objective-login-shuffle' &&
+    r.ok && r.data.build === '2026-11-06-video-alert-points' &&
       (r.data.features || []).indexOf('reports.module-performers') !== -1 &&
       (r.data.features || []).indexOf('reports.top-performers') !== -1 &&
       (r.data.features || []).indexOf('public.top-performers') !== -1 &&
       (r.data.features || []).indexOf('reading.activity') !== -1 &&
       (r.data.features || []).indexOf('reading.video-alerts') !== -1 &&
+      (r.data.features || []).indexOf('reading.video-alert-points') !== -1 &&
       (r.data.features || []).indexOf('assessment') !== -1 &&
       (r.data.features || []).indexOf('assessment.admin') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
@@ -845,6 +846,105 @@ async function part3(r, tok, check) {
   for (const oid of added) {
     if (oid) await call('/objectives/' + encodeURIComponent(oid), { method: 'DELETE' }, suTok);
   }
+
+  /* --------- video alert points: the super admin picks the video --------- */
+  /* The rule: every third finished chapter opens a point and hands the learner
+     ONE library video. It used to be drawn anonymously — now the super admin
+     chooses the video each point opens, the learner receives exactly that video,
+     the alert names the point, and a point left unset still sends a video the
+     learner has never had. A point belongs to every account, so only a global
+     library video may be chosen. */
+  const vaList = await call('/super/video-alerts', null, suTok);
+  const vaPoints = (vaList.data || {}).points || [];
+  const vaVideos = (vaList.data || {}).videos || [];
+  check('the super admin can read every video point and the global videos',
+    vaList.ok && vaPoints.length >= 3 && vaPoints[0].chapters === 3 &&
+      vaPoints.every(function (p, i) { return p.point === i + 1 && p.chapters === (i + 1) * 3; }) &&
+      vaVideos.length > 0,
+    'status ' + vaList.status + ' points ' + vaPoints.length + ' videos ' + vaVideos.length);
+  const vaOriginal = (vaPoints[0] || {}).libraryId || '';
+  const vaVid = vaVideos[0].id;
+  const vaOwnVideo = await call('/library', { method: 'POST', body: {
+    type: 'video', title: 'Point video (one account only)', url: '/uploads/point-local.mp4' } },
+    tok.schools);
+  const vaOwnId = ((vaOwnVideo.data || {}).item || {}).id || null;
+  const vaScoped = await call('/super/video-alerts', { method: 'PUT',
+    body: { chapters: 3, libraryId: vaOwnId } }, suTok);
+  check('a point refuses an account-only video (the plan is shared by every account)',
+    !!vaOwnId && vaScoped.status === 400,
+    'status ' + vaScoped.status + ' ' + JSON.stringify(vaScoped.data).slice(0, 140));
+  const vaOddChapter = await call('/super/video-alerts', { method: 'PUT',
+    body: { chapters: 4, libraryId: vaVid } }, suTok);
+  check('only a real point (every third chapter) can hold a video', vaOddChapter.status === 400,
+    'status ' + vaOddChapter.status);
+  const vaForbidden = await call('/super/video-alerts', { method: 'PUT',
+    body: { chapters: 3, libraryId: vaVid } }, tok.schools);
+  check('only the super admin chooses the video for a point', vaForbidden.status === 403,
+    'status ' + vaForbidden.status);
+  const vaSet = await call('/super/video-alerts', { method: 'PUT',
+    body: { chapters: 3, libraryId: vaVid } }, suTok);
+  const vaFirstPoint = ((vaSet.data || {}).points || [])[0] || {};
+  check('the video chosen for point 1 is kept',
+    vaSet.ok && vaFirstPoint.libraryId === vaVid && vaFirstPoint.ok === true,
+    'status ' + vaSet.status + ' ' + JSON.stringify(vaFirstPoint).slice(0, 160));
+
+  /* a throwaway learner walks three chapters of the first (typing) module */
+  const vaRun = Date.now().toString(36).slice(-5);
+  const vaNum = 'STU-VA-' + vaRun;
+  const vaNew = await call('/users', { method: 'POST', body: { role: 'student',
+    fullName: 'Video Point Student', studentNumber: vaNum, password: 'Student@123' } }, tok.schools);
+  const vaId = (((vaNew.data || {}).user || vaNew.data) || {}).id || null;
+  const vaLogin = await call('/auth/login', { method: 'POST', body: {
+    slug: 'greenfield-academy', identifier: vaNum, password: 'Student@123' } });
+  const vaTok = (vaLogin.data || {}).token || null;
+  check('a throwaway learner is created for the video point walk', !!vaId && !!vaTok,
+    'status ' + vaNew.status + ' ' + JSON.stringify(vaNew.data).slice(0, 140));
+  const vaMods = (((await call('/modules', null, vaTok)).data || {}).modules || [])
+    .slice().sort(function (a, b) { return (a.order || 0) - (b.order || 0); });
+  const vaMod = vaMods.filter(function (m) { return m.mode === 'summary'; })[0] || vaMods[0] || {};
+  const vaChapters = [];
+  (((vaMod.progress || {}).books) || []).forEach(function (b) {
+    (b.chapters || []).forEach(function (c) { vaChapters.push(c); });
+  });
+  check('the video point learner can see three chapters to finish',
+    vaChapters.length >= 3, 'chapters ' + vaChapters.length);
+  let vaAlert = null;
+  for (let i = 0; i < 3 && i < vaChapters.length; i++) {
+    const chapter = vaChapters[i];
+    if (chapter.requiresReading && !chapter.read) {
+      await call('/chapter/' + encodeURIComponent(chapter.id) + '/read', { method: 'POST',
+        body: { page: chapter.pageEnd } }, vaTok);
+    }
+    const res = await call('/submissions', { method: 'POST', body: { type: 'chapter_summary',
+      chapterId: chapter.id,
+      text: 'My own words about ' + (chapter.title || 'this chapter') + ' (' + chapter.id + ').' } }, vaTok);
+    if (i === 2) vaAlert = (res.data || {}).videoAlert || null;
+  }
+  check('the third finished chapter unlocks the video the super admin chose',
+    !!vaAlert && vaAlert.libraryId === vaVid && vaAlert.point === 1 && vaAlert.chosenBy === 'super',
+    JSON.stringify(vaAlert).slice(0, 200));
+  const vaInbox = await call('/notifications', null, vaTok);
+  const vaNotes = (((vaInbox.data || {}).notifications) || [])
+    .filter(function (n) { return n.type === 'video_alert'; });
+  check('the alert names the point and carries the chosen video',
+    vaNotes.length === 1 && vaNotes[0].libraryId === vaVid &&
+      /point 1/i.test((vaNotes[0].title || '') + ' ' + (vaNotes[0].body || '')),
+    JSON.stringify(vaNotes.map(function (n) { return n.title; })).slice(0, 180));
+  const vaAfter = await call('/super/video-alerts', null, suTok);
+  const vaRecent = (((vaAfter.data || {}).recent) || [])[0] || {};
+  check('the console lists the unlocked point and who chose the video',
+    vaRecent.point === 1 && vaRecent.chosenBy === 'super' && vaRecent.title === vaVideos[0].title,
+    JSON.stringify(vaRecent).slice(0, 200));
+  const vaCleared = await call('/super/video-alerts', { method: 'PUT',
+    body: { chapters: 3, libraryId: '' } }, suTok);
+  check('a point can be handed back to the automatic pick',
+    vaCleared.ok && ((((vaCleared.data || {}).points) || [])[0] || {}).libraryId === null,
+    'status ' + vaCleared.status + ' ' + JSON.stringify((vaCleared.data || {}).points || []).slice(0, 160));
+  /* leave the plan as the run found it, and drop the throwaway pieces */
+  await call('/super/video-alerts', { method: 'PUT',
+    body: { chapters: 3, libraryId: vaOriginal } }, suTok);
+  if (vaOwnId) await call('/library/' + encodeURIComponent(vaOwnId), { method: 'DELETE' }, tok.schools);
+  if (vaId) await call('/users/' + encodeURIComponent(vaId), { method: 'DELETE' }, tok.schools);
 
   /* put the module back the way it was, then drop the throwaway learner */
   await call('/super/modules/' + encodeURIComponent(gateMod.id), { method: 'PUT',

@@ -1,5 +1,5 @@
 {
-  "build": "2026-11-06-objective-login-shuffle",
+  "build": "2026-11-06-video-alert-points",
   "features": [
     "health",
     "super.analytics",
@@ -13,6 +13,7 @@
     "public.top-performers",
     "reading.activity",
     "reading.video-alerts",
+    "reading.video-alert-points",
     "users.supervisor-auto-assignment",
     "messaging",
     "notifications",

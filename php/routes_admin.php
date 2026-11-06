@@ -562,6 +562,86 @@ function r_super_settings(array $user, array $body, array $params, ?string $toke
     }
     return get_settings();
 }
+
+/* The learner unlocks a library video every third finished chapter. Which video
+   is unlocked at each point is the super admin's decision — it used to be drawn
+   anonymously — and the console lists the points still left automatic. A point
+   is shared by every account, so only a GLOBAL library video can be chosen. */
+function video_alert_point_count(): int {
+    return 12;   /* points 1..12 = after 3..36 chapters */
+}
+function video_alert_point_rows(): array {
+    $plan = video_alert_plan();
+    $points = [];
+    for ($i = 1; $i <= video_alert_point_count(); $i++) {
+        $chapters = $i * 3;
+        $id = (string)($plan[$chapters] ?? '');
+        $video = $id !== '' ? get_library($id) : null;
+        $points[] = [
+            'point' => $i,
+            'chapters' => $chapters,
+            'libraryId' => $id !== '' ? $id : null,
+            'title' => $video['title'] ?? null,
+            /* a chosen video that was deleted (or is no longer playable) is
+               flagged so the console can ask for a new one */
+            'ok' => $id === '' ? true : ($video && ($video['type'] ?? '') === 'video'
+                && !empty($video['url']) && ($video['scope'] ?? '') === 'global'),
+        ];
+    }
+    return $points;
+}
+function r_super_video_alerts_get(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super']);
+    $videos = db()->query("SELECT id,title FROM library WHERE type='video'
+        AND url IS NOT NULL AND url<>'' AND scope='global' ORDER BY title")->fetchAll();
+    $recent = [];
+    if (has_table('video_alerts')) {
+        $hasChosen = has_column('video_alerts', 'chosen_by');
+        $rows = db()->query('SELECT a.id, a.user_id, a.title, a.chapters_completed,
+                a.created_at' . ($hasChosen ? ', a.chosen_by' : '') . ', u.full_name
+            FROM video_alerts a LEFT JOIN users u ON u.id = a.user_id
+            ORDER BY a.created_at DESC LIMIT 20')->fetchAll();
+        foreach ($rows as $row) {
+            $recent[] = [
+                'id' => $row['id'],
+                'learner' => ($row['full_name'] ?? '') !== '' ? $row['full_name'] : 'Learner',
+                'title' => $row['title'],
+                'point' => video_alert_point((int)$row['chapters_completed']),
+                'chapters' => (int)$row['chapters_completed'],
+                'chosenBy' => ($hasChosen && ($row['chosen_by'] ?? '') === 'super') ? 'super' : 'auto',
+                'createdAt' => iso($row['created_at']),
+            ];
+        }
+    }
+    return ['points' => video_alert_point_rows(), 'videos' => $videos, 'recent' => $recent,
+        'maxPoint' => video_alert_point_count()];
+}
+function r_super_video_alerts_put(array $user, array $body, array $params, ?string $token, array $query): array {
+    require_role($user, ['super']);
+    $chapters = (int)($body['chapters'] ?? 0);
+    need($chapters >= 3 && $chapters % 3 === 0 && $chapters <= video_alert_point_count() * 3,
+        'Choose one of the programme video points');
+    if (!has_table('video_alert_plan')) {
+        throw new RuntimeException('The video alert plan table is missing — run php migrate.php');
+    }
+    $pdo = db();
+    $libraryId = trim((string)($body['libraryId'] ?? ''));
+    if ($libraryId === '') {
+        /* an empty choice hands the point back to the automatic pick */
+        $pdo->prepare('DELETE FROM video_alert_plan WHERE chapters=?')->execute([$chapters]);
+    } else {
+        $video = get_library($libraryId);
+        need($video && ($video['type'] ?? '') === 'video', 'Only a library video can appear at a point');
+        need(!empty($video['url']), 'That video has no file or link yet');
+        need(($video['scope'] ?? '') === 'global',
+            'A point is shared by every account: choose a global video');
+        $pdo->prepare('INSERT INTO video_alert_plan (chapters, library_id, updated_at, updated_by)
+            VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE library_id=VALUES(library_id),
+            updated_at=VALUES(updated_at), updated_by=VALUES(updated_by)')
+            ->execute([$chapters, $libraryId, now_dt(), $user['id']]);
+    }
+    return ['points' => video_alert_point_rows()];
+}
 function r_super_submissions(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super']);
     return ['submissions' => admin_submissions($user, $query)];

@@ -18,10 +18,10 @@ function need(cond, message, status) { if (!cond) throw new HttpError(message, s
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-const BUILD = '2026-11-06-objective-login-shuffle';
+const BUILD = '2026-11-06-video-alert-points';
 const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.students', 'reports.student-roster',
   'reports.student-detail', 'reports.student-assessment', 'reports.module-performers', 'reports.top-performers',
-  'public.top-performers', 'reading.activity', 'reading.video-alerts',
+  'public.top-performers', 'reading.activity', 'reading.video-alerts', 'reading.video-alert-points',
   'messaging', 'notifications', 'users.supervisor-auto-assignment', 'keywords',
   'reader.book', 'library.lock', 'library.media', 'library.letters', 'certificates', 'chapter.pages',
   'chapter.reading-gate', 'exports', 'assessment', 'assessment.admin', 'read-aloud',
@@ -2639,6 +2639,79 @@ route('PUT', '/api/super/settings', ({ user, body }) => {
   return { ok: true };
 });
 
+/* ---------------------------------------------- video alert points ------ */
+/* The learner unlocks a library video every third finished chapter. Which video
+   is unlocked at each point is the super admin's decision — it used to be drawn
+   anonymously — and the console lists the points still left automatic. A point
+   is shared by every account, so only a GLOBAL library video can be chosen. */
+function videoAlertPoints() {
+  const plan = videoAlertPlan();
+  const points = [];
+  for (let i = 1; i <= VIDEO_ALERT_POINTS; i++) {
+    const chapters = i * 3;
+    const entry = plan.find(row => Number(row.chapters) === chapters) || null;
+    const chosenId = entry && entry.libraryId ? String(entry.libraryId) : '';
+    const video = chosenId ? dbm.byId('library', chosenId) : null;
+    points.push({
+      point: i, chapters,
+      libraryId: chosenId || null,
+      title: video ? video.title : null,
+      /* a chosen video that was deleted (or is no longer playable) is flagged so
+         the console can ask for a new one */
+      ok: !chosenId || !!(video && video.type === 'video' && video.url && video.scope === 'global'),
+      updatedAt: entry ? (entry.updatedAt || null) : null
+    });
+  }
+  return points;
+}
+
+route('GET', '/api/super/video-alerts', ({ user }) => {
+  requireRole(user, SUPER);
+  const videos = dbm.db.library
+    .filter(v => v.type === 'video' && v.url && v.scope === 'global')
+    .sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')))
+    .map(v => ({ id: v.id, title: v.title }));
+  const recent = dbm.collection('video_alerts').slice()
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+    .slice(0, 20)
+    .map(alert => {
+      const learner = dbm.byId('users', alert.userId);
+      return {
+        id: alert.id, learner: (learner && learner.fullName) || 'Learner',
+        title: alert.title, point: alert.point || videoAlertPoint(alert.chaptersCompleted || 0),
+        chapters: alert.chaptersCompleted || 0, chosenBy: alert.chosenBy || 'auto',
+        createdAt: alert.createdAt
+      };
+    });
+  return { ok: true, points: videoAlertPoints(), videos, recent,
+    maxPoint: VIDEO_ALERT_POINTS };
+});
+
+route('PUT', '/api/super/video-alerts', ({ user, body }) => {
+  requireRole(user, SUPER);
+  body = body || {};
+  const chapters = Number(body.chapters);
+  need(Number.isFinite(chapters) && chapters >= 3 && chapters % 3 === 0 &&
+    chapters <= VIDEO_ALERT_POINTS * 3, 'Choose one of the programme video points');
+  const plan = videoAlertPlan();
+  const at = plan.findIndex(row => Number(row.chapters) === chapters);
+  const libraryId = body.libraryId ? String(body.libraryId) : '';
+  if (!libraryId) {
+    /* an empty choice hands the point back to the automatic pick */
+    if (at !== -1) plan.splice(at, 1);
+  } else {
+    const video = dbm.byId('library', libraryId);
+    need(video && video.type === 'video', 'Only a library video can appear at a point');
+    need(!!video.url, 'That video has no file or link yet');
+    need(video.scope === 'global', 'A point is shared by every account: choose a global video');
+    const entry = { chapters, libraryId, updatedAt: dbm.nowISO(), updatedBy: user.id };
+    if (at === -1) plan.push(entry); else plan[at] = entry;
+  }
+  plan.sort((a, b) => Number(a.chapters) - Number(b.chapters));
+  dbm.save();
+  return { ok: true, points: videoAlertPoints() };
+});
+
 /* ============================================= content management ======== */
 function qp(req, name) {
   return new URL(req.url, 'http://localhost').searchParams.get(name);
@@ -3664,10 +3737,35 @@ function createCompletionNotification(user) {
 }
 
 /* ------------------------------------------------------- video alerts ---- */
-/* Every third completed chapter earns one library video. It is chosen at random
-   from the videos this learner has never been sent, and it arrives as an alert in
-   the messages where the learner can play it. A milestone is rewarded once, and
-   the same video never reaches the same learner twice. */
+/* Every third completed chapter opens a "point" and earns one library video. The
+   SUPER ADMIN chooses the video for each point in the console (point 1 = after
+   three chapters, point 2 = after six, and so on), so nothing is handed out
+   anonymously. A point without a choice still sends a video this learner has
+   never had, so a milestone is never lost. The alert arrives in the messages
+   where the learner can play it, and a milestone is rewarded once. */
+const VIDEO_ALERT_POINTS = 12;   /* points 1..12 = after 3..36 chapters */
+
+/* the plan the super admin keeps: one { chapters, libraryId } row per point */
+function videoAlertPlan() {
+  return dbm.collection('video_alert_plan');
+}
+
+/* 3 chapters -> point 1, 6 -> point 2 … */
+function videoAlertPoint(chapters) {
+  return Math.max(1, Math.round(Number(chapters) / 3));
+}
+
+/* The video the super admin chose for this point — only when it is still a
+   playable GLOBAL video. One plan serves every account, so an account-only
+   video would leak into another school. */
+function plannedVideo(chapters) {
+  const entry = videoAlertPlan().find(row => Number(row.chapters) === Number(chapters));
+  if (!entry || !entry.libraryId) return null;
+  const video = dbm.byId('library', entry.libraryId);
+  if (!video || video.type !== 'video' || !video.url || video.scope !== 'global') return null;
+  return video;
+}
+
 function completedChapterCount(userId) {
   const chapters = new Set();
   dbm.collection('submissions').forEach(submission => {
@@ -3688,20 +3786,29 @@ function maybeSendVideoAlert(user, submission) {
   const mine = alerts.filter(alert => alert.userId === user.id);
   if (mine.some(alert => alert.milestone === milestone)) return null;
   const sent = new Set(mine.map(alert => alert.libraryId));
-  const videos = dbm.db.library.filter(video => video.type === 'video' && video.url &&
-    (video.scope === 'global' || video.scope === user.tenantId) && !sent.has(video.id));
-  if (!videos.length) return null;
-  const video = videos[Math.floor(Math.random() * videos.length)];
+  const point = videoAlertPoint(chapters);
+  /* the super admin's choice wins; a point left automatic still sends a video
+     this learner has never had */
+  const chosen = plannedVideo(chapters);
+  let video = chosen;
+  if (!video) {
+    const videos = dbm.db.library.filter(candidate => candidate.type === 'video' && candidate.url &&
+      (candidate.scope === 'global' || candidate.scope === user.tenantId) && !sent.has(candidate.id));
+    if (!videos.length) return null;
+    video = videos[Math.floor(Math.random() * videos.length)];
+  }
   const alert = {
     id: dbm.uid('val'), tenantId: user.tenantId, userId: user.id,
     libraryId: video.id, title: video.title, videoUrl: video.url,
-    milestone, chaptersCompleted: chapters, createdAt: dbm.nowISO()
+    milestone, chaptersCompleted: chapters, point, chosenBy: chosen ? 'super' : 'auto',
+    createdAt: dbm.nowISO()
   };
   alerts.push(alert);
   notificationFor(user.id, {
-    type: 'video_alert', title: 'A video has been unlocked for you',
-    body: 'You finished ' + chapters + ' chapters. Watch "' + video.title +
-      '" from the library whenever you like.',
+    type: 'video_alert', title: 'Point ' + point + ' unlocked — a video for you',
+    body: 'You finished ' + chapters + ' chapters, so point ' + point + ' is open. ' +
+      (chosen ? 'The video chosen for this point: "' : 'A video from the library: "') +
+      video.title + '". Watch it whenever you like.',
     libraryId: video.id, videoUrl: video.url
   });
   dbm.save();

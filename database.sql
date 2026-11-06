@@ -289,9 +289,22 @@ CREATE TABLE IF NOT EXISTS video_alerts (
   video_url VARCHAR(1000) NULL,
   milestone VARCHAR(64) NOT NULL,
   chapters_completed INT NOT NULL DEFAULT 0,
+  /* 'super' when the super admin chose the video for that point, 'auto' when the
+     point had no choice and a video the learner never had was drawn */
+  chosen_by VARCHAR(10) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_video_alert_milestone (user_id, milestone),
   INDEX (user_id, created_at), INDEX (library_id)
+) ENGINE=InnoDB;
+
+/* Which library video a point unlocks (point 1 = after 3 chapters, 2 = after 6 …).
+   The super admin sets these; a point without a row falls back to an automatic
+   pick. The plan is global, one row per point. */
+CREATE TABLE IF NOT EXISTS video_alert_plan (
+  chapters INT PRIMARY KEY,
+  library_id VARCHAR(64) NOT NULL,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_by VARCHAR(64) NULL
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS live_lessons (

@@ -192,10 +192,13 @@ function logBookOpen(payload) {
   API.post('/reading/open', payload).catch(function () { /* history only */ });
 }
 
-/* Every third finished chapter may earn a library video, sent as an alert. */
+/* Every third finished chapter opens a point and earns one library video, sent
+   as an alert. The video is the one the super admin chose for that point. */
 function videoAlertNote(response) {
   const alert = response && response.videoAlert;
-  return alert ? ' A video was added to your alerts: ' + alert.title + '.' : '';
+  if (!alert) return '';
+  return ' Point ' + (alert.point || 1) + ' unlocked: a video was added to your alerts — ' +
+    alert.title + '.';
 }
 
 /* --------------------------------------------------------------- boot --- */

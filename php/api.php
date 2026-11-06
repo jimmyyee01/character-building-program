@@ -20,9 +20,10 @@ $ADMINS = ['super', 'tenant_admin'];
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-define('APP_BUILD', '2026-11-06-objective-login-shuffle');
+define('APP_BUILD', '2026-11-06-video-alert-points');
 define('APP_FEATURES', 'health,super.analytics,admin.analytics,reports.students,reports.student-roster,reports.student-detail,reports.student-assessment,reports.module-performers,reports.top-performers,'
     . 'public.top-performers,users.supervisor-auto-assignment,messaging,notifications,keywords,reading.activity,reading.video-alerts,'
+    . 'reading.video-alert-points,'
     . 'reader.book,library.lock,library.media,library.letters,certificates,chapter.pages,exports,assessment,assessment.admin,read-aloud,letter.after-module');
 
 /* Public: which backend and which build is answering. */
@@ -151,6 +152,8 @@ route('PUT',    '/api/super/assessment/statements/([a-zA-Z0-9_-]+)', 'r_super_as
 route('DELETE', '/api/super/assessment/statements/([a-zA-Z0-9_-]+)', 'r_super_assessment_statement_delete');
 route('GET',    '/api/super/settings', 'r_super_settings_get');
 route('PUT',    '/api/super/settings', 'r_super_settings');
+route('GET',    '/api/super/video-alerts', 'r_super_video_alerts_get');
+route('PUT',    '/api/super/video-alerts', 'r_super_video_alerts_put');
 route('GET',    '/api/super/submissions', 'r_super_submissions');
 route('GET',    '/api/super/users', 'r_super_users');
 route('POST',   '/api/super/users', 'r_super_users_create');
