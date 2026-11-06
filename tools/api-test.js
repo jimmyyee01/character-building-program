@@ -35,7 +35,7 @@ async function main() {
     (r.data.features || []).indexOf('admin.analytics') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
   check('the login serves the live top-performers build and its features',
-    r.ok && r.data.build === '2026-11-06-objective-three' &&
+    r.ok && r.data.build === '2026-11-06-objective-login-shuffle' &&
       (r.data.features || []).indexOf('reports.module-performers') !== -1 &&
       (r.data.features || []).indexOf('reports.top-performers') !== -1 &&
       (r.data.features || []).indexOf('public.top-performers') !== -1 &&
@@ -764,9 +764,9 @@ async function part3(r, tok, check) {
   /* -------- one chapter, many questions: only three are asked ------------ */
   /* The rule: the school admin and the super admin may keep adding objective
      questions to a chapter, and each learner is served THREE of them — drawn
-     with their own account as the seed — so the bank is shared but no class can
-     copy one another. The bank's own questions are never taken away, and only
-     the three that were served are ever marked. The learner who just certified
+     afresh on every login — so the bank is shared but no class can copy one
+     another. The bank's own questions are never taken away, and only the three
+     that were served are ever marked. The learner who just certified
      module 1 is standing in module 2 (objective mode), so this runs there. */
   check('the module now open is answered with objective questions',
     gateAfter.mode === 'objectives', 'mode ' + gateAfter.mode);
@@ -805,9 +805,26 @@ async function part3(r, tok, check) {
     JSON.stringify(served[0] || {}).slice(0, 160));
   const bankAgain = await call('/chapter/' + encodeURIComponent(bankCh.id) + '/objectives', null, gateTok);
   const againIds = (((bankAgain.data || {}).objectives) || []).map(function (o) { return o.id; }).sort();
-  check('the same learner is served the same three questions on a reload',
+  check('the same login is served the same three questions on a reload',
     againIds.length === 3 && againIds.join(',') === servedIds.slice().sort().join(','),
     againIds.join(','));
+  /* the three are drawn per LOGIN, not per account: signing in again starts a
+     fresh session, and the server marks against the draw of the session that
+     sends the submission */
+  const bankLogin2 = await call('/auth/login', { method: 'POST', body: {
+    slug: 'greenfield-academy', identifier: gateNum, password: 'Student@123' } });
+  const bankTok2 = (bankLogin2.data || {}).token || null;
+  const bankView2 = await call('/chapter/' + encodeURIComponent(bankCh.id) + '/objectives', null, bankTok2);
+  const served2 = ((bankView2.data || {}).objectives || []);
+  check('logging in again draws the three afresh for that login',
+    !!bankTok2 && bankView2.ok && served2.length === 3 &&
+      (((bankView2.data || {}).counts) || {}).pool === bankPool,
+    'status ' + bankView2.status + ' ' + JSON.stringify((bankView2.data || {}).counts || null));
+  const bankShort = await call('/submissions', { method: 'POST', body: { type: 'objectives',
+    chapterId: bankCh.id,
+    answers: served2.slice(0, 2).map(function (o) { return { objectiveId: o.id, choice: 0 }; }) } }, bankTok2);
+  check('a login cannot be marked on anything but its own three',
+    !bankShort.ok, 'status ' + bankShort.status + ' ' + JSON.stringify(bankShort.data || {}).slice(0, 140));
   const bankSub = await call('/submissions', { method: 'POST', body: { type: 'objectives',
     chapterId: bankCh.id,
     answers: served.map(function (o) { return { objectiveId: o.id, choice: 0 }; }) } }, gateTok);

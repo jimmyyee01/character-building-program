@@ -187,7 +187,7 @@ function r_chapter_objectives($user, $body, $params, $token, $query) {
   need($brow, 'Book not found', 404);
   need(($brow['scope'] === 'global' || $brow['scope'] === $user['tenant_id']), 'Not permitted for this book', 403);
   $pool = objectives_of($ch['id'], $user['tenant_id']);
-  $picked = objectives_for_learner($user, $ch['id'], $user['tenant_id']);
+  $picked = objectives_for_learner($user, $ch['id'], $user['tenant_id'], $token);
   $counts = ['pool' => count($pool), 'pick' => count($picked)];
   $sub = find_sub($user['id'], 'objectives', ['chapter_id' => $ch['id']]);
   if ($sub) {
@@ -216,7 +216,7 @@ function r_chapter_objectives($user, $body, $params, $token, $query) {
   $out = [];
   foreach ($shuffled as $o) {
     $out[] = ['id' => $o['id'], 'question' => $o['question'],
-      'options' => shuffle_with_seed(is_array($o['options']) ? $o['options'] : [], $o['id'] . '.' . ($token ?? ''))];
+      'options' => shuffle_with_seed(is_array($o['options']) ? $o['options'] : [], $o['id'] . ($token ?? ''))];
   }
   return ['submitted' => false, 'counts' => $counts, 'objectives' => $out];
 }
@@ -422,8 +422,8 @@ function r_submissions($user, $body, $params, $token, $query) {
         'color' => null, 'label' => null, 'similarity' => $cp['similarity'], 'flagged' => $cp['flagged'] ? 1 : 0,
         'created_at' => now_dt()];
     } else {
-      /* only the three questions this learner was served are marked */
-      $objs = objectives_for_learner($user, $ch['id'], $user['tenant_id']);
+      /* only the three questions this login was served are marked */
+      $objs = objectives_for_learner($user, $ch['id'], $user['tenant_id'], $token);
       need(count($objs) > 0, 'No objectives for this chapter', 400);
       $rawAns = $body['answers'] ?? null;
       $map = [];
@@ -440,7 +440,7 @@ function r_submissions($user, $body, $params, $token, $query) {
         need($choice >= 0 && $choice < count($opts), 'Invalid choice', 400);
         /* the options reach the learner shuffled (see r_chapter_objectives), so
            the position they picked is mapped back to the authored index first */
-        $served = shuffle_with_seed($opts, $o['id'] . '.' . ($token ?? ''));
+        $served = shuffle_with_seed($opts, $o['id'] . ($token ?? ''));
         $pickedText = array_key_exists($choice, $served) ? $served[$choice] : null;
         $authored = $pickedText === null ? false : array_search($pickedText, $opts, true);
         $original = $authored === false ? $choice : (int)$authored;

@@ -792,7 +792,7 @@ function chapterPanel(d, ch) {
   } else {
     html += '<hr><h4>Objectives for this chapter</h4>' +
       '<p class="muted small">Your questions are drawn from this chapter\'s bank — answer every one you are given. ' +
-      'The order reshuffles each time you log in.</p>' +
+      'The three questions and their options are reshuffled every time you log in.</p>' +
       '<div id="objBox"' + (locked ? ' data-locked="1"' : '') + '>Loading objectives…</div>';
   }
   return html + '</div>';

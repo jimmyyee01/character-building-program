@@ -2108,7 +2108,7 @@ function chapterHTML(ch) {
         'questions are not used in this module.</p>'
       : '<b class="small">Questions</b>' +
         '<p class="muted small" style="margin:2px 0 6px">Add as many as you like — each learner is ' +
-        'asked three of them, drawn from this chapter for their own account.</p>' +
+        'asked three of them, and the three and their options are reshuffled every time that learner logs in.</p>' +
         objList + questionFormHTML(id)) +
   '</div>';
 }

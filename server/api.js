@@ -18,7 +18,7 @@ function need(cond, message, status) { if (!cond) throw new HttpError(message, s
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-const BUILD = '2026-11-06-objective-three';
+const BUILD = '2026-11-06-objective-login-shuffle';
 const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.students', 'reports.student-roster',
   'reports.student-detail', 'reports.student-assessment', 'reports.module-performers', 'reports.top-performers',
   'public.top-performers', 'reading.activity', 'reading.video-alerts',
@@ -491,17 +491,20 @@ function objectivesOf(chapterId, tenantId) {
 }
 /* A chapter of an objectives module may carry ANY number of questions — the
    school/organization administrator and the super admin keep adding them. Each
-   learner is served only THREE of them: the three are drawn from the chapter's
-   bank with the learner's own account as the seed, so every student answers a
-   different three and no two students can copy each other, while one learner
-   always gets the same three back on a reload. The same draw grades the
-   submission, so nothing outside those three is ever marked. Mirrors
+   learner is served only THREE of them, and the three are drawn afresh on every
+   LOGIN: the draw is seeded by the account id plus the session token, so a logout
+   and login hands the student a different three (and a different option order),
+   while the same login sees the same three back on a reload. Two students never
+   get the same three in the same order, so nothing can be copied. The submission
+   is marked against the draw of the login that sends it, so nothing outside the
+   three that were actually served is ever marked. Mirrors
    objectives_for_learner() in php/engine.php. */
 const OBJECTIVE_PICK = 3;
-function learnerObjectives(user, chapterId, tenantId) {
+function learnerObjectives(user, chapterId, tenantId, token) {
   const all = objectivesOf(chapterId, tenantId);
-  if (all.length <= OBJECTIVE_PICK) return all;
-  return shuffleWithSeed(all, user.id + '|' + chapterId + '|objectives').slice(0, OBJECTIVE_PICK);
+  if (!all.length) return all;
+  const draw = shuffleWithSeed(all, user.id + '|' + chapterId + '|objectives|' + (token || ''));
+  return draw.slice(0, OBJECTIVE_PICK);
 }
 function findSub(userId, type, match) {
   const keys = match ? Object.keys(match) : [];
@@ -1346,7 +1349,7 @@ route('GET', '/api/book/([a-z0-9_-]+)', ({ user, params }) => {
     letter: progress.letter, letterSubmission: progress.letterSubmission };
 });
 
-/* The three objectives this learner has to answer, shuffled for this login
+/* The three objectives this learner has to answer, drawn afresh for this login
    (answers hidden until submitted). The rest of the chapter's bank stays on the
    server: it is never sent, and it is never marked. */
 route('GET', '/api/chapter/([a-z0-9_-]+)/objectives', ({ user, token, params }) => {
@@ -1356,7 +1359,7 @@ route('GET', '/api/chapter/([a-z0-9_-]+)/objectives', ({ user, token, params }) 
   const book = dbm.byId('books', chapter.bookId);
   need(book.scope === 'global' || book.scope === user.tenantId, 'Not available', 403);
   const pool = objectivesOf(chapter.id, user.tenantId);
-  const picked = learnerObjectives(user, chapter.id, user.tenantId);
+  const picked = learnerObjectives(user, chapter.id, user.tenantId, token);
   const counts = { pool: pool.length, pick: picked.length };
   const done = findSub(user.id, 'objectives', { chapterId: chapter.id });
 
@@ -1528,8 +1531,8 @@ route('POST', '/api/submissions', ({ user, token, body }) => {
     chapterGates(book, chapter);
     requireChapterRead(user, book, chapter);
     need(!findSub(user.id, 'objectives', { chapterId: chapter.id }), 'You already submitted this chapter');
-    /* only the three questions this learner was served are marked */
-    const served = learnerObjectives(user, chapter.id, tenantId);
+    /* only the three questions this login was served are marked */
+    const served = learnerObjectives(user, chapter.id, tenantId, token);
     need(served.length, 'No objectives have been set for this chapter yet. Ask your administrator.');
     const answers = Array.isArray(body.answers) ? body.answers : [];
     let score = 0;

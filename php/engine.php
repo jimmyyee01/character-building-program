@@ -101,18 +101,20 @@ function objectives_of(string $chapterId, ?string $tenantId): array {
 }
 /* A chapter of an objectives module may carry ANY number of questions — the
    school/organization administrator and the super admin keep adding them. Each
-   learner is served only THREE of them: the three are drawn from the chapter's
-   bank with the learner's own account as the seed, so every student answers a
-   different three and no two students can copy each other, while one learner
-   always gets the same three back on a reload. The same draw grades the
-   submission, so nothing outside those three is ever marked. Mirrors
+   learner is served only THREE of them, and the three are drawn afresh on every
+   LOGIN: the draw is seeded by the account id plus the session token, so a logout
+   and login hands the student a different three (and a different option order),
+   while the same login sees the same three back on a reload. Two students never
+   get the same three in the same order, so nothing can be copied. The submission
+   is marked against the draw of the login that sends it, so nothing outside the
+   three that were actually served is ever marked. Mirrors
    learnerObjectives() in server/api.js. */
 const OBJECTIVE_PICK = 3;
-function objectives_for_learner(array $user, string $chapterId, ?string $tenantId): array {
+function objectives_for_learner(array $user, string $chapterId, ?string $tenantId, ?string $token = null): array {
     $all = objectives_of($chapterId, $tenantId);
-    if (count($all) <= OBJECTIVE_PICK) return $all;
-    $order = shuffle_with_seed($all, $user['id'] . '|' . $chapterId . '|objectives');
-    return array_slice($order, 0, OBJECTIVE_PICK);
+    if (!$all) return $all;
+    $draw = shuffle_with_seed($all, $user['id'] . '|' . $chapterId . '|objectives|' . ($token ?? ''));
+    return array_slice($draw, 0, OBJECTIVE_PICK);
 }
 function find_sub(string $userId, string $type, array $match): ?array {
     $sql = 'SELECT * FROM submissions WHERE user_id=? AND type=?';

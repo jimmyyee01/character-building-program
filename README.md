@@ -326,7 +326,8 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
 - **Books & Chapters** — set chapters (title, content, page ranges) and enter
   the objective questions (question, options, correct answer). A chapter of an
   objectives module may hold **as many questions as the administrators care to
-  write**, while each learner is asked **three** of them (see Module 2 below).
+  write**, while each learner is asked **three** of them, redrawn on every login
+  (see Module 2 below).
   The page picker
   offers **every page of the book** (it reads the page count from the PDF linked
   to the book and you can type a total, tick a range, tick all pages or clear),
@@ -447,11 +448,12 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
 5. **Module 2 — BETA (Personal Relationship & Applied Psychology)** — 3 books,
    chapters end with **objective questions**: the administrators keep a **bank**
    of questions for each chapter (as many as they like) and every learner is
-   asked **three** of them only — the three are drawn from the bank with the
-   learner's own account as the seed, so each student answers a different three,
-   the same student always gets the same three back, the rest of the bank never
-   leaves the server, and only those three are marked (score out of 3). The
-   options and the order of the three reshuffle on every login. Then 3 mandatory
+   asked **three** of them only — the three are drawn from the bank afresh on
+   **every login** (seeded by the learner's account **and the login session**),
+   so each student answers a different three, a logout and login hands the same
+   student a different three, a reload inside one login shows the same three
+   again, the rest of the bank never leaves the server, and only those three are
+   marked (score out of 3). The options are reshuffled per login as well. Then 3 mandatory
    colour-tagged summaries (injustices in the book → injustices in your
    community → solutions) → best book → video → **BETA CERTIFICATE**.
 6. **Module 3 — ALPHA (Communication, Sex & Applied Character in Leadership)**
