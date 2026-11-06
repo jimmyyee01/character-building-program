@@ -327,6 +327,8 @@ function liveAlert(list, code) {
     /function secureRedirect/.test(serverSource) && /x-forwarded-proto/.test(serverSource));
   check('the page server allows the camera and the microphone in the room frame',
     /Permissions-Policy/.test(serverSource) && /camera=\(self\)/.test(serverSource));
+  check('someone who types the bare address is sent to the secure one',
+    /HTTP_REDIRECT_PORT/.test(serverSource) && /redirectServer/.test(serverSource));
 
   /* ------------------------------------------------- the consoles and the app -- */
   /* Every console starts a class from the same panel, so a page that stops

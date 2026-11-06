@@ -287,6 +287,28 @@ if (HAS_TLS) {
   } catch (e) {
     console.error('[https] failed to start:', e.message);
   }
+
+  /* Port 80 is the address someone types from memory. With a certificate in
+     place it only ever says one thing: go to https. Without it, someone who
+     typed the short address would get a browser error (or, worse, an insecure
+     page where the camera can never work). A port that is already taken is not
+     an error: it is somebody else's web server, and this one carries on. */
+  const REDIRECT_PORT = String(process.env.HTTP_REDIRECT_PORT || '80').trim().toLowerCase();
+  if (REDIRECT_PORT !== 'off' && REDIRECT_PORT !== '0') {
+    const port = Number(REDIRECT_PORT) || 80;
+    const securePort = HTTPS_PORT === 443 ? '' : ':' + HTTPS_PORT;
+    const redirectServer = http.createServer((req, res) => {
+      const host = String(req.headers.host || '').replace(/:\d+$/, '') || 'localhost';
+      res.writeHead(302, { Location: 'https://' + host + securePort + (req.url || '/'), 'Cache-Control': 'no-store' });
+      res.end();
+    });
+    redirectServer.on('error', (e) => {
+      console.log(' HTTP :' + port + '   : not used (' + (e.code || e.message) + ') — the https address still works');
+    });
+    redirectServer.listen(port, () => {
+      console.log(' HTTP        : port ' + port + ' → https (the camera needs a secure address)');
+    });
+  }
 } else {
   console.log(' HTTPS       : disabled (no TLS certs at ' + TLS_CERT + ') — the camera and the microphone need HTTPS');
 }
