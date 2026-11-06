@@ -157,7 +157,9 @@ const PAGES = {
   '/': 'index.html',
   '/super': 'super.html',
   '/admin': 'admin.html',
-  '/app': 'app.html'
+  '/app': 'app.html',
+  /* the room a live-class alert opens: /live?code=ABC123 */
+  '/live': 'live.html'
 };
 
 const handler = async (req, res) => {
@@ -206,54 +208,14 @@ const handler = async (req, res) => {
 process.on('exit', () => { try { dbm.flush(); } catch (e) {} });
 process.on('SIGINT', () => { try { dbm.flush(); } catch (e) {} process.exit(0); });
 
-// Cron: notify students of due live lessons (once) at scheduled time.
+// Cron: a scheduled live class opens itself (and alerts its audience) when its
+// time comes - the same tick runs whenever anybody reads the class list, so a
+// server that was just restarted still catches up on the next request.
 setInterval(() => {
   try {
-    const now = new Date();
-    const lessons = dbm.collection('liveLessons');
-    let changed = false;
-    lessons.forEach(l => {
-      if (l.notified) return;
-      if (!l.scheduledAt) return;
-      if (new Date(l.scheduledAt) > now) return;
-      (l.recipientIds || []).forEach(rid => {
-        dbm.collection('notifications').push({
-          id: dbm.uid('ntf'),
-          userId: rid,
-          type: 'live_lesson',
-          title: 'Live lesson starting: ' + (l.title || ''),
-          body: 'Join now: ' + l.joinUrl,
-          conversationId: null,
-          readAt: null,
-          createdAt: dbm.nowISO()
-        });
-        try {
-          const participants = [l.creatorId, rid].sort();
-          let conv = dbm.collection('conversations').find(c =>
-            c.tenantId === l.tenantId && Array.isArray(c.participantIds) &&
-            c.participantIds.length === 2 && c.participantIds.slice().sort().join('|') === participants.join('|'));
-          if (!conv) {
-            conv = { id: dbm.uid('cnv'), tenantId: l.tenantId, participantIds: participants, createdAt: dbm.nowISO(), updatedAt: dbm.nowISO() };
-            dbm.collection('conversations').push(conv);
-          }
-          dbm.collection('messages').push({
-            id: dbm.uid('msg'),
-            conversationId: conv.id,
-            senderId: l.creatorId,
-            body: 'Live lesson starting: ' + (l.title || '') + ' — Join now: ' + l.joinUrl,
-            readAt: null,
-            createdAt: dbm.nowISO()
-          });
-          conv.updatedAt = dbm.nowISO();
-        } catch (e) {}
-      });
-      l.notified = true;
-      changed = true;
-    });
-    if (changed) dbm.save(true);
-  } catch (e) { console.error('[live-lessons cron]', e.message); }
+    require('./live').dueTick();
+  } catch (e) { console.error('[live-class cron]', e.message); }
 }, 60000);
-
 
 // Always serve plain HTTP (the existing live URL on :3000).
 const httpServer = http.createServer(handler);

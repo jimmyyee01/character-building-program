@@ -117,9 +117,23 @@ document.getElementById('loginForm').addEventListener('submit', async function (
     });
     API.setToken(data.token);
     API.setUser(data.user);
-    location.href = data.user.role === 'tenant_admin' ? '/admin' : '/app';
+    /* Somebody who arrived from a live-class alert goes straight back into that
+       room; only that one safe shape is honoured. */
+    const next = takeNextClassLink();
+    location.href = next || (data.user.role === 'tenant_admin' ? '/admin' : '/app');
   } catch (err) { toast(err.message, 'err'); }
 });
+
+/* The join link a person was sent (written by /live when their session expired,
+   or by the alert that opened the class). Read once, then forgotten. */
+function takeNextClassLink() {
+  let next = '';
+  try {
+    next = localStorage.getItem('cbp_next') || '';
+    localStorage.removeItem('cbp_next');
+  } catch (e) { return ''; }
+  return /^\/live\?code=[A-Za-z0-9_-]{4,12}$/.test(next) ? next : '';
+}
 
 init();
 

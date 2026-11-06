@@ -14,6 +14,8 @@ RewriteRule ^t/([A-Za-z0-9-]+)/?$ public/login.html [L]
 RewriteRule ^super/?$ public/super.html [L]
 RewriteRule ^admin/?$ public/admin.html [L]
 RewriteRule ^app/?$ public/app.html [L]
+# the room a live-class alert opens: /live?code=ABC123
+RewriteRule ^live/?$ public/live.html [L]
 RewriteRule ^$ public/index.html [L]
 
 # Static assets live in public/

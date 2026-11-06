@@ -2510,15 +2510,15 @@ function wireAstats(el) {
 }
 
 /* =============================================================== wiring ==== */
-function lessonJoinUrl(value) {
-  const url = String(value || '').trim();
-  return /^https?:\/\/\S+$/i.test(url) ? url : '';
-}
+/* Live classes: the panel is shared with /super (see common.js). An account
+   admin reaches everybody in their account, a supervisor only the learners
+   they supervise — the server decides that, this only draws it. */
 async function renderLessons() {
   const el = document.getElementById('view-lessons');
   if (!el) return;
   const me = ME || {};
-  const canCreate = me.user && (me.user.role === 'tenant_admin' || me.user.role === 'supervisor' || me.user.role === 'super');
+  const role = (me.user && me.user.role) || ROLE;
+  const canCreate = role === 'tenant_admin' || role === 'supervisor' || role === 'super';
   let lessons = [];
   try {
     const r = await API.get('/live-lessons');
@@ -2527,56 +2527,16 @@ async function renderLessons() {
     el.innerHTML = '<div class="card"><p class="err-text">' + esc(msg(e)) + '</p></div>';
     return;
   }
-  let html = '<div class="card"><h2>Live Lessons</h2>' +
-    '<p class="small muted">Schedule a meeting and share its link with the learners in your scope.</p>';
-  if (canCreate) {
-    html += '<form id="lessonForm" class="form-row">' +
-      '<input name="title" placeholder="Lesson title" required maxlength="200">' +
-      '<input name="scheduledAt" type="datetime-local">' +
-      '<input name="joinUrl" type="url" placeholder="https://... meeting link (required)" required>' +
-      '<button type="submit">Schedule lesson</button></form>';
-  }
-  html += '<div class="list">';
-  if (!lessons.length) html += '<p class="small muted">No live lessons scheduled yet.</p>';
-  lessons.forEach(function (l) {
-    const url = lessonJoinUrl(l.joinUrl);
-    html += '<div class="list-item"><b>' + esc(l.title || 'Lesson') + '</b> ' +
-      '<small>' + esc(l.scheduledAt ? fmtDate(l.scheduledAt) : 'Time to be announced') + '</small><br>' +
-      (url
-        ? '<button type="button" class="ghost small" data-join="' + esc(url) + '">Join</button>'
-        : '<span class="small muted">Meeting link not available</span>') +
-      '</div>';
-  });
-  html += '</div></div>';
-  el.innerHTML = html;
-  const form = document.getElementById('lessonForm');
-  if (form) form.addEventListener('submit', wrap(async function (e) {
-    e.preventDefault();
-    const fd = new FormData(form);
-    const title = String(fd.get('title') || '').trim();
-    if (!title) throw new Error('Lesson title is required');
-    const joinUrl = lessonJoinUrl(fd.get('joinUrl'));
-    if (!joinUrl) throw new Error('Meeting link must start with http:// or https://');
-    const sched = fd.get('scheduledAt');
-    let scheduledAt = new Date().toISOString();
-    if (sched) {
-      const when = new Date(sched);
-      if (isNaN(when.getTime())) throw new Error('Enter a valid lesson date and time');
-      scheduledAt = when.toISOString();
-    }
-    await API.post('/live-lessons', { title: title, scheduledAt: scheduledAt, joinUrl: joinUrl });
-    toast('Lesson scheduled', 'ok');
-    renderLessons();
-  }));
-  el.querySelectorAll('[data-join]').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      const url = lessonJoinUrl(btn.getAttribute('data-join'));
-      if (!url) { toast('This lesson has no valid meeting link.', 'err'); return; }
-      const win = window.open(url, '_blank');
-      if (win) { try { win.opener = null; } catch (e) {} }
-      else toast('Allow pop-ups to join the lesson.', 'err');
+  el.innerHTML = '<h2>Live classes</h2>' +
+    '<p class="muted">Start a class now or schedule it for later. Everybody it reaches ' +
+      'receives an alert carrying the join link: the room opens in their browser, with ' +
+      'camera and microphone, and what is said is written down as a transcript.</p>' +
+    liveClassesPanelHtml(lessons, {
+      canCreate: canCreate,
+      reachText: role === 'supervisor' ? 'the learners you supervise'
+        : 'every learner in your account'
     });
-  });
+  wireLiveClasses(el, { reload: renderLessons });
 }
 RENDER.lessons = renderLessons;
 

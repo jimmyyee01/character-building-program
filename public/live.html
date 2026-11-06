@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live class</title>
+<link rel="stylesheet" href="/css/style.css?v=73">
+</head>
+<body class="live-body">
+<div class="live-shell">
+  <header class="live-head">
+    <div class="live-title">
+      <span class="live-dot" id="liveDot"></span>
+      <div>
+        <b id="liveTitle">Live class</b>
+        <small id="liveMeta">Opening the room...</small>
+      </div>
+    </div>
+    <div class="live-actions">
+      <span class="small muted" id="liveRoster"></span>
+      <button type="button" class="ghost small hidden" id="liveLinkBtn">Meeting link</button>
+      <button type="button" class="ghost small hidden" id="liveEndBtn">End class</button>
+      <button type="button" class="ghost small" id="liveLeaveBtn">Leave</button>
+    </div>
+  </header>
+
+  <main class="live-main">
+    <section class="live-stage" id="liveStage">
+      <div class="live-placeholder" id="livePlaceholder">Opening the room...</div>
+    </section>
+
+    <aside class="live-side">
+      <div class="live-side-head">
+        <b>What is being said</b>
+        <span class="small muted" id="captionState">live captions</span>
+      </div>
+      <div class="live-captions" id="captionList"></div>
+
+      <div class="live-caption-tools hidden" id="captionTools">
+        <form id="captionForm" class="live-type-row">
+          <input id="captionType" name="text" maxlength="500" autocomplete="off"
+                 placeholder="Speak, or type what is being said">
+          <button type="submit" class="small">Add</button>
+        </form>
+        <div class="live-tools-row">
+          <button type="button" class="ghost small" id="captionMicBtn">Start listening</button>
+          <button type="button" class="ghost small" id="captionDownload">Transcript</button>
+        </div>
+        <p class="small muted" id="captionHint">
+          Everything said is kept as text for the class transcript.
+        </p>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<div id="modalRoot"></div>
+<script src="/js/common.js?v=73"></script>
+<script src="/js/live.js?v=73"></script>
+</body>
+</html>

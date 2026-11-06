@@ -578,6 +578,10 @@ function r_super_settings_get(array $user, array $body, array $params, ?string $
         'programLogo' => $s['program_logo'] ?? null,
         'letterId' => $s['letter_id'] ?? null,
         'letterVideoId' => $s['letter_video_id'] ?? null,
+        /* where live classes happen: the domain of the video server (default
+           Jitsi Meet) or 'off' to use only the meeting link a host supplies */
+        'videoDomain' => function_exists('live_video_domain')
+            ? (live_video_domain() ?? 'off') : 'off',
     ]];
 }
 function r_super_settings(array $user, array $body, array $params, ?string $token, array $query): array {
@@ -587,6 +591,24 @@ function r_super_settings(array $user, array $body, array $params, ?string $toke
     if (array_key_exists('programLogo', $body)) { $set[] = 'program_logo=?'; $args[] = $body['programLogo']; }
     if (array_key_exists('letterId', $body)) { $set[] = 'letter_id=?'; $args[] = $body['letterId']; }
     if (array_key_exists('letterVideoId', $body)) { $set[] = 'letter_video_id=?'; $args[] = $body['letterVideoId']; }
+    /* the video server live classes run on (see php/routes_lessons.php) */
+    if (array_key_exists('videoDomain', $body)) {
+        $raw = strtolower(trim((string)$body['videoDomain']));
+        if ($raw === '' || $raw === 'off') {
+            $domain = 'off';
+        } else {
+            $host = preg_replace('#^https?://#', '', $raw) ?? '';
+            $host = preg_replace('#/.*$#', '', $host) ?? '';
+            $host = preg_replace('/\s+/', '', $host) ?? '';
+            need(preg_match('/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/', $host) === 1,
+                'Enter the video server domain, for example meet.jit.si');
+            $domain = $host;
+        }
+        if (!has_column('settings', 'video_domain')) {
+            db()->exec('ALTER TABLE `settings` ADD COLUMN `video_domain` VARCHAR(160) NULL');
+        }
+        $set[] = 'video_domain=?'; $args[] = $domain;
+    }
     if (array_key_exists('username', $body) && $body['username'] !== null && $body['username'] !== '') {
         $set[] = 'super_username=?'; $args[] = $body['username'];
     }
@@ -1555,11 +1577,17 @@ function r_messages_reply(array $user, array $body, array $params, ?string $toke
 }
 function r_notifications_list(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['tenant_admin','supervisor','student','member','teacher']);
+    /* a scheduled live class opens itself (and alerts everybody) the moment
+       somebody looks at their alerts, even if the class list is never opened */
+    if (function_exists('live_due_tick')) live_due_tick();
     /* both columns arrive with migrate.php, each is asked for on its own so a
        half-migrated table cannot break the whole messages list */
     $videoColumns = '';
     if (has_column('notifications', 'library_id')) $videoColumns .= ',library_id';
     if (has_column('notifications', 'video_url')) $videoColumns .= ',video_url';
+    /* a live-class alert carries the room it opens */
+    if (has_column('notifications', 'live_code')) $videoColumns .= ',live_code';
+    if (has_column('notifications', 'live_url')) $videoColumns .= ',live_url';
     $st = db()->prepare('SELECT id,type,title,body,conversation_id,student_id,submission_id' .
         $videoColumns . ',read_at,created_at FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 100');
     $st->execute([$user['id']]);
@@ -1568,6 +1596,7 @@ function r_notifications_list(array $user, array $body, array $params, ?string $
         'conversationId'=>$n['conversation_id'], 'studentId'=>$n['student_id'],
         'submissionId'=>$n['submission_id'],
         'libraryId'=>$n['library_id'] ?? null, 'videoUrl'=>$n['video_url'] ?? null,
+        'liveCode'=>$n['live_code'] ?? null, 'liveUrl'=>$n['live_url'] ?? null,
         'readAt'=>iso($n['read_at']), 'createdAt'=>iso($n['created_at']),
     ], $st->fetchAll());
     return ['notifications'=>$notifications, 'unread'=>count(array_filter($notifications, fn($n) => !$n['readAt']))];

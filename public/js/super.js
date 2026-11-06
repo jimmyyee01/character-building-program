@@ -2851,71 +2851,30 @@ function selectOption(value, label, current, extraSelected) {
   const sel = String(value) === String(current) || extraSelected ? ' selected' : '';
   return '<option value="' + esc(String(value)) + '"' + sel + '>' + esc(label) + '</option>';
 }
-function lessonJoinUrl(value) {
-  const url = String(value || '').trim();
-  return /^https?:\/\/\S+$/i.test(url) ? url : '';
-}
+/* Live classes (the panel itself is shared with /admin: see common.js). The
+   super admin reaches every user of the program, or one account when chosen. */
 async function renderLessons() {
   const el = document.getElementById('view-lessons');
   if (!el) return;
-  let lessons = [];
+  let lessons = [], accounts = [];
   try {
     const r = await API.get('/live-lessons');
     lessons = r.lessons || [];
   } catch (e) {
-    el.innerHTML = '<div class="card"><p class="err-text">' + esc(e.message || 'Failed to load lessons') + '</p></div>';
+    el.innerHTML = '<div class="card"><p class="err-text">' +
+      esc(e.message || 'Failed to load live classes') + '</p></div>';
     return;
   }
-  let html = '<div class="card"><h2>Live Lessons</h2>' +
-    '<p class="small muted">Schedule a meeting and share its link across every account.</p>' +
-    '<form id="lessonForm" class="form-row">' +
-    '<input name="title" placeholder="Lesson title" required maxlength="200">' +
-    '<input name="scheduledAt" type="datetime-local">' +
-    '<input name="joinUrl" type="url" placeholder="https://... meeting link (required)" required>' +
-    '<button type="submit">Schedule lesson</button></form>' +
-    '<div class="list">';
-  if (!lessons.length) html += '<p class="small muted">No live lessons scheduled yet.</p>';
-  lessons.forEach(function (l) {
-    const url = lessonJoinUrl(l.joinUrl);
-    html += '<div class="list-item"><b>' + esc(l.title || 'Lesson') + '</b> ' +
-      '<small>' + esc(l.scheduledAt ? fmtDate(l.scheduledAt) : 'Time to be announced') + '</small><br>' +
-      (url
-        ? '<button type="button" class="ghost small" data-join="' + esc(url) + '">Join</button>'
-        : '<span class="small muted">Meeting link not available</span>') +
-      '</div>';
-  });
-  html += '</div></div>';
-  el.innerHTML = html;
-  const form = document.getElementById('lessonForm');
-  if (form) form.addEventListener('submit', async function (e) {
-    e.preventDefault();
-    try {
-      const fd = new FormData(form);
-      const title = String(fd.get('title') || '').trim();
-      if (!title) throw new Error('Lesson title is required');
-      const joinUrl = lessonJoinUrl(fd.get('joinUrl'));
-      if (!joinUrl) throw new Error('Meeting link must start with http:// or https://');
-      const sched = fd.get('scheduledAt');
-      let scheduledAt = new Date().toISOString();
-      if (sched) {
-        const when = new Date(sched);
-        if (isNaN(when.getTime())) throw new Error('Enter a valid lesson date and time');
-        scheduledAt = when.toISOString();
-      }
-      await API.post('/live-lessons', { title: title, scheduledAt: scheduledAt, joinUrl: joinUrl });
-      toast('Lesson scheduled', 'ok');
-      renderLessons();
-    } catch (err) { toast(err.message || 'Failed to schedule lesson', 'err'); }
-  });
-  el.querySelectorAll('[data-join]').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      const url = lessonJoinUrl(btn.getAttribute('data-join'));
-      if (!url) { toast('This lesson has no valid meeting link.', 'err'); return; }
-      const win = window.open(url, '_blank');
-      if (win) { try { win.opener = null; } catch (e) {} }
-      else toast('Allow pop-ups to join the lesson.', 'err');
+  try { accounts = await ensure('tenants', '/super/tenants', 'tenants'); } catch (e) { accounts = []; }
+  el.innerHTML = '<h2>Live classes</h2>' +
+    '<p class="muted">Start a class now or schedule it for later. Everybody it reaches ' +
+      'receives an alert carrying the join link: the room opens in their browser, with ' +
+      'camera and microphone, and what is said is written down as a transcript.</p>' +
+    liveClassesPanelHtml(lessons, {
+      pickAccount: true, accounts: accounts, canCreate: true,
+      reachText: 'every user of the program, or one account when you choose it'
     });
-  });
+  wireLiveClasses(el, { reload: renderLessons });
 }
 
 
@@ -2975,6 +2934,19 @@ async function renderSettings() {
         (cur.programLogo ? '' : 'hidden') + '" src="' + esc(cur.programLogo || '') +
         '" style="height:64px;border-radius:10px;border:1px solid var(--line);' +
         'padding:4px;background:#fff"></div>' +
+      /* Where live classes happen: the built-in room talks to a video server
+         (Jitsi Meet by default). A school with its own server types its domain
+         here; leaving it empty or ticking the box means a class is only its
+         transcript and the meeting link a host supplies. */
+      '<div class="row mt">' +
+        '<div><label>Video server for live classes</label>' +
+          '<input type="text" id="stVideoDomain" placeholder="meet.jit.si (leave empty for the default)" value="' +
+            esc(cur.videoDomain && cur.videoDomain !== 'off' ? cur.videoDomain : '') + '"></div>' +
+        '<div class="fixed" style="padding-bottom:10px"><label style="display:block">&nbsp;</label>' +
+          '<label class="small" style="display:inline-flex;gap:6px;align-items:center">' +
+            '<input type="checkbox" id="stNoVideo" style="width:auto"' +
+            (cur.videoDomain === 'off' ? ' checked' : '') + '> No built-in video room</label></div>' +
+      '</div>' +
       '<div class="mt"><button type="submit">Save settings</button></div>' +
     '</form></div>' +
     '<div class="card"><h3>Super login credentials</h3>' +
@@ -3000,6 +2972,12 @@ async function saveSettings(e) {
     if (letter) body.letterId = letter;
     const video = val('stVideo');
     if (video) body.letterVideoId = video;
+    /* the live-class video server: a checkbox turns the built-in room off, so a
+       class is then only its transcript and the host's own meeting link */
+    const noVideo = $('stNoVideo');
+    const domain = val('stVideoDomain');
+    if (noVideo && noVideo.checked) body.videoDomain = 'off';
+    else if (domain) body.videoDomain = domain;
     if (!Object.keys(body).length) throw new Error('Nothing to update');
     await API.put('/super/settings', body);
     toast('Settings saved', 'ok');
@@ -3493,19 +3471,21 @@ const ENTITY_NAMES = {
   'live-lesson': 'Live lesson', notification: 'Notification',
   assessment: 'Self-assessment', 'assessment-category': 'Assessment category',
   'assessment-statement': 'Assessment question', 'video-alert': 'Video alert point',
+  'live-class': 'Live class',
   file: 'Upload', trash: 'Trash', record: 'Record'
 };
 const ACTION_NAMES = {
   created: 'Created', updated: 'Updated', deleted: 'Deleted',
   restored: 'Restored', purged: 'Deleted for good', emptied: 'Trash emptied',
+  started: 'Started', scheduled: 'Scheduled', ended: 'Ended', cancelled: 'Cancelled',
   'sign-in': 'Signed in', 'sign-out': 'Signed out', 'sign-in-failed': 'Sign-in failed'
 };
 function entityName(key) { return ENTITY_NAMES[key] || String(key || 'Record'); }
 function actionName(key) { return ACTION_NAMES[key] || String(key || ''); }
 function actionBadge(action) {
   const cls = action === 'deleted' || action === 'purged' || action === 'sign-in-failed' ? 'off'
-    : action === 'created' || action === 'restored' || action === 'sign-in' ? 'ok'
-      : action === 'emptied' ? 'warn' : 'info';
+    : action === 'created' || action === 'restored' || action === 'sign-in' || action === 'started' ? 'ok'
+      : action === 'emptied' || action === 'ended' || action === 'cancelled' ? 'warn' : 'info';
   return '<span class="badge ' + cls + '">' + esc(actionName(action)) + '</span>';
 }
 function selectOptions(list, selected, anyLabel) {

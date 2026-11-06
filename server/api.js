@@ -9,6 +9,7 @@ const path = require('path');
 const dbm = require('./db');
 const auth = require('./auth');
 const audit = require('./audit');
+const live = require('./live');
 
 const UPLOADS = path.join(__dirname, '..', 'uploads');
 
@@ -19,14 +20,16 @@ function need(cond, message, status) { if (!cond) throw new HttpError(message, s
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-const BUILD = '2026-11-06-system-log-and-trash';
+const BUILD = '2026-11-07-live-classes';
 const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.students', 'reports.student-roster',
   'reports.student-detail', 'reports.student-assessment', 'reports.module-performers', 'reports.top-performers',
   'public.top-performers', 'reading.activity', 'reading.video-alerts', 'reading.video-alert-points',
   'messaging', 'notifications', 'users.supervisor-auto-assignment', 'keywords',
   'reader.book', 'library.lock', 'library.media', 'library.letters', 'certificates', 'chapter.pages',
   'chapter.reading-gate', 'exports', 'assessment', 'assessment.admin', 'read-aloud',
-  'letter.after-module', 'auth.student-leave-lock', 'super.activity-log', 'super.trash'];
+  'letter.after-module', 'auth.student-leave-lock', 'super.activity-log', 'super.trash',
+  'live.video-room', 'live.captions', 'live.transcript', 'live.scheduling', 'live.alerts'];
+
 
 function send(res, code, obj) {
   const body = JSON.stringify(obj);
@@ -2693,7 +2696,10 @@ route('GET', '/api/super/settings', ({ user }) => {
   requireRole(user, ['super']);
   const s = dbm.db.settings;
   return { ok: true, settings: { programName: s.programName, programLogo: s.programLogo,
-    letterId: s.letterId, letterVideoId: s.letterVideoId } };
+    letterId: s.letterId, letterVideoId: s.letterVideoId,
+    /* where live classes happen: the domain of the video server (default Jitsi
+       Meet) or 'off' to use only the meeting link a host supplies */
+    videoDomain: live.videoDomain() || 'off' } };
 });
 
 route('PUT', '/api/super/settings', ({ user, body }) => {
@@ -2704,6 +2710,16 @@ route('PUT', '/api/super/settings', ({ user, body }) => {
   if (body.programLogo !== undefined) s.programLogo = body.programLogo;
   if (body.letterId) s.letterId = body.letterId;
   if (body.letterVideoId) s.letterVideoId = body.letterVideoId;
+  if (body.videoDomain !== undefined) {
+    const raw = String(body.videoDomain || '').trim().toLowerCase();
+    if (raw === '' || raw === 'off') s.videoDomain = 'off';
+    else {
+      const host = raw.replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/\s+/g, '');
+      need(/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/.test(host), 'Enter the video server domain, for example meet.jit.si');
+      s.videoDomain = host;
+    }
+  }
+
   if (body.password) {
     need(String(body.password).length >= 6, 'Password must be at least 6 characters');
     const h = auth.hashPassword(String(body.password));
@@ -4127,6 +4143,9 @@ route('POST', '/api/messages/([a-z0-9_-]+)', ({ user, params, body }) => {
 
 route('GET', '/api/notifications', ({ user }) => {
   requireRole(user, ['super', 'tenant_admin', 'supervisor', 'student', 'member', 'teacher']);
+  /* a class whose time has come alerts everybody on their next look at their
+     alerts, even when nobody has opened the class list */
+  live.dueTick();
   const notifications = dbm.collection('notifications').filter(n => n.userId === user.id)
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, 100);
   return { ok: true, notifications, unread: notifications.filter(n => !n.readAt).length };
@@ -4192,73 +4211,41 @@ route('GET', '/api/super/submissions', ({ req, user }) => {
   return { ok: true, submissions: adminSubmissions(user, req) };
 });
 
-/* Live lessons. Creators: super (all users), tenant_admin (whole account), supervisor (their students). Students only receive. Meeting link (Zoom) required. */
-route('POST', '/api/live-lessons', ({ body, user }) => {
-  need(user, 'Sign in required', 401);
-  need(user.role === 'tenant_admin' || user.role === 'supervisor' || user.role === 'super', 'Not permitted', 403);
-  const title = String((body && body.title) || '').trim();
-  need(title, 'Title required');
-  need(title.length <= 200, 'Title is too long');
-  const scheduledAt = body && body.scheduledAt ? String(body.scheduledAt) : new Date().toISOString();
-  const scheduledDate = new Date(scheduledAt);
-  need(!isNaN(scheduledDate.getTime()), 'Invalid lesson date and time');
-  const providedLink = body && (body.joinUrl || body.link || body.zoomUrl || body.meetingUrl);
-  need(providedLink, 'Meeting link required');
-  const joinUrl = String(providedLink).trim();
-  need(/^https?:\/\/\S+$/i.test(joinUrl), 'Meeting link must start with http:// or https://');
-  need(joinUrl.length <= 1000, 'Meeting link is too long');
-  let recipients = [];
-  if (user.role === 'tenant_admin' || user.role === 'super') {
-    if (user.role === 'super') {
-      recipients = dbm.collection('users').filter(u => u.id !== user.id).map(u => u.id);
-    } else {
-      recipients = dbm.collection('users').filter(u => u.tenantId === user.tenantId && u.id !== user.id).map(u => u.id);
-    }
-  } else {
-    recipients = dbm.collection('users').filter(u => u.supervisorId === user.id).map(u => u.id);
-  }
-  const scheduledIso = scheduledDate.toISOString();
-  const notified = scheduledDate <= new Date();
-  const lesson = {
-    id: dbm.uid('lesson'),
-    title,
-    scheduledAt: scheduledIso,
-    creatorId: user.id,
-    tenantId: user.tenantId,
-    recipientIds: recipients,
-    room: null,
-    joinUrl,
-    notified,
-    createdAt: dbm.nowISO()
-  };
-  dbm.collection('liveLessons').push(lesson);
-  if (notified) {
-    recipients.forEach(rid => {
-      dbm.collection('notifications').push({
-        id: dbm.uid('ntf'),
-        userId: rid,
-        type: 'live_lesson',
-        title: 'Live lesson starting: ' + (title || ''),
-        body: 'Join now: ' + joinUrl,
-        conversationId: null,
-        readAt: null,
-        createdAt: dbm.nowISO()
-      });
-    });
-  }
-  dbm.save(true);
-  return { ok: true, lesson };
-});
+/* ========================================================== live classes == */
+/* A class is started here: the room (camera + microphone) is part of this
+   program, what is said becomes text as it is said, and everyone in the
+   creator's reach receives an alert that carries the join link. Who reaches
+   whom is decided in server/live.js — super: every user; account admin: their
+   account; supervisor: their own learners. */
+route('POST', '/api/live-lessons', ({ body, user }) => live.create(user, body));
 
-route('GET', '/api/live-lessons', ({ user }) => {
-  need(user, 'Sign in required', 401);
-  let list = dbm.collection('liveLessons');
-  if (user.role === 'super') { /* all */ }
-  else if (user.role === 'tenant_admin') list = list.filter(l => l.tenantId === user.tenantId);
-  else if (user.role === 'supervisor') list = list.filter(l => l.creatorId === user.id || (l.recipientIds || []).includes(user.id));
-  else list = list.filter(l => (l.recipientIds || []).includes(user.id));
-  return { ok: true, lessons: list.slice().sort((a,b) => String(a.scheduledAt).localeCompare(String(b.scheduledAt))) };
-});
+route('GET', '/api/live-lessons', ({ user }) => live.list(user));
+
+route('POST', '/api/live-lessons/([A-Za-z0-9_-]+)/start', ({ user, params }) =>
+  live.start(user, params[0]));
+
+route('POST', '/api/live-lessons/([A-Za-z0-9_-]+)/end', ({ user, params }) =>
+  live.end(user, params[0]));
+
+route('POST', '/api/live-lessons/([A-Za-z0-9_-]+)/cancel', ({ user, params }) =>
+  live.cancel(user, params[0]));
+
+route('GET', '/api/live-lessons/([A-Za-z0-9_-]+)/transcript', ({ user, params }) =>
+  live.transcript(user, params[0]));
+
+/* The room itself, opened by the code in the alert. */
+route('GET', '/api/live-class/([A-Za-z0-9_-]+)', ({ user, params }) =>
+  live.room(user, params[0]));
+
+route('POST', '/api/live-class/([A-Za-z0-9_-]+)/join', ({ user, params }) =>
+  live.join(user, params[0]));
+
+route('GET', '/api/live-class/([A-Za-z0-9_-]+)/captions', ({ user, params, req }) =>
+  live.captions(user, params[0], qp(req, 'after')));
+
+route('POST', '/api/live-class/([A-Za-z0-9_-]+)/captions', ({ user, params, body }) =>
+  live.addCaptions(user, params[0], body));
+
 /* ============================================ system log & trash ========= */
 /* The super admin's two windows on the past: what everybody did (and when), and
    what is waiting in the Trash - where every deletion goes instead of simply

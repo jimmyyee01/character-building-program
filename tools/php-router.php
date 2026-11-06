@@ -36,7 +36,8 @@ if (preg_match('#^/(css|js)/(.+)$#', $uri, $m)) {
 
 /* pretty pages */
 $path = trim($uri, '/');
-$pages = ['' => 'index.html', 'super' => 'super.html', 'admin' => 'admin.html', 'app' => 'app.html'];
+$pages = ['' => 'index.html', 'super' => 'super.html', 'admin' => 'admin.html', 'app' => 'app.html',
+    'live' => 'live.html'];
 if (isset($pages[$path])) {
     header('Content-Type: text/html; charset=utf-8');
     readfile($root . '/public/' . $pages[$path]);

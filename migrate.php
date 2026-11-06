@@ -43,11 +43,32 @@ $wanted = [
     ],
     'settings' => [
         'assessment_json' => 'LONGTEXT NULL',
+        /* where live classes happen: a video server domain, or 'off' */
+        'video_domain' => 'VARCHAR(160) NULL',
     ],
     'notifications' => [
         /* a video alert carries the library video the learner may play */
         'library_id' => 'VARCHAR(64) NULL',
         'video_url' => 'VARCHAR(1000) NULL',
+        /* a live-class alert carries the room it opens */
+        'live_code' => 'VARCHAR(12) NULL',
+        'live_url' => 'VARCHAR(300) NULL',
+    ],
+    'live_lessons' => [
+        /* the join code read aloud in class, the unguessable room behind it,
+           who the class reaches and whether it is waiting, live or over */
+        'code' => "VARCHAR(12) NOT NULL DEFAULT ''",
+        'scope' => "VARCHAR(20) NOT NULL DEFAULT 'account'",
+        'status' => "VARCHAR(20) NOT NULL DEFAULT 'scheduled'",
+        'started_at' => 'DATETIME NULL',
+        'ended_at' => 'DATETIME NULL',
+        'creator_name' => 'VARCHAR(160) NULL',
+        'creator_role' => 'VARCHAR(30) NULL',
+        'room' => 'VARCHAR(64) NULL',
+        'caption_seq' => 'INT NOT NULL DEFAULT 0',
+        'caption_count' => 'INT NOT NULL DEFAULT 0',
+        'scheduled_alert_sent' => 'TINYINT(1) NOT NULL DEFAULT 0',
+        'start_alert_sent' => 'TINYINT(1) NOT NULL DEFAULT 0',
     ],
     'video_alerts' => [
         /* whether the super admin chose the video for that point ('super') or it
@@ -129,6 +150,28 @@ try {
             INDEX idx_live_lessons_tenant (tenant_id),
             INDEX idx_live_lessons_creator (creator_id),
             INDEX idx_live_lessons_scheduled (scheduled_at)
+        ) ENGINE=InnoDB',
+        /* what is being said, and who is in the room: the words become the
+           transcript that stays after the class */
+        'CREATE TABLE IF NOT EXISTS live_captions (
+            id VARCHAR(64) PRIMARY KEY,
+            lesson_id VARCHAR(64) NOT NULL,
+            seq INT NOT NULL,
+            at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            speaker_id VARCHAR(64) NULL,
+            speaker_name VARCHAR(160) NULL,
+            text TEXT NOT NULL,
+            INDEX idx_live_captions_lesson (lesson_id, seq)
+        ) ENGINE=InnoDB',
+        'CREATE TABLE IF NOT EXISTS live_presence (
+            id VARCHAR(130) PRIMARY KEY,
+            lesson_id VARCHAR(64) NOT NULL,
+            user_id VARCHAR(64) NOT NULL,
+            name VARCHAR(160) NULL,
+            role VARCHAR(30) NULL,
+            joined_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_live_presence_lesson (lesson_id, last_seen_at)
         ) ENGINE=InnoDB',
         'CREATE TABLE IF NOT EXISTS book_opens (
             id VARCHAR(64) PRIMARY KEY,

@@ -90,7 +90,8 @@ const SHAPES = [
   { re: /^\/api\/admin\/branding$/, entity: 'branding', label: () => 'Logo' },
   { re: /^\/api\/messages/, entity: 'message', label: b => b.body || b.text },
   { re: /^\/api\/notifications/, entity: 'notification', label: () => 'Notification' },
-  { re: /^\/api\/live-lessons$/, entity: 'live-lesson', label: b => b.title }
+  { re: /^\/api\/live-lessons\/[^/]+\/(start|end|cancel)$/, entity: 'live-class', label: b => b.title },
+  { re: /^\/api\/live-lessons$/, entity: 'live-class', label: b => b.title }
 ];
 
 function shapeOf(path, body) {
@@ -162,6 +163,10 @@ function logRequest(user, req, method, path, body, out) {
   method = String(method || 'GET').toUpperCase();
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return null;
   if (!path || path === '/api/auth/beat' || path === '/api/health') return null;
+  /* Inside a live class the room polls all the time: "I am still here" and each
+     spoken line are not admin actions, so they never reach the system log. */
+  if (/^\/api\/live-class\/[^/]+\/(join|captions)$/.test(path)) return null;
+
   const own = (out && out.logEntry) || {};
   const gone = (out && out.deleted) || {};
   const shape = shapeOf(path, body);

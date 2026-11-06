@@ -23,7 +23,7 @@ add(
   p("User Manual", { center: true, size: 40, color: "2E74B5" }),
   p("Multi-Portal Character-Education System", { center: true, size: 24 }),
   p("Schools - Organizations - Families - Married Couples + Custom Portals", { center: true, size: 20 }),
-  p("Version: 2026-10-19-self-assessment", { center: true, size: 20 }),
+  p("Version: 2026-11-07-live-classes", { center: true, size: 20 }),
   p("Written using the seeded demo data", { center: true, size: 20 }),
   h1("1. Introduction"),
   p("The Character Building Program is a complete multi-portal character-education system. It provides a super admin console, four default portals (Schools, Organization, Family, Married) plus unlimited custom portals, per-school and per-organization isolated accounts, a library-driven module engine (books, chapters, letters/summaries, certificates) and printable certificates."),
@@ -146,23 +146,49 @@ add(
     ["Certificates", "Issue and print module and general certificates"],
     ["Analytics", "Individuals, modules/books/chapters, weekly activity, copy flags - account-scoped only"],
     ["Progress", "Per-learner progress rings, competence, timelines, rankings and graduation transcripts"],
+    ["Live classes", "Start a live class now or schedule one: everybody it reaches is alerted with the join link, and what is said becomes the transcript"],
     ["Branding", "Own logo, tenant name and programme theme colour per login page"]
   ]),
   h1("8. Super Admin Console (/super)"),
   p("The super administrator creates portals (Schools, Organization, Family, Married and unlimited custom portals), creates each school/organization account with its own /t/<slug> login URL, manages global modules and library, views cross-portal analytics and progress reports, and configures settings. Demo portals: greenfield-academy, horizon-alliance, beloved-family, covenant-couples."),
-  h1("9. Reporting and Rankings"),
+  h1("9. Live video classes"),
+  p("A live class is a room the program itself starts: the host's camera and microphone, the words being said turned into text, and an alert that carries the join link to the people who are meant to be there. Who may start one, and who is told:"),
+  table(["Who starts it", "Who is told (through an alert)"], [
+    ["Super admin (Live classes)", "Every user of the program - or one account, when the super admin chooses it"],
+    ["Account admin (Live classes)", "Every user of that account"],
+    ["Supervisor (Live classes)", "Only the learners assigned to that supervisor"]
+  ]),
+  h2("9.1 Starting, scheduling and joining"),
+  bullets([
+    "Open Live classes in the console, type what the class is about and press Start the class: the class is live at once and everybody it reaches receives an alert with the join link.",
+    "Leave the time empty to start now; fill the date and time to schedule it. A scheduled class opens itself when its time comes and sends a second alert that says it is starting now.",
+    "The join link is /live?code=ABC123. A code is six characters, easy to read aloud; the video room behind it is impossible to guess, so the code alone is not enough to walk into a class.",
+    "Learners find the link in their alerts: opening the alert opens the room. A learner who is signed out signs in first and then lands straight back in the class.",
+    "A meeting link (Zoom, Google Meet) is optional - the room is built in. If the video server cannot be reached, the class still runs as text."
+  ]),
+  h2("9.2 What is being said becomes the transcript"),
+  bullets([
+    "The host presses Start listening: the browser's speech recognition turns finished sentences into captions that everybody in the room reads live, beside the video.",
+    "If the microphone is unavailable (or the browser cannot listen), the host can type each line instead - it is saved exactly the same way.",
+    "Every line is stored with its time and its speaker. Lines are numbered, so a viewer only ever receives what it has not seen yet.",
+    "The host ends the class when the lesson is over; the transcript stays, readable by everybody who was invited, and can be downloaded as a text file.",
+    "The transcript is kept out of the system log: the log records that the class started, ended or was cancelled, never what was said."
+  ]),
+  h2("9.3 The video server"),
+  p("In Super admin > Settings, 'Video server for live classes' names the video server the room runs on (meet.jit.si by default; a school with its own Jitsi server types its domain). Ticking 'No built-in video room' turns it off, and a class is then its meeting link and its transcript. Browsers only allow a microphone on a secure page, so serve the program over https (or http://localhost) for the room and the captions to work."),
+  h1("10. Reporting and Rankings"),
   bullets([
     "Performer rankings by period marks (calendar-year and custom date ranges), top-10 learners per module, top graduates.",
     "Student detail: photo profile, competence rating, activity timeline and completion progress ring.",
     "Supervisor reporting and messaging alerts notify supervisors of completions and flags.",
     "Objective-only marks ranking shows earned and available points."
   ]),
-  h1("10. Architecture and Deployment Notes"),
+  h1("11. Architecture and Deployment Notes"),
   p("Node backend files: server/server.js (HTTP server, static files, /t/<slug> pages), server/api.js (every REST route + progress/gating engine + copy detection), server/auth.js (PBKDF2 hashing, sessions, role guards), server/db.js (JSON file store at data/db.json with atomic writes), server/seed.js (first-run seed)."),
-  p("The PHP backend (php/api.php, engine.php, routes_*.php) mirrors all 80 routes for shared hosting with MySQL (database.sql, install.php, migrate.php). Run php migrate.php after pulling updates that add columns (for example assessment_pre_json/assessment_post_json for this manual's self-assessment). Live build check: compare /api/health and /build.json - both must show build 2026-10-19-self-assessment."),
+  p("The PHP backend (php/api.php, engine.php, routes_*.php) mirrors all 113 routes for shared hosting with MySQL (database.sql, install.php, migrate.php). Run php migrate.php after pulling updates that add columns (for example live_lessons.code/status/room and live_captions for the live classes). Live build check: compare /api/health and /build.json - both must show build 2026-11-07-live-classes."),
   p("Known limits: JSON file storage suits thousands of records (swap db.js for a real database if you outgrow it); uploads arrive base64-encoded in JSON (keep each under ~40 MB); demo videos use a public sample MP4 - replace them in the Library."),
-  h2("10.1 Automated checks"),
-  p("Run node server/server.js, then in a second terminal: node tools/api-test.js http://localhost:3000 (Node) or the :8080 variant (PHP); node tools/routes-parity-check.js; node tools/smoke-pages.js; node tools/ui-picker-check.js; node tools/ui-report-check.js; node tools/ui-pdf-check.js; node tools/ui-live-check.js http://127.0.0.1:3000; node tools/pages-api-check.js, keywords-api-check.js, analytics-api-check.js, messaging-api-check.js, reader-browser-check.js, chapter-lock-browser-check.js.")
+  h2("11.1 Automated checks"),
+  p("Run node server/server.js, then in a second terminal: node tools/api-test.js http://localhost:3000 (Node) or the :8080 variant (PHP); node tools/routes-parity-check.js; node tools/smoke-pages.js; node tools/live-class-check.js (the whole live-class flow, on its own temporary server); node tools/system-log-check.js; node tools/ui-picker-check.js; node tools/ui-report-check.js; node tools/ui-pdf-check.js; node tools/ui-live-check.js http://127.0.0.1:3000; node tools/pages-api-check.js, keywords-api-check.js, analytics-api-check.js, messaging-api-check.js, reader-browser-check.js, chapter-lock-browser-check.js.")
 );
 var doc = new Document({ sections: [{ children: KIDS }] });
 Packer.toBuffer(doc).then(function (buf) {

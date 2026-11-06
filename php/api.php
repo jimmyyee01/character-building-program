@@ -22,12 +22,13 @@ $ADMINS = ['super', 'tenant_admin'];
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-define('APP_BUILD', '2026-11-06-system-log-and-trash');
+define('APP_BUILD', '2026-11-07-live-classes');
 define('APP_FEATURES', 'health,super.analytics,admin.analytics,reports.students,reports.student-roster,reports.student-detail,reports.student-assessment,reports.module-performers,reports.top-performers,'
     . 'public.top-performers,users.supervisor-auto-assignment,messaging,notifications,keywords,reading.activity,reading.video-alerts,'
     . 'reading.video-alert-points,'
     . 'reader.book,library.lock,library.media,library.letters,certificates,chapter.pages,exports,assessment,assessment.admin,read-aloud,letter.after-module,'
-    . 'auth.student-leave-lock,super.activity-log,super.trash');
+    . 'auth.student-leave-lock,super.activity-log,super.trash,'
+    . 'live.video-room,live.captions,live.transcript,live.scheduling,live.alerts');
 
 /* Public: which backend and which build is answering. */
 function r_health($user, $body, $params, $token, $query): array {
@@ -126,6 +127,16 @@ route('GET',    '/api/messages/([a-zA-Z0-9_-]+)', 'r_messages_thread_get');
 route('POST',   '/api/messages/([a-zA-Z0-9_-]+)', 'r_messages_reply');
 route('GET',    '/api/live-lessons', 'r_live_lessons_list');
 route('POST',   '/api/live-lessons', 'r_live_lessons_create');
+route('POST',   '/api/live-lessons/([a-zA-Z0-9_-]+)/start', 'r_live_lessons_start');
+route('POST',   '/api/live-lessons/([a-zA-Z0-9_-]+)/end', 'r_live_lessons_end');
+route('POST',   '/api/live-lessons/([a-zA-Z0-9_-]+)/cancel', 'r_live_lessons_cancel');
+route('GET',    '/api/live-lessons/([a-zA-Z0-9_-]+)/transcript', 'r_live_lessons_transcript');
+
+/* The room itself, opened by the code in the alert. */
+route('GET',    '/api/live-class/([a-zA-Z0-9_-]+)', 'r_live_room');
+route('POST',   '/api/live-class/([a-zA-Z0-9_-]+)/join', 'r_live_join');
+route('GET',    '/api/live-class/([a-zA-Z0-9_-]+)/captions', 'r_live_captions');
+route('POST',   '/api/live-class/([a-zA-Z0-9_-]+)/captions', 'r_live_captions_add');
 route('GET',    '/api/notifications', 'r_notifications_list');
 route('PUT',    '/api/notifications/([a-zA-Z0-9_-]+)/read', 'r_notification_read');
 route('GET',    '/api/reports/module-performers', 'r_reports_module_performers');

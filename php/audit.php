@@ -95,7 +95,8 @@ function shape_of(string $path, array $body): array {
         ['#^/api/admin/branding$#', 'branding', 'Logo'],
         ['#^/api/messages#', 'message', $text(['body', 'text'])],
         ['#^/api/notifications#', 'notification', 'Notification'],
-        ['#^/api/live-lessons$#', 'live-lesson', $text(['title'])],
+        ['#^/api/live-lessons/[^/]+/(start|end|cancel)$#', 'live-class', $text(['title'])],
+        ['#^/api/live-lessons#', 'live-class', $text(['title'])],
     ];
     foreach ($shapes as [$re, $entity, $label]) {
         if (preg_match($re, $path)) return ['entity' => $entity, 'label' => clip_text($label, 160)];
@@ -159,6 +160,9 @@ function log_mutation(?array $user, string $method, string $path, array $body, $
     if (!has_table('activity_log')) return;
     if (in_array($method, ['GET', 'HEAD', 'OPTIONS'], true)) return;
     if ($path === '/api/auth/beat' || $path === '/api/health') return;
+    /* Inside a live class the room polls all the time: "I am still here" and each
+       spoken line are not admin actions, so they never reach the system log. */
+    if (preg_match('#^/api/live-class/[^/]+/(join|captions)$#', $path)) return;
     $own = (is_array($out) && isset($out['logEntry']) && is_array($out['logEntry'])) ? $out['logEntry'] : [];
     $gone = (is_array($out) && isset($out['deleted']) && is_array($out['deleted'])) ? $out['deleted'] : [];
     $shape = shape_of($path, $body);

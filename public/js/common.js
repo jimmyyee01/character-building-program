@@ -2857,6 +2857,241 @@ function applyThemeColor(color) {
   return true;
 }
 
+/* ========================================================= live classes === */
+/* The live-class panel shared by the super admin, the account admin and the
+   supervisor (/super "Live Lessons" and /admin "Live Lessons" read the same
+   code, so the three roles behave the same way). A class is started now or
+   scheduled for later; everybody it reaches receives an alert carrying the join
+   link, and the room itself is /live?code=CODE — camera, microphone and the
+   words being said turned into a transcript. */
+const LIVE_STATUS_TEXT = {
+  live: 'Live now', scheduled: 'Scheduled', ended: 'Ended', cancelled: 'Cancelled'
+};
+const LIVE_STATUS_BADGE = { live: 'off', scheduled: 'info', ended: 'lock', cancelled: 'lock' };
+
+function liveStatusBadge(status) {
+  const key = LIVE_STATUS_TEXT[status] ? status : 'scheduled';
+  return '<span class="badge ' + LIVE_STATUS_BADGE[key] + '">' + esc(LIVE_STATUS_TEXT[key]) + '</span>';
+}
+/* The room a class opens. Sent by the server, built here only as a fallback. */
+function liveRoomPath(lesson) {
+  if (lesson && lesson.roomPath) return lesson.roomPath;
+  const code = String((lesson && lesson.code) || '').trim();
+  return code ? '/live?code=' + encodeURIComponent(code) : '';
+}
+function liveWhenText(lesson) {
+  const status = (lesson && lesson.status) || 'scheduled';
+  if (status === 'live') return lesson.startedAt ? 'Started ' + fmtDate(lesson.startedAt) : 'Under way';
+  if (status === 'scheduled') return lesson.scheduledAt ? fmtDate(lesson.scheduledAt) : 'Time to be announced';
+  if (status === 'ended') return 'Ended ' + fmtDate(lesson.endedAt);
+  return 'Cancelled ' + (lesson.endedAt ? fmtDate(lesson.endedAt) : '');
+}
+
+/* The form. An empty time means "start now"; a meeting link is optional (the
+   room is built in); the super admin also chooses who the class is for. */
+function liveClassFormHtml(opts) {
+  opts = opts || {};
+  const accounts = opts.accounts || [];
+  let accountField = '';
+  if (opts.pickAccount && accounts.length) {
+    accountField = '<div><label>Who is it for</label><select name="tenantId">' +
+      '<option value="all">Every account in the program</option>' +
+      accounts.map(function (a) {
+        return '<option value="' + esc(a.id) + '">' + esc(a.name || a.id) + '</option>';
+      }).join('') + '</select></div>';
+  }
+  return '<form id="liveClassForm" class="live-form" data-live-form>' +
+    '<div class="row">' +
+      '<div style="min-width:220px"><label>What is the class about</label>' +
+        '<input type="text" name="title" maxlength="200" required ' +
+        'placeholder="e.g. Chapter 3 — telling the truth"></div>' +
+      '<div><label>When (leave empty to start now)</label>' +
+        '<input type="datetime-local" name="scheduledAt"></div>' +
+      '<div><label>Meeting link (optional)</label>' +
+        '<input type="url" name="joinUrl" placeholder="https://… only if you meet elsewhere"></div>' +
+      accountField +
+      '<div class="fixed" style="padding-bottom:10px">' +
+        '<button type="submit">Start the class</button></div>' +
+    '</div>' +
+    '<p class="small muted">Everybody it reaches receives an alert with the join link. ' +
+      'What is said in the room becomes a transcript that stays after the class.</p></form>';
+}
+
+/* One class in the list: what it is, when it runs, and what can be done with it
+   by the person looking at it (only the host can start, end or cancel). */
+function liveClassRowHtml(lesson) {
+  lesson = lesson || {};
+  const status = lesson.status || 'scheduled';
+  const path = liveRoomPath(lesson);
+  const host = !!lesson.canHost;
+  const bits = [liveWhenText(lesson)];
+  if (lesson.code) bits.push('code ' + lesson.code);
+  if (lesson.recipients != null) bits.push(Number(lesson.recipients) + ' invited');
+  if (Number(lesson.captions) > 0) bits.push(Number(lesson.captions) + ' transcript line(s)');
+  if (lesson.scope === 'all') bits.push('whole program');
+  if (lesson.creatorName) bits.push('by ' + lesson.creatorName);
+
+  let acts = '';
+  if (path) {
+    acts += '<button type="button" class="ghost small" data-live-act="open" data-live-path="' +
+      esc(path) + '">' + (status === 'live' ? 'Join the room' : 'Open the room') + '</button> ';
+    acts += '<button type="button" class="ghost small" data-live-act="copy" data-live-path="' +
+      esc(path) + '">Copy link</button> ';
+  }
+  if (host && status === 'scheduled') {
+    acts += '<button type="button" class="small" data-live-act="start" data-live-id="' +
+      esc(lesson.id) + '">Start now</button> ';
+    acts += '<button type="button" class="ghost small" data-live-act="cancel" data-live-id="' +
+      esc(lesson.id) + '">Cancel</button> ';
+  }
+  if (host && status === 'live') {
+    acts += '<button type="button" class="danger small" data-live-act="end" data-live-id="' +
+      esc(lesson.id) + '">End the class</button> ';
+  }
+  if (Number(lesson.captions) > 0) {
+    acts += '<button type="button" class="ghost small" data-live-act="transcript" data-live-id="' +
+      esc(lesson.id) + '" data-live-title="' + esc(lesson.title || 'class') + '">Transcript</button>';
+  }
+  return '<div class="list-item"><b>' + esc(lesson.title || 'Live class') + '</b> ' +
+    liveStatusBadge(status) + '<br><small class="muted">' + esc(bits.join(' · ')) + '</small>' +
+    (acts ? '<div class="mt">' + acts + '</div>' : '') + '</div>';
+}
+
+/* The whole panel: the form (when this person may start a class) and the list.
+   `opts` carries what the caller knows: pickAccount/accounts, canCreate, reload. */
+function liveClassesPanelHtml(lessons, opts) {
+  opts = opts || {};
+  const list = lessons || [];
+  const live = list.filter(function (l) { return l.status === 'live'; });
+  let html = '';
+  if (opts.canCreate !== false) {
+    html += '<div class="card"><h3>Start a live class</h3>' + liveClassFormHtml(opts) + '</div>';
+  }
+  html += '<div class="card"><h3>Live classes' +
+    (live.length ? ' <span class="badge off">' + live.length + ' live</span>' : '') + '</h3>' +
+    '<p class="small muted">A class reaches ' + esc(opts.reachText || 'the people in your scope') +
+      ', through an alert that carries its join link.</p>';
+  if (!list.length) html += '<p class="small muted">No class has been started or scheduled yet.</p>';
+  else html += '<div class="list">' + list.map(liveClassRowHtml).join('') + '</div>';
+  return html + '</div>';
+}
+
+/* The join link, as text a host can paste into a message or a letter. */
+function liveJoinLink(path) {
+  const base = String(location.origin || '').replace(/\/+$/, '');
+  return base + (path || '');
+}
+function liveCopyText(text) {
+  const write = navigator.clipboard && navigator.clipboard.writeText
+    ? navigator.clipboard.writeText(text)
+    : Promise.reject(new Error('no clipboard'));
+  write.then(function () { toast('Link copied', 'ok'); })
+    .catch(function () { toast('Copy this link: ' + text, 'ok'); });
+}
+
+/* One button of the list: open the room, copy its link, start, end, cancel, or
+   take the transcript away. `reload` repaints whatever list is on screen. */
+async function liveClassAction(btn, reload) {
+  const act = btn.getAttribute('data-live-act');
+  const id = btn.getAttribute('data-live-id') || '';
+  const path = btn.getAttribute('data-live-path') || '';
+  try {
+    if (act === 'open') {
+      if (!path) throw new Error('This class has no room yet');
+      location.href = path;
+      return;
+    }
+    if (act === 'copy') {
+      liveCopyText(liveJoinLink(path));
+      return;
+    }
+    if (act === 'transcript') {
+      const out = await API.get('/live-lessons/' + encodeURIComponent(id) + '/transcript');
+      const title = btn.getAttribute('data-live-title') || 'class';
+      const head = 'Transcript — ' + title + '\n' +
+        'Saved ' + fmtDate(new Date().toISOString()) + '\n\n';
+      downloadText('live-class-' + String(title).replace(/[^\w-]+/g, '-').slice(0, 40) + '.txt',
+        head + ((out.text) || 'Nothing was said yet.'));
+      return;
+    }
+    if (act === 'start' || act === 'end' || act === 'cancel') {
+      const ask = act === 'start' ? 'Start this class now? Everybody invited receives the join link.'
+        : act === 'end' ? 'End this class? The transcript is kept.'
+          : 'Cancel this class? Everybody invited will see it was cancelled.';
+      if (!confirm(ask)) return;
+      btn.disabled = true;
+      /* one literal path per action, so the route every backend must have stays
+         visible to readers (and to tools/routes-parity-check.js) */
+      const path = act === 'start'
+        ? '/live-lessons/' + encodeURIComponent(id) + '/start'
+        : act === 'end'
+          ? '/live-lessons/' + encodeURIComponent(id) + '/end'
+          : '/live-lessons/' + encodeURIComponent(id) + '/cancel';
+      await API.post(path);
+      toast(act === 'start' ? 'The class is live' : act === 'end' ? 'The class was ended'
+        : 'The class was cancelled', 'ok');
+      if (reload) reload();
+      return;
+    }
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    toast((e && e.message) || 'That did not work', 'err');
+  }
+}
+
+/* Wire the panel inside `root`: the form that starts a class, and every button
+   the list drew. opts.reload repaints the caller's view afterwards. */
+function wireLiveClasses(root, opts) {
+  if (!root || !root.querySelector) return;
+  opts = opts || {};
+  const reload = typeof opts.reload === 'function' ? opts.reload : function () {};
+  const form = root.querySelector('[data-live-form]');
+  if (form) {
+    form.addEventListener('submit', async function (e) {
+      e.preventDefault();
+      const btn = form.querySelector('button[type="submit"]');
+      try {
+        const fd = new FormData(form);
+        const title = String(fd.get('title') || '').trim();
+        if (!title) throw new Error('Give the class a title');
+        const body = { title: title, startNow: true };
+        const when = String(fd.get('scheduledAt') || '').trim();
+        if (when) {
+          const at = new Date(when);
+          if (isNaN(at.getTime())) throw new Error('Choose a valid date and time');
+          if (at.getTime() < Date.now() - 60000) throw new Error('That time has already passed');
+          body.startNow = false;
+          body.scheduledAt = at.toISOString();
+        }
+        const link = String(fd.get('joinUrl') || '').trim();
+        if (link) {
+          if (!/^https?:\/\/\S+$/i.test(link)) throw new Error('The meeting link must start with http:// or https://');
+          body.joinUrl = link;
+        }
+        const account = String(fd.get('tenantId') || '').trim();
+        if (account && account !== 'all') body.tenantId = account;
+        if (btn) btn.disabled = true;
+        const out = await API.post('/live-lessons', body);
+        const lesson = out.lesson || {};
+        const invited = Number(out.invited) || 0;
+        toast((body.startNow ? 'The class is live — ' : 'Class scheduled — ') +
+          invited + ' alert' + (invited === 1 ? '' : 's') + ' sent', 'ok');
+        reload(out);
+        /* a class that is starting now opens itself, so the host is in the room
+           the moment it exists */
+        if (body.startNow && lesson.roomPath) location.href = lesson.roomPath;
+      } catch (err) {
+        toast((err && err.message) || 'The class could not be created', 'err');
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
+  }
+  root.querySelectorAll('[data-live-act]').forEach(function (btn) {
+    btn.addEventListener('click', function () { liveClassAction(btn, reload); });
+  });
+}
+
 function initCommunicationWidget() {
   if (!API.token() || document.getElementById('cbpCommsToggle')) return;
   const root = document.createElement('div');
@@ -2970,6 +3205,8 @@ function initCommunicationWidget() {
         '<small>' + esc(fmtDate(n.createdAt)) + '</small>' +
         /* a video alert carries a library video the learner can play from here */
         (n.libraryId ? '<i class="cbp-comms-play">\u25B6 Play video</i>' : '') +
+        /* a live-class alert is the way into the room it announces */
+        (n.type === 'live_class' ? '<i class="cbp-comms-play">\u25B6 Join the class</i>' : '') +
         '</button>';
     }).join('') + '</div>';
   }
@@ -3026,6 +3263,19 @@ function initCommunicationWidget() {
       if (!notification) return;
       try {
         await API.put('/notifications/' + encodeURIComponent(notification.id) + '/read');
+        if (notification.type === 'live_class' && notification.liveCode) {
+          /* the alert carries the room: open it, remembering the invite so the
+             learner lands straight back in the class after signing in */
+          panel.classList.add('hidden'); toggle.setAttribute('aria-expanded', 'false');
+          try { localStorage.setItem('cbp_next', '/live?code=' + encodeURIComponent(notification.liveCode)); }
+          catch (err) { /* private mode: the code is in the address anyway */ }
+          /* A learner's sign-in ends the moment the program is left, and going
+             into a class is not leaving it: the guard stands down here (no
+             sign-out) and the class's own polling keeps the session alive. */
+          if (typeof stopStudentLock === 'function') stopStudentLock();
+          location.href = notification.liveUrl || ('/live?code=' + encodeURIComponent(notification.liveCode));
+          return;
+        }
         if (notification.libraryId) {
           /* a video alert: play it here when this page can, otherwise open it in
              a new tab so the link always works */

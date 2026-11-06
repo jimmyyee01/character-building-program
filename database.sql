@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS settings (
   program_logo LONGTEXT NULL,
   letter_id VARCHAR(64) NULL,
   letter_video_id VARCHAR(64) NULL,
+  /* where live classes happen: a video server domain, or 'off' */
+  video_domain VARCHAR(160) NULL,
   assessment_json LONGTEXT NULL,
   super_username VARCHAR(100) NOT NULL DEFAULT 'superadmin',
   super_salt VARCHAR(128) NOT NULL DEFAULT '',
@@ -275,6 +277,9 @@ CREATE TABLE IF NOT EXISTS notifications (
   submission_id VARCHAR(64) NULL,
   library_id VARCHAR(64) NULL,
   video_url VARCHAR(1000) NULL,
+  /* a live-class alert carries the room it opens */
+  live_code VARCHAR(12) NULL,
+  live_url VARCHAR(300) NULL,
   read_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX (user_id, created_at), INDEX (user_id, read_at), INDEX (conversation_id)
@@ -310,19 +315,62 @@ CREATE TABLE IF NOT EXISTS video_alert_plan (
   updated_by VARCHAR(64) NULL
 ) ENGINE=InnoDB;
 
+/* A LIVE CLASS is a room this program itself starts: the presenter's camera and
+   microphone, the words being said turned into text, and an alert that carries
+   the join link to the people who are meant to be there. `code` is what is read
+   aloud (and what /live?code= takes); `room` is the unguessable video room. */
 CREATE TABLE IF NOT EXISTS live_lessons (
   id VARCHAR(64) PRIMARY KEY,
+  code VARCHAR(12) NOT NULL DEFAULT '',
+  scope VARCHAR(20) NOT NULL DEFAULT 'account',
   tenant_id VARCHAR(64) NULL,
   title VARCHAR(255) NOT NULL,
-  scheduled_at DATETIME NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'scheduled',
+  scheduled_at DATETIME NULL,
+  started_at DATETIME NULL,
+  ended_at DATETIME NULL,
   creator_id VARCHAR(64) NOT NULL,
+  creator_name VARCHAR(160) NULL,
+  creator_role VARCHAR(30) NULL,
   recipient_ids_json LONGTEXT NOT NULL,
-  join_url VARCHAR(1000) NOT NULL,
+  join_url VARCHAR(1000) NULL,
+  room VARCHAR(64) NULL,
+  caption_seq INT NOT NULL DEFAULT 0,
+  caption_count INT NOT NULL DEFAULT 0,
+  scheduled_alert_sent TINYINT(1) NOT NULL DEFAULT 0,
+  start_alert_sent TINYINT(1) NOT NULL DEFAULT 0,
   notified TINYINT(1) NOT NULL DEFAULT 0,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_live_lessons_code (code),
   INDEX idx_live_lessons_tenant (tenant_id),
   INDEX idx_live_lessons_creator (creator_id),
+  INDEX idx_live_lessons_status (status),
   INDEX idx_live_lessons_scheduled (scheduled_at)
+) ENGINE=InnoDB;
+
+/* What is being said, in order. seq only grows, so a viewer asks for everything
+   after the line it already has and never misses or repeats one. */
+CREATE TABLE IF NOT EXISTS live_captions (
+  id VARCHAR(64) PRIMARY KEY,
+  lesson_id VARCHAR(64) NOT NULL,
+  seq INT NOT NULL,
+  at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  speaker_id VARCHAR(64) NULL,
+  speaker_name VARCHAR(160) NULL,
+  text TEXT NOT NULL,
+  INDEX idx_live_captions_lesson (lesson_id, seq)
+) ENGINE=InnoDB;
+
+/* Who is in the room. A seat fades on its own when a browser disappears. */
+CREATE TABLE IF NOT EXISTS live_presence (
+  id VARCHAR(130) PRIMARY KEY,
+  lesson_id VARCHAR(64) NOT NULL,
+  user_id VARCHAR(64) NOT NULL,
+  name VARCHAR(160) NULL,
+  role VARCHAR(30) NULL,
+  joined_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_live_presence_lesson (lesson_id, last_seen_at)
 ) ENGINE=InnoDB;
 
 /* WHAT EVERYBODY DID, AND WHEN. One row per change made through the API:

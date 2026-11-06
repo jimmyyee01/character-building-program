@@ -1,5 +1,5 @@
 {
-  "build": "2026-11-06-system-log-and-trash",
+  "build": "2026-11-07-live-classes",
   "features": [
     "health",
     "super.analytics",
@@ -32,7 +32,12 @@
     "letter.after-module",
     "auth.student-leave-lock",
     "super.activity-log",
-    "super.trash"
+    "super.trash",
+    "live.video-room",
+    "live.captions",
+    "live.transcript",
+    "live.scheduling",
+    "live.alerts"
   ],
   "note": "Static build marker. If /api/health has no build, the FILES are newer than the backend process (restart it). If this file is missing or shows an older build, the FOLDER being served is not the one you pulled."
 }
