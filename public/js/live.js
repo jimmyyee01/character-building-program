@@ -47,13 +47,14 @@ function roomStatusText(lesson) {
 }
 
 /* --------------------------------------------------------------- drawing --- */
-function liveProblem(title, hint) {
+function liveProblem(title, hint, extra) {
   const stage = roomEl('liveStage');
   const meta = roomEl('liveMeta');
   if (meta) meta.textContent = hint || '';
   if (stage) {
     stage.innerHTML = '<div class="live-placeholder"><b>' + esc(title) + '</b>' +
-      (hint ? '<span class="small muted">' + esc(hint) + '</span>' : '') + '</div>';
+      (hint ? '<span class="small muted">' + esc(hint) + '</span>' : '') +
+      (extra || '') + '</div>';
   }
 }
 
@@ -81,6 +82,105 @@ function renderHead(lesson) {
   if (linkBtn) linkBtn.classList.toggle('hidden', !lesson.joinUrl);
 }
 
+/* ------------------------------------------------------------- the camera ---
+   A video room can only work when the browser will hand over the camera, and
+   the third-party video server answers "WebRTC is not available in your
+   browser" whenever it cannot — a sentence that tells nobody what to do next.
+   So ask first, and answer with the actual reason and the actual way out:
+     insecure  the page is on http (or an untrusted address), and no browser
+               gives a camera to an address it cannot trust;
+     inapp     the link was opened inside WhatsApp / Facebook / Instagram and
+               those apps keep the camera for themselves;
+     webrtc    the browser is too old or has WebRTC switched off;
+     devices   the browser has WebRTC but exposes no camera or microphone.
+   None of these stop the class: the captions and the transcript keep working,
+   and the host's meeting link is still one tap away. */
+const IN_APP_BROWSER = /(FBAN|FBAV|FB_IAB|Instagram|Line\/|LinkedInApp|WhatsApp|Twitter|MicroMessenger|; wv\)|GSA\/)/i;
+
+function videoCapability() {
+  const host = String(location.hostname || '');
+  const localHost = /^(localhost|127\.0\.0\.1|::1|\[::1\])$/i.test(host);
+  const secure = window.isSecureContext === true || localHost;
+  const webrtc = typeof window.RTCPeerConnection === 'function' ||
+    typeof window.webkitRTCPeerConnection === 'function';
+  const devices = !!(navigator.mediaDevices &&
+    typeof navigator.mediaDevices.getUserMedia === 'function');
+  const inApp = IN_APP_BROWSER.test(String(navigator.userAgent || ''));
+  let why = '';
+  if (!secure) why = 'insecure';
+  else if (!webrtc) why = inApp ? 'inapp' : 'webrtc';
+  else if (!devices) why = 'devices';
+  return { ok: !why, why: why, secure: secure, webrtc: webrtc, devices: devices, inApp: inApp };
+}
+
+/* The same room at its secure address: https on the standard port unless the
+   server says it publishes one somewhere else. */
+function secureRoomLink(lesson) {
+  const host = String(location.hostname || '').replace(/:\d+$/, '');
+  if (!host) return '';
+  const port = lesson && lesson.securePort ? ':' + lesson.securePort : '';
+  return 'https://' + host + port + '/live?code=' + encodeURIComponent(ROOM.code);
+}
+
+/* Where to send someone whose link opened inside an app that has no camera. */
+function openInBrowserLink(lesson) {
+  const target = (lesson && lesson.secure ? secureRoomLink(lesson) : '') ||
+    (location.href || '').replace(/^http:/i, 'https:');
+  if (/Android/i.test(String(navigator.userAgent || ''))) {
+    return 'intent://' + target.replace(/^https?:\/\//i, '') +
+      '#Intent;scheme=https;package=com.android.chrome;end';
+  }
+  return target;
+}
+
+function cameraProblem(kind, lesson) {
+  const secureUrl = secureRoomLink(lesson);
+  const canGoSecure = !!secureUrl && !/^https:/i.test(location.href) && !!(lesson && lesson.secure);
+  const secureButton = canGoSecure
+    ? '<a class="btn small" href="' + esc(secureUrl) + '">Open the secure address</a>'
+    : '';
+  if (kind === 'insecure') {
+    return {
+      title: 'The camera needs a secure (https) address.',
+      hint: 'This room was opened at ' + (location.origin || 'a plain http address') +
+        ', and browsers never give a camera or a microphone to an address they cannot trust. ' +
+        'The class still reads here as text; for the video, open the secure address.',
+      extra: secureButton ||
+        '<span class="small muted">Ask the host for the https address of this room.</span>'
+    };
+  }
+  if (kind === 'inapp') {
+    return {
+      title: 'This app’s built-in browser has no camera.',
+      hint: 'WhatsApp, Facebook, Instagram and the like open links in their own browser, ' +
+        'which keeps the camera for the app. Open this room in Chrome, Safari, Edge or Firefox ' +
+        'and the video starts there.',
+      extra: '<a class="btn small" href="' + esc(openInBrowserLink(lesson)) + '" target="_blank" rel="noopener">Open in browser</a>'
+    };
+  }
+  return {
+    title: 'This browser cannot show a video call.',
+    hint: 'Use a recent Chrome, Edge, Safari or Firefox. Everything said is still written down ' +
+      'here as captions, and kept as the class transcript.',
+    extra: ''
+  };
+}
+
+/* A browser that has already decided against the camera says so before the video
+   server ever asks (this is also what a page with a certificate the browser does
+   not trust looks like in Chrome: the camera is refused and 'WebRTC is not
+   available' is all the visitor would otherwise be told). */
+function cameraRefused() {
+  return new Promise(function (resolve) {
+    try {
+      if (!navigator.permissions || !navigator.permissions.query) return resolve(false);
+      navigator.permissions.query({ name: 'camera' }).then(function (status) {
+        resolve(!!status && status.state === 'denied');
+      }).catch(function () { resolve(false); });
+    } catch (e) { resolve(false); }
+  });
+}
+
 function mountVideo(lesson) {
   const stage = roomEl('liveStage');
   if (!stage) return;
@@ -88,6 +188,13 @@ function mountVideo(lesson) {
     liveProblem('The video room is not available.',
       lesson.joinUrl ? 'Use “Meeting link” above to join where the class meets.'
         : 'The class can still be followed as text in the panel beside this.');
+    return;
+  }
+  /* Ask before we hand the stage over: a room that cannot work must say why. */
+  const can = videoCapability();
+  if (!can.ok) {
+    const problem = cameraProblem(can.why, lesson);
+    liveProblem(problem.title, problem.hint, problem.extra);
     return;
   }
   const name = (ROOM.me && ROOM.me.name) || 'Guest';
@@ -99,7 +206,27 @@ function mountVideo(lesson) {
     'allow="camera; microphone; fullscreen; display-capture; autoplay; clipboard-write" ' +
     'allowfullscreen></iframe>';
   const frame = roomEl('liveFrame');
-  if (frame) { frame.setAttribute('src', src); frame.src = src; }
+  if (!frame) return;
+  let arrived = false;
+  frame.onload = function () { arrived = true; };
+  frame.setAttribute('src', src);
+  frame.src = src;
+  cameraRefused().then(function (blocked) {
+    if (!blocked || ROOM.ended) return;
+    liveProblem('The browser has blocked the camera for this address.',
+      'Allow the camera for this site (the camera or sliders icon beside the address, ' +
+      'then reload), or use the host’s meeting link. A page whose certificate the browser ' +
+      'does not trust — a self-signed certificate, or one issued for an IP address — ' +
+      'blocks the camera whatever you press: ask for the trusted https address. ' +
+      'The captions and the transcript keep working here.');
+  });
+  /* A video server that never answers must not look like a frozen class. */
+  setTimeout(function () {
+    if (arrived || ROOM.ended || !roomEl('liveFrame')) return;
+    liveProblem('The video server did not answer.',
+      'Check the internet connection, or use “Meeting link” above. ' +
+      'The captions and the transcript keep working.');
+  }, 20000);
 }
 
 /* --------------------------------------------------------------- captions --- */

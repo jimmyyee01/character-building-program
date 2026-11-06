@@ -155,6 +155,17 @@ function live_video_base(?array $row): ?string {
     return 'https://' . $domain . '/' . $room;
 }
 
+/* Is this request already secure? A browser gives a camera and a microphone only
+   to an https address, and the room page has to know whether such an address
+   exists before it promises video (a link opened over plain http is exactly the
+   case where the video server says "WebRTC is not available"). */
+function live_secure(): bool {
+    $https = strtolower((string)($_SERVER['HTTPS'] ?? ''));
+    if ($https !== '' && $https !== 'off' && $https !== '0') return true;
+    if (strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https') return true;
+    return (string)($_SERVER['SERVER_PORT'] ?? '') === '443';
+}
+
 function live_room_path(array $row): string {
     return '/live?code=' . rawurlencode((string)($row['code'] ?? ''));
 }
@@ -226,6 +237,10 @@ function live_public(array $row, ?array $user): array {
         'joinUrl' => ($row['join_url'] ?? '') === '' ? null : (string)$row['join_url'],
         'roomPath' => live_room_path($row),
         'videoBase' => live_video_base($row),
+        /* true when this deployment answers on https: the only address a
+           browser will hand a camera to */
+        'secure' => live_secure(),
+        'securePort' => null,
         'captions' => (int)($row['caption_count'] ?? 0),
         'canHost' => live_is_host($user, $row),
         'canJoin' => live_can_watch($user, $row),

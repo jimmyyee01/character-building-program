@@ -196,7 +196,16 @@ function dueTick(now) {
 }
 
 /* ---------------------------------------------------------------- shape --- */
+/* Whether this process also answers on https. A browser gives a camera only to a
+   secure address, and the room page needs to know which address that is. */
+function secureAddress() {
+  const on = String(process.env.APP_TLS || '') === '1';
+  const port = Number(process.env.APP_HTTPS_PORT) || 0;
+  return { secure: on, securePort: on && port && port !== 443 ? port : null };
+}
+
 function publicLesson(lesson, user) {
+  const safe = secureAddress();
   return {
     id: lesson.id,
     code: lesson.code,
@@ -214,6 +223,9 @@ function publicLesson(lesson, user) {
     joinUrl: lesson.joinUrl || null,
     roomPath: roomPath(lesson),
     videoBase: videoBase(lesson),
+    /* true when the same room can be reached over https (camera allowed) */
+    secure: safe.secure,
+    securePort: safe.securePort,
     captions: Number(lesson.captionCount) || 0,
     canHost: isHost(user, lesson),
     canJoin: canWatch(user, lesson),

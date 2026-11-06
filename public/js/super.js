@@ -2947,6 +2947,14 @@ async function renderSettings() {
             '<input type="checkbox" id="stNoVideo" style="width:auto"' +
             (cur.videoDomain === 'off' ? ' checked' : '') + '> No built-in video room</label></div>' +
       '</div>' +
+      /* The one thing that decides whether the camera starts at all, said where
+         the person who can fix it is standing. */
+      '<p class="muted small mt">Browsers give a camera and a microphone only to a ' +
+        '<b>secure (https)</b> address, and only to a real browser — a link opened inside ' +
+        'WhatsApp or Facebook cannot show the video, so the room tells people to open it in ' +
+        'Chrome, Safari, Edge or Firefox. A self-signed certificate is not enough: the address ' +
+        'must be trusted (for example a domain with a Let’s Encrypt certificate). Without a ' +
+        'camera the class still runs: it is written down as captions and kept as a transcript.</p>' +
       '<div class="mt"><button type="submit">Save settings</button></div>' +
     '</form></div>' +
     '<div class="card"><h3>Super login credentials</h3>' +

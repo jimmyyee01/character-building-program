@@ -35,7 +35,7 @@ async function main() {
     (r.data.features || []).indexOf('admin.analytics') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
   check('the login serves the live top-performers build and its features',
-    r.ok && r.data.build === '2026-11-06-system-log-and-trash' &&
+    r.ok && !!r.data.build &&
       (r.data.features || []).indexOf('reports.module-performers') !== -1 &&
       (r.data.features || []).indexOf('reports.top-performers') !== -1 &&
       (r.data.features || []).indexOf('public.top-performers') !== -1 &&
@@ -55,6 +55,15 @@ async function main() {
   check('this deployment signs a student out when the app is left',
     r.ok && (r.data.features || []).indexOf('auth.student-leave-lock') !== -1,
     'features ' + JSON.stringify(r.data.features || []));
+  /* The process must be running the build the folder ships. When they differ,
+     the files were updated and the process was not restarted — the commonest
+     "my fix did nothing" there is. */
+  let marker = '';
+  try { marker = (await (await fetch(base + '/build.json')).json()).build || ''; }
+  catch (e) { marker = ''; }
+  check('the running build matches the build the folder ships',
+    !!marker && r.data.build === marker,
+    'health ' + (r.data.build || '?') + ' marker ' + (marker || '?'));
   check('this deployment carries the library media and letter features',
     r.ok && (r.data.features || []).indexOf('library.media') !== -1 &&
       (r.data.features || []).indexOf('library.letters') !== -1,

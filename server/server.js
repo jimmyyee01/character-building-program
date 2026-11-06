@@ -162,6 +162,39 @@ const PAGES = {
   '/live': 'live.html'
 };
 
+/* TLS is decided once, at boot, because two things depend on it: whether a
+   plain-http page is moved to the secure address, and whether the room may
+   promise a camera (browsers give one only to a secure address). */
+const TLS_CERT = process.env.TLS_CERT || path.join(ROOT, 'certs', 'server.crt');
+const TLS_KEY = process.env.TLS_KEY || path.join(ROOT, 'certs', 'server.key');
+const HTTPS_PORT = process.env.HTTPS_PORT === 'off' ? 0 : (Number(process.env.HTTPS_PORT) || 443);
+const HAS_TLS = HTTPS_PORT > 0 && fs.existsSync(TLS_CERT) && fs.existsSync(TLS_KEY);
+/* The live-class engine reads these to tell a room which address is the
+   camera-safe one (and on which port, when it is not 443). */
+process.env.APP_TLS = HAS_TLS ? '1' : '';
+process.env.APP_HTTPS_PORT = HAS_TLS ? String(HTTPS_PORT) : '';
+
+function loopbackHost(host) {
+  return /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(String(host || ''));
+}
+
+/* Move a browser (not an API client) from http://host:3000/live to the https
+   address: an insecure page is the one place a camera can never work, and a
+   host who typed the short address should land in the room that works. */
+function secureRedirect(req, p) {
+  if (!HAS_TLS) return null;
+  if (req.socket && req.socket.encrypted) return null;
+  if ((req.headers['x-forwarded-proto'] || '') === 'https') return null;
+  if (req.method !== 'GET' && req.method !== 'HEAD') return null;
+  if (p.startsWith('/api/')) return null;
+  if (!/\btext\/html\b/i.test(String(req.headers.accept || ''))) return null;
+  const host = String(req.headers.host || '');
+  if (!host || loopbackHost(host)) return null;
+  const name = host.replace(/:\d+$/, '');
+  const port = HTTPS_PORT === 443 ? '' : ':' + HTTPS_PORT;
+  return 'https://' + name + port + req.url;
+}
+
 const handler = async (req, res) => {
   try {
     /* A path Node refuses to parse ("//%2e%2e%2f%2eenv") or a broken escape
@@ -174,6 +207,18 @@ const handler = async (req, res) => {
     } catch (e) {
       throw httpError(400, 'Malformed request path');
     }
+
+    const toSecure = secureRedirect(req, p);
+    if (toSecure) {
+      res.writeHead(302, { Location: toSecure, 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+
+    /* The live room embeds a video server in a frame that needs the camera and
+       the microphone: say so, instead of leaving it to the browser's default. */
+    res.setHeader('Permissions-Policy',
+      'camera=(self), microphone=(self), display-capture=(self), fullscreen=(self)');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
 
     if (p.startsWith('/api/')) {
       const body = await parseBody(req);
@@ -229,21 +274,19 @@ httpServer.listen(PORT, () => {
 });
 
 // When TLS certs are present, also serve HTTPS so browsers allow microphone
-// access (voice typing needs a secure context). Without them, HTTP only.
-const TLS_CERT = process.env.TLS_CERT || path.join(ROOT, 'certs', 'server.crt');
-const TLS_KEY = process.env.TLS_KEY || path.join(ROOT, 'certs', 'server.key');
-const HTTPS_PORT = Number(process.env.HTTPS_PORT) || 443;
-if (fs.existsSync(TLS_CERT) && fs.existsSync(TLS_KEY)) {
+// access (voice typing and the live classroom need a secure context). Without
+// them, HTTP only. The certificate paths and the port are resolved at the top.
+if (HAS_TLS) {
   try {
     const tls = { cert: fs.readFileSync(TLS_CERT), key: fs.readFileSync(TLS_KEY) };
     const httpsServer = https.createServer(tls, handler);
     httpsServer.listen(HTTPS_PORT, () => {
-      console.log(' HTTPS       : https://localhost:' + HTTPS_PORT + '/ (microphone enabled)');
+      console.log(' HTTPS       : https://localhost:' + HTTPS_PORT + '/ (microphone and camera enabled)');
     });
     httpsServer.on('error', (e) => console.error('[https]', e.message));
   } catch (e) {
     console.error('[https] failed to start:', e.message);
   }
 } else {
-  console.log(' HTTPS       : disabled (no TLS certs at ' + TLS_CERT + ') — voice typing needs HTTPS');
+  console.log(' HTTPS       : disabled (no TLS certs at ' + TLS_CERT + ') — the camera and the microphone need HTTPS');
 }

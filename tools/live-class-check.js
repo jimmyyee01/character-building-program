@@ -299,6 +299,35 @@ function liveAlert(list, code) {
   check('the room page is served', page.status === 200 && /\/js\/live\.js/.test(html),
     page.status + ' ' + String(html).slice(0, 80));
 
+  /* --------------------------------------- a room that says why it cannot --- */
+  /* The video server answers "WebRTC is not available in your browser" whenever
+     the browser refuses it a camera — a sentence that names the symptom and not
+     the cure, and it appears on the most ordinary links there are: a plain http
+     address, or a room opened inside WhatsApp. The room must therefore ask the
+     browser what it can do first, and answer with the reason and the way out. */
+  const roomJs = await (await fetch(base + '/js/live.js')).text();
+  check('the room asks whether the address is secure before it shows the camera',
+    /isSecureContext/.test(roomJs), 'no isSecureContext in live.js');
+  check('the room asks whether the browser has WebRTC and a camera',
+    /RTCPeerConnection/.test(roomJs) && /getUserMedia/.test(roomJs));
+  check('a link opened inside an app is told to open in a real browser',
+    /FBAN/.test(roomJs) && /Open in browser/.test(roomJs));
+  check('a plain http room points at the secure address',
+    /Open the secure address/.test(roomJs) && /'https:\/\/'/.test(roomJs));
+  check('the room says the class still works as text without a camera',
+    /captions and the transcript keep working/i.test(roomJs));
+  check('a camera the browser has already refused is named, not suffered',
+    /navigator\.permissions/.test(roomJs) && /blocked the camera for this address/.test(roomJs));
+  const shaped = await call(base, '/live-class/' + lesson.code, sup.token);
+  check('the room is told whether a secure address exists',
+    !!(shaped.data && shaped.data.lesson) && typeof shaped.data.lesson.secure === 'boolean',
+    JSON.stringify(shaped.data && shaped.data.lesson ? { secure: shaped.data.lesson.secure } : {}));
+  const serverSource = fs.readFileSync(path.join(ROOT, 'server', 'server.js'), 'utf8');
+  check('the page server moves a browser from http to https when it has a certificate',
+    /function secureRedirect/.test(serverSource) && /x-forwarded-proto/.test(serverSource));
+  check('the page server allows the camera and the microphone in the room frame',
+    /Permissions-Policy/.test(serverSource) && /camera=\(self\)/.test(serverSource));
+
   /* ------------------------------------------------- the consoles and the app -- */
   /* Every console starts a class from the same panel, so a page that stops
      loading common.js — or a console that stops calling it — is caught here
