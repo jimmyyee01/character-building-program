@@ -35,7 +35,7 @@ async function main() {
     (r.data.features || []).indexOf('admin.analytics') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
   check('the login serves the live top-performers build and its features',
-    r.ok && r.data.build === '2026-11-06-video-alert-points' &&
+    r.ok && r.data.build === '2026-11-06-student-leave-lock' &&
       (r.data.features || []).indexOf('reports.module-performers') !== -1 &&
       (r.data.features || []).indexOf('reports.top-performers') !== -1 &&
       (r.data.features || []).indexOf('public.top-performers') !== -1 &&
@@ -47,6 +47,9 @@ async function main() {
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
   check('this deployment carries the letter that closes each module',
     r.ok && (r.data.features || []).indexOf('letter.after-module') !== -1,
+    'features ' + JSON.stringify(r.data.features || []));
+  check('this deployment signs a student out when the app is left',
+    r.ok && (r.data.features || []).indexOf('auth.student-leave-lock') !== -1,
     'features ' + JSON.stringify(r.data.features || []));
   check('this deployment carries the library media and letter features',
     r.ok && (r.data.features || []).indexOf('library.media') !== -1 &&
@@ -565,6 +568,24 @@ async function part3(r, tok, check) {
 
   const stu = await call('/auth/login', { method: 'POST', body: { slug: 'greenfield-academy', identifier: 'STU-001', password: 'Student@123' } });
   const stuTok = stu.data.token;
+
+  /* ---- a student's sign-in lives only while the program is on screen ---- */
+  /* The learner app beats every few seconds; a session that goes quiet is
+     ended, so minimising, closing or leaving the app asks for the password
+     again. Staff sessions are never touched. */
+  r = await call('/auth/beat', { method: 'POST', body: {} });
+  check('POST /auth/beat refuses an anonymous caller', r.status === 401, 'status ' + r.status);
+  r = await call('/auth/beat', { method: 'POST', body: {} }, stuTok);
+  check('POST /auth/beat keeps a student session alive and reports the lock',
+    r.ok && r.data.leaveLocked === true && Number(r.data.idleMs) >= 4000,
+    'status ' + r.status + ' ' + JSON.stringify(r.data).slice(0, 140));
+  r = await call('/auth/beat', { method: 'POST', body: {} }, tok.schools);
+  check('POST /auth/beat leaves a staff session unlocked',
+    r.ok && r.data.leaveLocked === false, 'status ' + r.status + ' ' + JSON.stringify(r.data).slice(0, 140));
+  r = await call('/me', null, stuTok);
+  check('the student is still signed in after a beat',
+    r.ok && r.data.user && r.data.user.role === 'student', 'status ' + r.status);
+
   r = await call('/videos', null, stuTok);
   check('GET /videos -> {videos}', r.ok && Array.isArray(r.data.videos), 'status ' + r.status);
   r = await call('/thoughts', null, stuTok);

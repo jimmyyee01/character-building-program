@@ -85,6 +85,12 @@ node tools/chapter-lock-browser-check.js http://127.0.0.1:3000 # submits a chapt
                                                     # (uses STU-002 — reseed after three runs)
 node tools/chapter-read-gate-check.js   # a chapter's answer area opens only at its LAST page
                                         # (throw-away database; whole learner journey)
+node tools/student-lock-check.js        # a student's sign-in ends when the app goes quiet,
+                                        # while a staff session is untouched (throw-away database)
+node tools/student-lock-browser-check.js http://127.0.0.1:3000 # the same rule in a REAL browser:
+                                                    # focus lost, second tab, hidden page and
+                                                    # closed page all sign the learner out; a file
+                                                    # dialog opened from the app does not
 node tools/chapter-read-gate-browser-check.js http://127.0.0.1:3000 # the same rule in a REAL
                                                     # browser: the answer area is drawn but shut,
                                                     # opens on the chapter's last page, shuts again
@@ -104,7 +110,8 @@ Handy npm shortcuts: `npm run check:routes`, `npm run check:ui`, `npm run check:
 `npm run check:api:php`, `npm run check:live`, `npm run check:pages`, `npm run check:keywords`,
 `npm run check:browser`, `npm run check:chapter-lock`, `npm run check:read-gate`,
 `npm run check:read-gate-ui`, `npm run check:analytics`, `npm run check:reading`,
-`npm run check:letter`, `npm run check:http`.
+`npm run check:letter`, `npm run check:http`, `npm run check:student-lock`,
+`npm run check:student-lock-ui`.
 
 `npm run check:http` covers the answers a bad request earns: a body that is not
 JSON, a broken %-escape in the path and a path the URL parser refuses are 400s
@@ -136,7 +143,9 @@ creates the `chapter_reads` table that remembers how far a learner has read each
 chapter — the record behind a chapter's answer area, which is open only while the
 reader is on that chapter's last page (`chapter.reading-gate`). It also adds
 `modules.letter_json`, the pool of questions for the letter that closes a module
-(`letter.after-module`).
+(`letter.after-module`). It also adds `sessions.live_at`, the last moment a
+student's page said it was still on screen — the column behind the learner
+leave lock below (`auth.student-leave-lock`).
 
 ### "Unknown endpoint: GET /api/..." — the server is running older code
 
@@ -478,6 +487,26 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
    full-book control on the page), and the **whole book opens after every module
    is finished** — at the Final records level, and in the library, where the API
    withholds book files until then so it cannot be bypassed from the page.
+8. **Leaving the program signs a student out** (`auth.student-leave-lock`). A
+   student's sign-in lasts only while the app is in front of them: **minimising
+   the window, switching to another tab, switching to another program, closing
+   the tab and reloading** all end the session, and the learner is taken back to
+   their sign-in page with a note saying why — the password is needed again.
+   Three things happen at once: the closing tab says goodbye to the server (a
+   beacon, so it still leaves while the page goes), the token is wiped from the
+   browser, and a marker in `localStorage` means **opening the app in a second
+   tab** ends the session it finds running there too (both tabs then ask to sign
+   in). The page also beats every five seconds, and both backends refuse a
+   student session that has been quiet for 45 s (`STUDENT_IDLE_MS` on Node), so a
+   browser killed without a chance to say goodbye cannot be picked up again —
+   any request from a quiet student session is refused with 401 and the session
+   is destroyed. **Only `student` accounts are affected**: the super admin,
+   account admins, supervisors and teachers keep the ordinary seven-day session,
+   and nothing changes on the console pages. One deliberate consequence: a file
+   or photo dialog the app itself opens does *not* sign the learner out (the
+   window loses the focus while that dialog is up), but anything the learner
+   opens *outside* the app — including a meeting link or a certificate print
+   window started from a button — ends the session like any other leave.
 
 ---
 

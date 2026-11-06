@@ -1,5 +1,5 @@
 {
-  "build": "2026-11-06-video-alert-points",
+  "build": "2026-11-06-student-leave-lock",
   "features": [
     "health",
     "super.analytics",
@@ -29,7 +29,8 @@
     "assessment",
     "assessment.admin",
     "read-aloud",
-    "letter.after-module"
+    "letter.after-module",
+    "auth.student-leave-lock"
   ],
   "note": "Static build marker. If /api/health has no build, the FILES are newer than the backend process (restart it). If this file is missing or shows an older build, the FOLDER being served is not the one you pulled."
 }

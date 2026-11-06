@@ -77,6 +77,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_id VARCHAR(64) NOT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   expires_at DATETIME NOT NULL,
+  /* when the learner's page last proved it was still on screen — a student
+     session that goes quiet is ended, so leaving the app signs the learner out */
+  live_at DATETIME NULL,
   INDEX (user_id), INDEX (expires_at)
 ) ENGINE=InnoDB;
 

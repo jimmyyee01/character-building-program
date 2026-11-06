@@ -74,6 +74,11 @@ $wanted = [
         /* an account's own Letter of Christ (falls back to the program letter) */
         'letter_id' => 'VARCHAR(64) NULL',
     ],
+    'sessions' => [
+        /* when the learner's page last said it was still on screen: a student
+           sign-in ends when the app is minimised, closed or left */
+        'live_at' => 'DATETIME NULL',
+    ],
 ];
 
 $done = 0; $skipped = 0;

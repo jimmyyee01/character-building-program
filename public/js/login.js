@@ -3,7 +3,27 @@
 const slug = location.pathname.replace(/^\/t\//, '').split('/')[0];
 let tenantInfo = null;
 
+/* Where a learner lands again after being signed out: the app sends them back
+   here when the program is minimised, closed or left (see startStudentLock). */
+try { localStorage.setItem('cbp_login', location.pathname); } catch (e) {}
+
+/* Say why the sign-in page appeared again, so a learner never wonders whether
+   something broke. `left` is set by the app when it signs a student out. */
+function showLeftNote() {
+  const box = document.getElementById('leftBanner');
+  if (!box) return;
+  const why = (/[?&]left=([a-z]+)/.exec(location.search) || [])[1] || '';
+  if (!why) return;
+  box.textContent = why === 'tab'
+    ? 'The program was opened in another tab, so you were signed out. Sign in again to continue.'
+    : why === 'expired'
+      ? 'Your session is no longer active. Sign in again to continue.'
+      : 'You left the program screen, so you were signed out. Sign in again to continue.';
+  box.classList.remove('hidden');
+}
+
 async function init() {
+  showLeftNote();
   try {
     tenantInfo = await API.get('/public/tenant/' + encodeURIComponent(slug));
   } catch (e) {

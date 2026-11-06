@@ -220,10 +220,18 @@ async function openView(view) {
 }
 async function boot() {
   try { S.me = await API.get('/me'); }
-  catch (e) { location.href = '/'; return; }
+  catch (e) {
+    /* the sign-in page this learner came from, so a lost session lands there */
+    location.href = typeof leaveLoginUrl === 'function' ? leaveLoginUrl('expired') : '/';
+    return;
+  }
   if (S.me.user.role === 'tenant_admin') { location.href = '/admin'; return; }
   if (S.me.user.role === 'super') { location.href = '/super'; return; }
   API.setUser(S.me.user);
+  /* A student's sign-in lasts only while this screen is in front of them:
+     minimising, closing, opening another tab or switching to another program
+     signs them out and asks for the password again. Staff are not affected. */
+  if (S.me.user.role === 'student' && typeof startStudentLock === 'function') startStudentLock();
   /* Voice typing: a mic on every textarea (student/teacher/supervisor). Installed
      first so an unrelated widget failure can never take it down. Wire the ones on
      the page now, and catch any added later by the flows/modals. */

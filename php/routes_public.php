@@ -267,6 +267,15 @@ function r_auth_logout($user, $body, $params, $token, $query): array {
     return [];
 }
 
+/* The learner's page says "I am still here" every few seconds. A session that
+   stops beating is ended, so the sign-in dies with the window instead of
+   surviving on the machine. Staff pages never call it (and never need to). */
+function r_auth_beat($user, $body, $params, $token, $query): array {
+    need($user, 'Sign in required', 401);
+    beat_session($token);
+    return ['leaveLocked' => student_leave_locked($user), 'idleMs' => STUDENT_IDLE_SECONDS * 1000];
+}
+
 function r_me($user, $body, $params, $token, $query): array {
     need($user, 'Sign in required', 401);
     $st = db()->prepare('SELECT * FROM users WHERE id=? LIMIT 1');

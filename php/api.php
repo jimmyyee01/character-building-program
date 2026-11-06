@@ -20,11 +20,12 @@ $ADMINS = ['super', 'tenant_admin'];
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-define('APP_BUILD', '2026-11-06-video-alert-points');
+define('APP_BUILD', '2026-11-06-student-leave-lock');
 define('APP_FEATURES', 'health,super.analytics,admin.analytics,reports.students,reports.student-roster,reports.student-detail,reports.student-assessment,reports.module-performers,reports.top-performers,'
     . 'public.top-performers,users.supervisor-auto-assignment,messaging,notifications,keywords,reading.activity,reading.video-alerts,'
     . 'reading.video-alert-points,'
-    . 'reader.book,library.lock,library.media,library.letters,certificates,chapter.pages,exports,assessment,assessment.admin,read-aloud,letter.after-module');
+    . 'reader.book,library.lock,library.media,library.letters,certificates,chapter.pages,exports,assessment,assessment.admin,read-aloud,letter.after-module,'
+    . 'auth.student-leave-lock');
 
 /* Public: which backend and which build is answering. */
 function r_health($user, $body, $params, $token, $query): array {
@@ -58,6 +59,7 @@ route('POST', '/api/auth/register', 'r_auth_register');
 route('POST', '/api/auth/login', 'r_auth_login');
 route('POST', '/api/auth/super-login', 'r_auth_superlogin');
 route('POST', '/api/auth/logout', 'r_auth_logout');
+route('POST', '/api/auth/beat', 'r_auth_beat');
 route('GET',  '/api/me', 'r_me');
 
 /* Participant experience */

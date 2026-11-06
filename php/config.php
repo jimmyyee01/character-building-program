@@ -82,9 +82,14 @@ function create_session(array $user): string {
     $token = bin2hex(random_bytes(24));
     $pdo = db();
     $pdo->prepare('DELETE FROM sessions WHERE expires_at < NOW()')->execute();
-    $stmt = $pdo->prepare('INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?,?,?,?)');
-    $stmt->execute([$token, $user['id'], now_dt(),
-        date('Y-m-d H:i:s', time() + SESSION_DAYS * 86400)]);
+    /* a single sign-in per browser is not enough for a learner: the app also has
+       to prove it is still on screen (see current_user below) */
+    $locks = has_column('sessions', 'live_at');
+    $sql = 'INSERT INTO sessions (token, user_id, created_at, expires_at'
+        . ($locks ? ', live_at' : '') . ') VALUES (?,?,?,?' . ($locks ? ',?' : '') . ')';
+    $args = [$token, $user['id'], now_dt(), date('Y-m-d H:i:s', time() + SESSION_DAYS * 86400)];
+    if ($locks) $args[] = now_dt();
+    $pdo->prepare($sql)->execute($args);
     setcookie('cbp_token', $token, time() + SESSION_DAYS * 86400, '/', '', false, true);
     return $token;
 }
@@ -93,16 +98,44 @@ function destroy_session(): void {
     if ($t) db()->prepare('DELETE FROM sessions WHERE token=?')->execute([$t]);
     setcookie('cbp_token', '', time() - 3600, '/', '', false, true);
 }
+/* The learner's page says "still here" every few seconds. A session that goes
+   quiet for STUDENT_IDLE_SECONDS is over — the window was minimised, closed or
+   left for another program or tab — so the learner must sign in again. Staff
+   accounts are never affected: they keep the ordinary session. Mirrors
+   currentUser()/beatSession() in server/auth.js. */
+const STUDENT_IDLE_SECONDS = 45;
+const LEAVE_LOCK_ROLES = ['student'];
+function beat_session(?string $token = null): void {
+    if (!has_column('sessions', 'live_at')) return;
+    $token = $token ?? token_from_request();
+    if (!$token) return;
+    db()->prepare('UPDATE sessions SET live_at=NOW() WHERE token=?')->execute([$token]);
+}
+function student_leave_locked(?array $user): bool {
+    return $user !== null && in_array((string)($user['role'] ?? ''), LEAVE_LOCK_ROLES, true);
+}
 
 /* ---------------------------------------------------------- current user - */
 function current_user(): ?array {
     $token = token_from_request();
     if (!$token) return null;
     $pdo = db();
-    $stmt = $pdo->prepare('SELECT u.* FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token=? AND s.expires_at > NOW() LIMIT 1');
+    $locks = has_column('sessions', 'live_at');
+    $sql = 'SELECT u.*' . ($locks ? ', s.live_at AS session_live_at' : '') .
+        ' FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token=? AND s.expires_at > NOW() LIMIT 1';
+    $stmt = $pdo->prepare($sql);
     $stmt->execute([$token]);
     $user = $stmt->fetch();
     if (!$user || (int)($user['suspended'] ?? 0) === 1) return null;
+    if ($locks) {
+        $last = $user['session_live_at'] ? (int)strtotime((string)$user['session_live_at']) : 0;
+        unset($user['session_live_at']);
+        if (student_leave_locked($user) && $last && time() - $last > STUDENT_IDLE_SECONDS) {
+            $pdo->prepare('DELETE FROM sessions WHERE token=?')->execute([$token]);
+            return null;
+        }
+        if (student_leave_locked($user)) beat_session($token);
+    }
     return normalize_user($user);
 }
 function require_role(?array $user, array $roles): array {

@@ -18,8 +18,11 @@ const API = {
     try { data = await res.json(); } catch (e) {}
     if (res.status === 401 && path.indexOf('/auth/') !== 0 && path !== '/public/portals') {
       API.setToken(null); API.setUser(null);
+      if (typeof LEAVE_LOCK === 'object' && LEAVE_LOCK.on) stopStudentLock();
       if (!/^\/(super|t\/)/.test(location.pathname) && location.pathname !== '/') {
-        location.href = '/';
+        /* a learner goes back to the sign-in page they came from */
+        location.href = /^\/app/.test(location.pathname) && typeof leaveLoginUrl === 'function'
+          ? leaveLoginUrl('expired') : '/';
       }
     }
     if (!res.ok || data.ok === false) {
@@ -62,9 +65,180 @@ const API = {
   async logout() {
     try { await API.post('/auth/logout'); } catch (e) {}
     API.setToken(null); API.setUser(null);
+    if (LEAVE_LOCK.on || LEAVE_LOCK.tab) stopStudentLock();
     location.href = '/';
   }
 };
+
+/* ============================================ student leave lock ========== */
+/* A STUDENT's sign-in ends the moment the program is left: minimising the
+   window, switching to another tab, switching to another program, or closing
+   the page all end it, and the learner is sent back to the sign-in screen.
+   Staff (super admin, account admin, supervisor, teacher) are never affected —
+   startStudentLock() is only called by the learner app when the signed-in
+   account is a student.
+   What happens when the app is left:
+     1. the tab tells the server to end the session (sendBeacon, so the goodbye
+        still leaves while the page is closing),
+     2. the token is wiped from this browser, and
+     3. a claim kept in localStorage marks the running tab, so opening the app
+        in a second tab ends the session it finds running there as well.
+   The server also refuses a student session that has been silent for too long
+   (STUDENT_IDLE_MS), so a browser killed without a chance to say goodbye still
+   cannot be picked up again. */
+const LEAVE_LOCK = {
+  on: false, ending: false, readyAt: 0, hold: 0, timer: null, tab: null, reason: ''
+};
+const LEAVE_TAB_KEY = 'cbp_live_tab';
+const LEAVE_BEAT_MS = 5000;
+
+/* Where a signed-out learner signs in again: the page login.js remembers. */
+function leaveLoginUrl(reason) {
+  let stored = '';
+  try { stored = localStorage.getItem('cbp_login') || ''; } catch (e) {}
+  const url = /^\/t\/[A-Za-z0-9._-]+$/.test(stored) ? stored : '/';
+  return url + (reason ? '?left=' + encodeURIComponent(reason) : '');
+}
+function leaveTabClaim() {
+  try { return JSON.parse(localStorage.getItem(LEAVE_TAB_KEY) || 'null'); } catch (e) { return null; }
+}
+function leaveWriteClaim() {
+  try { localStorage.setItem(LEAVE_TAB_KEY, JSON.stringify({ id: LEAVE_LOCK.tab, at: Date.now() })); }
+  catch (e) { /* private mode: the heartbeat still protects the session */ }
+}
+function leaveDropClaim() {
+  try {
+    const c = leaveTabClaim();
+    if (c && c.id === LEAVE_LOCK.tab) localStorage.removeItem(LEAVE_TAB_KEY);
+  } catch (e) {}
+}
+/* The server is told "still here" — and tells us when the session is gone. */
+function leaveBeat() {
+  const token = API.token();
+  if (!token) return;
+  fetch('/api/auth/beat', {
+    method: 'POST', keepalive: true, credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: '{}'
+  }).then(function (res) {
+    if (res.status === 401) endStudentLock('expired');
+  }).catch(function () { /* offline: the next beat tries again */ });
+}
+
+/* The screen the learner sees for a moment before the sign-in page opens. */
+function leaveOverlay(reason) {
+  const note = reason === 'tab'
+    ? 'The program was opened in another tab, so this screen was signed out.'
+    : reason === 'expired'
+      ? 'This session is no longer active.'
+      : 'You left the program screen, so your session was signed out.';
+  let box = document.getElementById('leaveLockBox');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'leaveLockBox';
+    box.setAttribute('style', 'position:fixed;top:0;right:0;bottom:0;left:0;z-index:2147483000;' +
+      'background:rgba(8,15,29,.95);display:flex;align-items:center;justify-content:center;padding:24px;' +
+      'font:15px/1.55 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#e9eefb;text-align:center');
+    document.body.appendChild(box);
+  }
+  box.innerHTML = '<div style="max-width:430px">' +
+    '<div style="font-size:40px;line-height:1;margin-bottom:10px">&#128274;</div>' +
+    '<h2 style="margin:0 0 8px;font-size:20px">Signed out</h2>' +
+    '<p style="margin:0 0 16px;color:#b9c7e2">' + esc(note) +
+      ' Sign in again to continue where you left off.</p>' +
+    '<a href="' + esc(leaveLoginUrl(reason)) + '" style="display:inline-block;padding:10px 18px;' +
+      'border-radius:8px;background:#2f6fed;color:#fff;text-decoration:none;font-weight:600">' +
+      'Sign in again</a></div>';
+}
+
+/* Stand the guard down without saying anything: the page is already leaving,
+   or the server has told us the session is over. */
+function stopStudentLock() {
+  LEAVE_LOCK.on = false;
+  LEAVE_LOCK.ending = true;
+  if (LEAVE_LOCK.timer) { clearInterval(LEAVE_LOCK.timer); LEAVE_LOCK.timer = null; }
+  leaveDropClaim();
+}
+
+/* End the learner's session now. `quiet` is used while the page is closing:
+   there is nothing left to paint or to redirect. */
+function endStudentLock(reason, quiet) {
+  if (!LEAVE_LOCK.on || LEAVE_LOCK.ending) return;
+  LEAVE_LOCK.reason = reason || 'left';
+  stopStudentLock();
+  const token = API.token();
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  try {
+    /* sendBeacon still leaves while the tab is closing; the cookie set at
+       sign-in identifies the session, and the fetch covers browsers without it */
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon('/api/auth/logout', new Blob(['{}'], { type: 'application/json' }));
+    }
+    fetch('/api/auth/logout', {
+      method: 'POST', keepalive: true, credentials: 'same-origin', headers: headers, body: '{}'
+    }).catch(function () {});
+  } catch (e) { /* the server watchdog ends the session anyway */ }
+  API.setToken(null); API.setUser(null);
+  if (quiet) return;
+  leaveOverlay(LEAVE_LOCK.reason);
+  setTimeout(function () { location.replace(leaveLoginUrl(LEAVE_LOCK.reason)); }, 1400);
+}
+
+/* Start guarding a learner's sign-in. Safe to call more than once. */
+function startStudentLock() {
+  if (LEAVE_LOCK.on || LEAVE_LOCK.ending) return;
+  LEAVE_LOCK.tab = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  /* the first moments after a page opens are not a leave (the browser may not
+     even have handed the focus over yet) */
+  LEAVE_LOCK.readyAt = Date.now() + 1500;
+  LEAVE_LOCK.on = true;
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden' || document.hidden) endStudentLock('left');
+  });
+  /* another program, another window or the task bar takes the focus away */
+  window.addEventListener('blur', function () {
+    if (Date.now() < LEAVE_LOCK.readyAt) return;
+    if (Date.now() < LEAVE_LOCK.hold) return;   /* our own file dialog, see below */
+    endStudentLock('left');
+  });
+  /* the page is going away: closing the tab, reloading or navigating off */
+  window.addEventListener('pagehide', function () { endStudentLock('closed', true); });
+  /* the same app opened in a second tab writes the claim — this one signs out */
+  window.addEventListener('storage', function (e) {
+    if (e.key !== LEAVE_TAB_KEY || !e.newValue) return;
+    let claim = null;
+    try { claim = JSON.parse(e.newValue); } catch (err) { return; }
+    if (claim && claim.id && claim.id !== LEAVE_LOCK.tab) endStudentLock('tab');
+  });
+  /* A file or photo dialog opened from the app belongs to the app: while it is
+     up the window loses the focus, which must not be taken for leaving. */
+  document.addEventListener('click', function (e) {
+    const el = e.target;
+    if (el && el.tagName === 'INPUT' && String(el.type).toLowerCase() === 'file') {
+      LEAVE_LOCK.hold = Date.now() + 5 * 60 * 1000;
+    }
+  }, true);
+  ['change', 'cancel'].forEach(function (name) {
+    document.addEventListener(name, function (e) {
+      if (e.target && e.target.tagName === 'INPUT' && String(e.target.type).toLowerCase() === 'file') {
+        LEAVE_LOCK.hold = 0;
+      }
+    }, true);
+  });
+  window.addEventListener('focus', function () { LEAVE_LOCK.hold = 0; });
+
+  const running = leaveTabClaim();
+  leaveWriteClaim();
+  leaveBeat();
+  LEAVE_LOCK.timer = setInterval(function () { leaveWriteClaim(); leaveBeat(); }, LEAVE_BEAT_MS);
+  /* the app was already open in another tab: opening it again is a leave too */
+  if (running && running.id && running.id !== LEAVE_LOCK.tab &&
+      Date.now() - (Number(running.at) || 0) < 120000) {
+    endStudentLock('tab');
+  }
+}
 
 /* Drive the shared upload-progress bar while a file saves, so the admin sees a
    live percentage instead of a frozen form. Returns the API.upload promise;

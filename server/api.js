@@ -18,14 +18,14 @@ function need(cond, message, status) { if (!cond) throw new HttpError(message, s
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-const BUILD = '2026-11-06-video-alert-points';
+const BUILD = '2026-11-06-student-leave-lock';
 const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.students', 'reports.student-roster',
   'reports.student-detail', 'reports.student-assessment', 'reports.module-performers', 'reports.top-performers',
   'public.top-performers', 'reading.activity', 'reading.video-alerts', 'reading.video-alert-points',
   'messaging', 'notifications', 'users.supervisor-auto-assignment', 'keywords',
   'reader.book', 'library.lock', 'library.media', 'library.letters', 'certificates', 'chapter.pages',
   'chapter.reading-gate', 'exports', 'assessment', 'assessment.admin', 'read-aloud',
-  'letter.after-module'];
+  'letter.after-module', 'auth.student-leave-lock'];
 
 function send(res, code, obj) {
   const body = JSON.stringify(obj);
@@ -456,6 +456,15 @@ route('PUT', '/api/tenant/settings', ({ user, body }) => {
 route('POST', '/api/auth/logout', ({ req, res }) => {
   auth.destroySession(req, res);
   return { ok: true };
+});
+
+/* The student's page says "I am still here" every few seconds. A session that
+   stops beating is ended, so the sign-in dies with the window instead of
+   surviving on the machine. Staff pages never call it (and never need to). */
+route('POST', '/api/auth/beat', ({ user, token }) => {
+  need(user, 'Sign in required', 401);
+  auth.beatSession(token);
+  return { ok: true, leaveLocked: auth.isLeaveLocked(user), idleMs: auth.STUDENT_IDLE_MS };
 });
 
 route('GET', '/api/me', ({ user }) => {
