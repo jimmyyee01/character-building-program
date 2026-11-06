@@ -25,7 +25,9 @@
     "check:letter": "node tools/letter-browser-check.js http://127.0.0.1:3000",
     "check:http": "node tools/http-errors-check.js",
     "check:student-lock": "node tools/student-lock-check.js",
-    "check:student-lock-ui": "node tools/student-lock-browser-check.js http://127.0.0.1:3000"
+    "check:student-lock-ui": "node tools/student-lock-browser-check.js http://127.0.0.1:3000",
+    "check:logs": "node tools/system-log-check.js",
+    "check:logs:php": "node tools/system-log-check.js http://127.0.0.1:8080"
   },
   "engines": {
     "node": ">=16"

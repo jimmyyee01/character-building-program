@@ -10,22 +10,24 @@ header('Content-Type: application/json; charset=utf-8');
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/engine.php';
+require_once __DIR__ . '/audit.php';
 require_once __DIR__ . '/routes_public.php';
 require_once __DIR__ . '/routes_flow.php';
 require_once __DIR__ . '/routes_admin.php';
 require_once __DIR__ . '/routes_lessons.php';
+require_once __DIR__ . '/routes_audit.php';
 
 $PARTICIPANTS = ['student', 'teacher', 'member', 'supervisor'];
 $ADMINS = ['super', 'tenant_admin'];
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-define('APP_BUILD', '2026-11-06-student-leave-lock');
+define('APP_BUILD', '2026-11-06-system-log-and-trash');
 define('APP_FEATURES', 'health,super.analytics,admin.analytics,reports.students,reports.student-roster,reports.student-detail,reports.student-assessment,reports.module-performers,reports.top-performers,'
     . 'public.top-performers,users.supervisor-auto-assignment,messaging,notifications,keywords,reading.activity,reading.video-alerts,'
     . 'reading.video-alert-points,'
     . 'reader.book,library.lock,library.media,library.letters,certificates,chapter.pages,exports,assessment,assessment.admin,read-aloud,letter.after-module,'
-    . 'auth.student-leave-lock');
+    . 'auth.student-leave-lock,super.activity-log,super.trash');
 
 /* Public: which backend and which build is answering. */
 function r_health($user, $body, $params, $token, $query): array {
@@ -160,6 +162,13 @@ route('GET',    '/api/super/submissions', 'r_super_submissions');
 route('GET',    '/api/super/users', 'r_super_users');
 route('POST',   '/api/super/users', 'r_super_users_create');
 
+/* System log + Trash (super admin) */
+route('GET',    '/api/super/log', 'r_super_log');
+route('GET',    '/api/super/trash', 'r_super_trash');
+route('POST',   '/api/super/trash/([a-zA-Z0-9_-]+)/restore', 'r_super_trash_restore');
+route('DELETE', '/api/super/trash/([a-zA-Z0-9_-]+)', 'r_super_trash_purge');
+route('DELETE', '/api/super/trash', 'r_super_trash_clear');
+
 /* ---------------------------------------------------------- dispatch -- */
 try {
     $r = $_GET['r'] ?? '/';
@@ -200,6 +209,11 @@ try {
             throw $e;
         }
         if (!is_array($out)) $out = [];
+        /* Every change is written to the system log (the super admin's screen).
+           `activity` is how a handler describes its own entry; it is not part of
+           the answer, so it leaves before the response is written. */
+        log_mutation($user, $method, $path, $body, $out);
+        if (isset($out['logEntry'])) unset($out['logEntry']);
         send_json(200, array_merge(['ok' => true], $out));
     }
     send_json(404, ['ok' => false, 'error' => 'Unknown endpoint: ' . $method . ' ' . $path]);

@@ -324,3 +324,47 @@ CREATE TABLE IF NOT EXISTS live_lessons (
   INDEX idx_live_lessons_creator (creator_id),
   INDEX idx_live_lessons_scheduled (scheduled_at)
 ) ENGINE=InnoDB;
+
+/* WHAT EVERYBODY DID, AND WHEN. One row per change made through the API:
+   who, which role, which account, what item, and the moment it happened.
+   The super admin reads it on the "System log" screen. */
+CREATE TABLE IF NOT EXISTS activity_log (
+  id VARCHAR(64) PRIMARY KEY,
+  at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  action VARCHAR(30) NOT NULL,
+  entity VARCHAR(40) NOT NULL,
+  entity_id VARCHAR(64) NULL,
+  label VARCHAR(255) NULL,
+  detail VARCHAR(500) NULL,
+  user_id VARCHAR(64) NULL,
+  user_name VARCHAR(255) NULL,
+  role VARCHAR(30) NULL,
+  tenant_id VARCHAR(64) NULL,
+  tenant_name VARCHAR(255) NULL,
+  ip VARCHAR(60) NULL,
+  INDEX idx_activity_at (at),
+  INDEX idx_activity_user (user_id),
+  INDEX idx_activity_action (action),
+  INDEX idx_activity_tenant (tenant_id)
+) ENGINE=InnoDB;
+
+/* NOTHING IS GONE BY DEFAULT. A deletion copies the record (and whatever hung
+   off it) here before the row goes, so it can be put back - or deleted for
+   good. payload_json holds the rows exactly as they were read. */
+CREATE TABLE IF NOT EXISTS trash (
+  id VARCHAR(64) PRIMARY KEY,
+  at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  entity VARCHAR(40) NOT NULL,
+  entity_id VARCHAR(64) NULL,
+  label VARCHAR(255) NULL,
+  by_id VARCHAR(64) NULL,
+  by_name VARCHAR(255) NULL,
+  by_role VARCHAR(30) NULL,
+  tenant_id VARCHAR(64) NULL,
+  tenant_name VARCHAR(255) NULL,
+  payload_json LONGTEXT NOT NULL,
+  restored_at DATETIME NULL,
+  restored_by VARCHAR(64) NULL,
+  INDEX idx_trash_at (at),
+  INDEX idx_trash_entity (entity)
+) ENGINE=InnoDB;

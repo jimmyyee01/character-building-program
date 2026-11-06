@@ -628,7 +628,7 @@ async function userRowClick(e) {
     toast(u.suspended ? 'User unsuspended' : 'User suspended', 'ok');
   } else if (act === 'del') {
     if (u.id === ME.user.id) { toast('You cannot delete your own account', 'err'); return; }
-    if (!confirm('Delete ' + u.fullName + '? This cannot be undone.')) return;
+    if (!confirm('Move ' + u.fullName + ' to the Trash? The account is kept and the super admin can put it back.')) return;
     await API.del('/users/' + u.id);
     toast('User deleted', 'ok');
   }
@@ -867,7 +867,7 @@ async function renderLibrary() {
     if (b.dataset.libdel) {
       const it = items.filter(function (x) { return x.id === b.dataset.libdel; })[0];
       if (!it) return;
-      if (!confirm('Delete "' + it.title + '" from the library?')) return;
+      if (!confirm('Move "' + it.title + '" to the Trash? It can be put back.')) return;
       await API.del('/library/' + it.id);
       toast('Entry deleted', 'ok');
       renderLibrary();
@@ -1200,14 +1200,14 @@ function bindBookEvents(area) {
       if (b.dataset.closedetail) { booksState.openBookId = null; await refreshBooks(); return; }
       if (b.dataset.editch) { openChapterEdit(b.dataset.editch); return; }
       if (b.dataset.delch) {
-        if (!confirm('Delete this chapter and all of its questions?')) return;
+        if (!confirm('Move this chapter and its questions to the Trash? They can be put back.')) return;
         await API.del('/chapters/' + b.dataset.delch);
         toast('Chapter deleted', 'ok');
         await refreshBooks();
         return;
       }
       if (b.dataset.delobj) {
-        if (!confirm('Delete this question?')) return;
+        if (!confirm('Move this question to the Trash? It can be put back.')) return;
         await API.del('/objectives/' + b.dataset.delobj);
         toast('Question deleted', 'ok');
         await refreshBooks();

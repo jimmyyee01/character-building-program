@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const dbm = require('./db');
 const auth = require('./auth');
+const audit = require('./audit');
 
 const UPLOADS = path.join(__dirname, '..', 'uploads');
 
@@ -18,14 +19,14 @@ function need(cond, message, status) { if (!cond) throw new HttpError(message, s
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-const BUILD = '2026-11-06-student-leave-lock';
+const BUILD = '2026-11-06-system-log-and-trash';
 const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.students', 'reports.student-roster',
   'reports.student-detail', 'reports.student-assessment', 'reports.module-performers', 'reports.top-performers',
   'public.top-performers', 'reading.activity', 'reading.video-alerts', 'reading.video-alert-points',
   'messaging', 'notifications', 'users.supervisor-auto-assignment', 'keywords',
   'reader.book', 'library.lock', 'library.media', 'library.letters', 'certificates', 'chapter.pages',
   'chapter.reading-gate', 'exports', 'assessment', 'assessment.admin', 'read-aloud',
-  'letter.after-module', 'auth.student-leave-lock'];
+  'letter.after-module', 'auth.student-leave-lock', 'super.activity-log', 'super.trash'];
 
 function send(res, code, obj) {
   const body = JSON.stringify(obj);
@@ -225,10 +226,17 @@ async function handle(req, res, p, body) {
     if (!m) continue;
     try {
       const out = await r.handler({ req, res, body, user, token, params: m.slice(1) });
+      /* Every change is written to the system log (the super admin's screen) —
+         who did it, what they touched and when. `activity` is how a handler
+         describes its own entry; it is not part of the answer. */
+      audit.logRequest(user, req, req.method, p, body, out);
+      if (out && out.logEntry) delete out.logEntry;
       if (out !== undefined && !res.writableEnded) send(res, 200, out);
     } catch (e) {
       if (e instanceof HttpError) send(res, e.status, { ok: false, error: e.message });
-      else { console.error('[api]', e); send(res, 500, { ok: false, error: e.message || 'Server error' }); }
+      else if (e && typeof e.status === 'number' && e.status >= 400 && e.status < 500) {
+        send(res, e.status, { ok: false, error: e.message });
+      } else { console.error('[api]', e); send(res, 500, { ok: false, error: e.message || 'Server error' }); }
     }
     return;
   }
@@ -394,8 +402,31 @@ route('POST', '/api/auth/register', () => {
   need(false, 'Self-registration is disabled. Ask your administrator to add you to the system.', 403);
 });
 
+/* A failed sign-in is worth recording: it is the one action where the person
+   is not signed in yet, so the router cannot label it by itself. */
+function signInFailed(req, identifier, error, tenant) {
+  audit.record({
+    action: 'sign-in-failed',
+    entity: 'session',
+    label: String(identifier || '').trim(),
+    detail: (error && error.message) || '',
+    tenantId: tenant ? tenant.id : null,
+    tenantName: tenant ? tenant.name : null,
+    ip: audit.ipOf(req)
+  });
+}
+
 route('POST', '/api/auth/login', ({ body, req, res }) => {
   body = body || {};
+  try {
+    return signIn(body, req, res);
+  } catch (e) {
+    signInFailed(req, body.identifier, e, dbm.db.tenants.find(t => t.slug === body.slug));
+    throw e;
+  }
+});
+
+function signIn(body, req, res) {
   const tenant = dbm.db.tenants.find(t => t.slug === body.slug);
   need(tenant, 'Portal not found', 404);
   const portal = dbm.byId('portals', tenant.portalId);
@@ -411,11 +442,22 @@ route('POST', '/api/auth/login', ({ body, req, res }) => {
     throw new HttpError('This portal is closed right now. The programme reopens on the scheduled dates.', 403);
   }
   const token = auth.createSession(req, res, user);
-  return { ok: true, token, user: publicUser(user), portalClosed: !open };
-});
+  return { ok: true, token, user: publicUser(user), portalClosed: !open,
+    logEntry: { action: 'sign-in', entity: 'session', entityId: user.id,
+      label: publicUser(user).fullName, actor: user } };
+}
 
 route('POST', '/api/auth/super-login', ({ body, req, res }) => {
   body = body || {};
+  try {
+    return superSignIn(body, req, res);
+  } catch (e) {
+    signInFailed(req, body.username, e, null);
+    throw e;
+  }
+});
+
+function superSignIn(body, req, res) {
   const sa = dbm.db.settings.superAdmin;
   const uname = String(body.username || '').trim();
   need(uname && sa && uname === sa.username, 'Invalid credentials', 401);
@@ -430,8 +472,10 @@ route('POST', '/api/auth/super-login', ({ body, req, res }) => {
     dbm.save();
   }
   const token = auth.createSession(req, res, su);
-  return { ok: true, token, user: publicUser(su) };
-});
+  return { ok: true, token, user: publicUser(su),
+    logEntry: { action: 'sign-in', entity: 'session', entityId: su.id,
+      label: publicUser(su).fullName, actor: su } };
+}
 
 route('PUT', '/api/tenant/settings', ({ user, body }) => {
   requireRole(user, ADMINS);
@@ -453,9 +497,10 @@ route('PUT', '/api/tenant/settings', ({ user, body }) => {
   return { ok: true, letterId: tenant.letterId || null };
 });
 
-route('POST', '/api/auth/logout', ({ req, res }) => {
+route('POST', '/api/auth/logout', ({ user, req, res }) => {
   auth.destroySession(req, res);
-  return { ok: true };
+  return { ok: true, logEntry: { action: 'sign-out', entity: 'session',
+    label: user ? publicUser(user).fullName : 'Signed out' } };
 });
 
 /* The student's page says "I am still here" every few seconds. A session that
@@ -1249,9 +1294,16 @@ route('DELETE', '/api/super/assessment/categories/([A-Za-z0-9_-]+)', ({ user, pa
   need(category, 'Category not found', 404);
   const remaining = assessmentStatementCount(def) - category.statements.length;
   need(remaining > 0, 'Keep at least one objective question in the self-assessment');
+  const index = def.categories.findIndex(c => c.id === category.id);
+  const entry = audit.trash(user, 'assessment-category', category.title, [{
+    collection: 'assessment', kind: 'category', index: index,
+    doc: { id: category.id, title: category.title, statements: category.statements }
+  }]);
   def.categories = def.categories.filter(c => c.id !== category.id);
   saveAssessmentDef(def);
-  return { ok: true, assessment: assessmentPublicDef(def) };
+  return { ok: true, assessment: assessmentPublicDef(def),
+    deleted: { entity: 'assessment-category', id: category.id,
+      label: entry ? entry.label : category.title, trashId: entry ? entry.id : null } };
 });
 route('POST', '/api/super/assessment/categories/([A-Za-z0-9_-]+)/statements', ({ user, params, body }) => {
   requireRole(user, SUPER);
@@ -1284,9 +1336,16 @@ route('DELETE', '/api/super/assessment/statements/([A-Za-z0-9_-]+)', ({ user, pa
   const found = assessmentStatementById(def, params[0]);
   need(found, 'Objective question not found', 404);
   need(assessmentStatementCount(def) > 1, 'Keep at least one objective question in the self-assessment');
+  const index = found.category.statements.findIndex(s => s.id === found.statement.id);
+  const entry = audit.trash(user, 'assessment-statement', found.statement.text, [{
+    collection: 'assessment', kind: 'statement', categoryId: found.category.id, index: index,
+    doc: found.statement
+  }]);
   found.category.statements = found.category.statements.filter(s => s.id !== found.statement.id);
   saveAssessmentDef(def);
-  return { ok: true, assessment: assessmentPublicDef(def) };
+  return { ok: true, assessment: assessmentPublicDef(def),
+    deleted: { entity: 'assessment-statement', id: found.statement.id,
+      label: entry ? entry.label : found.statement.text, trashId: entry ? entry.id : null } };
 });
 
 route('GET', '/api/modules', ({ user }) => {
@@ -2483,8 +2542,9 @@ route('DELETE', '/api/super/portals/([a-z0-9_-]+)', ({ user, params }) => {
   need(p, 'Portal not found', 404);
   need(!dbm.db.tenants.some(t => t.portalId === p.id),
     'Delete or move the accounts created under this portal first');
+  const entry = audit.trash(user, 'portal', p.name, [{ collection: 'portals', doc: p }]);
   dbm.remove('portals', p.id);
-  return { ok: true };
+  return { ok: true, deleted: { entity: 'portal', id: p.id, label: entry ? entry.label : p.name, trashId: entry ? entry.id : null } };
 });
 
 route('GET', '/api/super/tenants', ({ user }) => {
@@ -2548,13 +2608,25 @@ route('DELETE', '/api/super/tenants/([a-z0-9_-]+)', ({ user, params }) => {
   const t = dbm.byId('tenants', params[0]);
   need(t, 'Account not found', 404);
   const ids = dbm.db.users.filter(u => u.tenantId === t.id).map(u => u.id);
+  /* everything the account held is kept together, so one Restore puts the
+     school back exactly as it was */
+  const records = [{ collection: 'tenants', doc: t }];
+  dbm.db.users.filter(u => u.tenantId === t.id)
+    .forEach(u => records.push({ collection: 'users', doc: u }));
+  (dbm.db.submissions || []).filter(s => s.tenantId === t.id)
+    .forEach(s => records.push({ collection: 'submissions', doc: s }));
+  (dbm.db.certificates || []).filter(c => c.tenantId === t.id)
+    .forEach(c => records.push({ collection: 'certificates', doc: c }));
+  (dbm.db.thoughts || []).filter(x => x.tenantId === t.id)
+    .forEach(x => records.push({ collection: 'thoughts', doc: x }));
+  const entry = audit.trash(user, 'tenant', t.name, records);
   dbm.db.users = dbm.db.users.filter(u => u.tenantId !== t.id);
   dbm.db.submissions = dbm.db.submissions.filter(s => s.tenantId !== t.id);
   dbm.db.certificates = dbm.db.certificates.filter(c => c.tenantId !== t.id);
   dbm.db.thoughts = (dbm.db.thoughts || []).filter(x => x.tenantId !== t.id);
   dbm.db.sessions = dbm.db.sessions.filter(s => ids.indexOf(s.userId) === -1);
   dbm.remove('tenants', t.id);
-  return { ok: true };
+  return { ok: true, deleted: { entity: 'tenant', id: t.id, label: entry ? entry.label : t.name, trashId: entry ? entry.id : null } };
 });
 
 /* ---------------------------------------------------------- modules ------ */
@@ -2612,8 +2684,9 @@ route('DELETE', '/api/super/modules/([a-z0-9_-]+)', ({ user, params }) => {
   const mod = dbm.byId('modules', params[0]);
   need(mod, 'Module not found', 404);
   need(!dbm.db.books.some(b => b.moduleId === mod.id), 'Remove the books of this module first');
+  const entry = audit.trash(user, 'module', mod.title, [{ collection: 'modules', doc: mod }]);
   dbm.remove('modules', mod.id);
-  return { ok: true };
+  return { ok: true, deleted: { entity: 'module', id: mod.id, label: entry ? entry.label : mod.title, trashId: entry ? entry.id : null } };
 });
 
 route('GET', '/api/super/settings', ({ user }) => {
@@ -2819,8 +2892,9 @@ route('DELETE', '/api/library/([a-z0-9_-]+)', ({ user, params }) => {
   const item = dbm.byId('library', params[0]);
   need(item, 'Not found', 404);
   need(canEdit(user, item), 'You can only delete your own entries', 403);
+  const entry = audit.trash(user, 'library', item.title, [{ collection: 'library', doc: item }]);
   dbm.remove('library', item.id);
-  return { ok: true };
+  return { ok: true, deleted: { entity: 'library', id: item.id, label: entry ? entry.label : item.title, trashId: entry ? entry.id : null } };
 });
 
 route('GET', '/api/books', ({ req, user }) => {
@@ -2882,14 +2956,25 @@ route('DELETE', '/api/books/([a-z0-9_-]+)', ({ user, params }) => {
   const book = dbm.byId('books', params[0]);
   need(book, 'Book not found', 404);
   need(canEdit(user, book), 'Not permitted', 403);
-  const chIds = dbm.db.chapters.filter(c => c.bookId === book.id).map(c => c.id);
+  const chapters = dbm.db.chapters.filter(c => c.bookId === book.id);
+  const chIds = chapters.map(c => c.id);
+  const questions = dbm.db.objectives.filter(o => chIds.indexOf(o.chapterId) !== -1);
+  const marks = dbm.collection('chapter_reads').filter(r =>
+    r.bookId === book.id || chIds.indexOf(r.chapterId) !== -1);
+  /* the book, its chapters, their questions and the reading marks go into the
+     trash together - one Restore brings the whole book back */
+  const records = [{ collection: 'books', doc: book }];
+  chapters.forEach(c => records.push({ collection: 'chapters', doc: c }));
+  questions.forEach(o => records.push({ collection: 'objectives', doc: o }));
+  marks.forEach(r => records.push({ collection: 'chapter_reads', doc: r }));
+  const entry = audit.trash(user, 'book', book.title, records);
   dbm.db.objectives = dbm.db.objectives.filter(o => chIds.indexOf(o.chapterId) === -1);
   dbm.db.chapters = dbm.db.chapters.filter(c => c.bookId !== book.id);
   /* a deleted book takes its chapter reading marks with it */
   dbm.db.chapter_reads = dbm.collection('chapter_reads').filter(r =>
     r.bookId !== book.id && chIds.indexOf(r.chapterId) === -1);
   dbm.remove('books', book.id);
-  return { ok: true };
+  return { ok: true, deleted: { entity: 'book', id: book.id, label: entry ? entry.label : book.title, trashId: entry ? entry.id : null } };
 });
 
 /* ---------------------------------------- chapters & objective questions -- */
@@ -2934,10 +3019,16 @@ route('DELETE', '/api/chapters/([a-z0-9_-]+)', ({ user, params }) => {
   const ch = dbm.byId('chapters', params[0]);
   need(ch, 'Chapter not found', 404);
   need(canEdit(user, ch), 'Not permitted', 403);
+  const questions = dbm.db.objectives.filter(o => o.chapterId === ch.id);
+  const marks = dbm.collection('chapter_reads').filter(r => r.chapterId === ch.id);
+  const records = [{ collection: 'chapters', doc: ch }];
+  questions.forEach(o => records.push({ collection: 'objectives', doc: o }));
+  marks.forEach(r => records.push({ collection: 'chapter_reads', doc: r }));
+  const entry = audit.trash(user, 'chapter', ch.title, records);
   dbm.db.objectives = dbm.db.objectives.filter(o => o.chapterId !== ch.id);
   dbm.db.chapter_reads = dbm.collection('chapter_reads').filter(r => r.chapterId !== ch.id);
   dbm.remove('chapters', ch.id);
-  return { ok: true };
+  return { ok: true, deleted: { entity: 'chapter', id: ch.id, label: entry ? entry.label : ch.title, trashId: entry ? entry.id : null } };
 });
 
 /* Questions are entered by the school/organization administrator or the super admin. */
@@ -2969,8 +3060,9 @@ route('DELETE', '/api/objectives/([a-z0-9_-]+)', ({ user, params }) => {
   const obj = dbm.byId('objectives', params[0]);
   need(obj, 'Not found', 404);
   need(canEdit(user, obj), 'Not permitted', 403);
+  const entry = audit.trash(user, 'objective', obj.question, [{ collection: 'objectives', doc: obj }]);
   dbm.remove('objectives', obj.id);
-  return { ok: true };
+  return { ok: true, deleted: { entity: 'objective', id: obj.id, label: entry ? entry.label : obj.question, trashId: entry ? entry.id : null } };
 });
 
 /* ================================================ user management ======== */
@@ -3264,6 +3356,7 @@ route('DELETE', '/api/users/([a-z0-9_-]+)', ({ user, params }) => {
   need(allowed, 'Not permitted', 403);
   need(t.id !== user.id, 'You cannot delete your own account', 403);
   need(t.role !== 'super', 'Not permitted', 403);
+  const entry = audit.trash(user, 'user', t.fullName, [{ collection: 'users', doc: t }]);
   dbm.db.sessions = dbm.db.sessions.filter(s => s.userId !== t.id);
   dbm.db.users.forEach(x => {
     if (x.supervisorId === t.id) {
@@ -3273,7 +3366,7 @@ route('DELETE', '/api/users/([a-z0-9_-]+)', ({ user, params }) => {
   });
   dbm.remove('users', t.id);
   if (assignWaitlistedLearners(t.tenantId)) dbm.save();
-  return { ok: true };
+  return { ok: true, deleted: { entity: 'user', id: t.id, label: entry ? entry.label : t.fullName, trashId: entry ? entry.id : null } };
 });
 
 route('PUT', '/api/admin/branding', ({ user, body }) => {
@@ -4166,5 +4259,90 @@ route('GET', '/api/live-lessons', ({ user }) => {
   else list = list.filter(l => (l.recipientIds || []).includes(user.id));
   return { ok: true, lessons: list.slice().sort((a,b) => String(a.scheduledAt).localeCompare(String(b.scheduledAt))) };
 });
+/* ============================================ system log & trash ========= */
+/* The super admin's two windows on the past: what everybody did (and when), and
+   what is waiting in the Trash - where every deletion goes instead of simply
+   disappearing. An item can be put back, or deleted for good. */
+route('GET', '/api/super/log', ({ req, user }) => {
+  requireRole(user, SUPER);
+  const filters = {
+    q: qp(req, 'q'), action: qp(req, 'action'), entity: qp(req, 'entity'),
+    role: qp(req, 'role'), tenantId: qp(req, 'tenantId'), userId: qp(req, 'userId'),
+    from: qp(req, 'from'), to: qp(req, 'to'),
+    limit: qp(req, 'limit'), offset: qp(req, 'offset')
+  };
+  const page = audit.listLog(filters);
+  /* the people who appear in the log, for the "who" filter */
+  const people = [];
+  const seen = {};
+  dbm.collection('activity_log').forEach(row => {
+    if (!row.userName || seen[row.userName]) return;
+    seen[row.userName] = true;
+    people.push({ name: row.userName, role: row.role });
+  });
+  return { ok: true, entries: page.entries, total: page.total, counts: page.counts,
+    limit: page.limit, offset: page.offset, people: people.slice(0, 300),
+    kept: audit.LOG_CAP };
+});
+
+route('GET', '/api/super/trash', ({ req, user }) => {
+  requireRole(user, SUPER);
+  const page = audit.listTrash({
+    q: qp(req, 'q'), entity: qp(req, 'entity'),
+    limit: qp(req, 'limit'), offset: qp(req, 'offset')
+  });
+  return { ok: true, items: page.items, total: page.total, counts: page.counts,
+    limit: page.limit, offset: page.offset, kept: audit.TRASH_CAP };
+});
+
+/* A category or question was lifted out of the self-assessment: it goes back
+   into the same place in that definition. */
+function restoreAssessmentEntry(entry) {
+  const record = (entry.records || [])[0] || {};
+  const def = assessmentDef();
+  if (record.kind === 'category') {
+    need(!def.categories.some(c => c.id === record.doc.id), 'That category is already back', 409);
+    const at = typeof record.index === 'number' ? Math.min(record.index, def.categories.length) : def.categories.length;
+    def.categories.splice(at, 0, record.doc);
+  } else {
+    const category = def.categories.find(c => c.id === record.categoryId);
+    need(category, 'Put the category this question belonged to back first', 409);
+    need(!category.statements.some(s => s.id === record.doc.id), 'That question is already back', 409);
+    const at = typeof record.index === 'number' ? Math.min(record.index, category.statements.length) : category.statements.length;
+    category.statements.splice(at, 0, record.doc);
+  }
+  saveAssessmentDef(def);
+  return 1;
+}
+
+route('POST', '/api/super/trash/([a-z0-9_-]+)/restore', ({ user, params }) => {
+  requireRole(user, SUPER);
+  const entry = audit.trashById(params[0]);
+  need(entry, 'That item is no longer in the trash', 404);
+  need(!entry.restoredAt, 'That item has already been put back', 409);
+  const restored = entry.entity === 'assessment-category' || entry.entity === 'assessment-statement'
+    ? restoreAssessmentEntry(entry)
+    : audit.restore(entry, user);
+  return { ok: true, restored: restored,
+    logEntry: { action: 'restored', entity: entry.entity, entityId: entry.entityId,
+      label: entry.label, detail: 'Back from the Trash' } };
+});
+
+route('DELETE', '/api/super/trash/([a-z0-9_-]+)', ({ user, params }) => {
+  requireRole(user, SUPER);
+  const entry = audit.purge(params[0]);
+  need(entry, 'That item is no longer in the trash', 404);
+  return { ok: true, logEntry: { action: 'purged', entity: entry.entity,
+    entityId: entry.entityId, label: entry.label, detail: 'Deleted for good' } };
+});
+
+route('DELETE', '/api/super/trash', ({ user }) => {
+  requireRole(user, SUPER);
+  const count = audit.clearTrash();
+  return { ok: true, purged: count, logEntry: { action: 'emptied', entity: 'trash',
+    label: count + ' item(s)', detail: 'The Trash was emptied' } };
+});
+
+
 
 module.exports = { handle };

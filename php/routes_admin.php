@@ -247,8 +247,13 @@ function r_super_portal_delete(array $user, array $body, array $params, ?string 
     $id = $params['id'] ?? $body['id'] ?? null; need($id, 'id required');
     $st = db()->prepare('SELECT COUNT(*) FROM tenants WHERE portal_id=?'); $st->execute([$id]);
     need((int)$st->fetchColumn() === 0, 'Cannot delete portal with tenants', 409);
+    $st = db()->prepare('SELECT * FROM portals WHERE id=? LIMIT 1'); $st->execute([$id]);
+    $row = $st->fetch();
+    need($row, 'Portal not found', 404);
+    $entry = trash_put($user, 'portal', (string)$row['name'], [['collection' => 'portals', 'doc' => $row]]);
     db()->prepare('DELETE FROM portals WHERE id=?')->execute([$id]);
-    return ['deleted' => true];
+    return ['deleted' => ['entity' => 'portal', 'id' => (string)$row['id'],
+        'label' => $entry['label'] ?? (string)$row['name'], 'trashId' => $entry['id'] ?? null]];
 }
 function r_super_tenants(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super']);
@@ -312,18 +317,36 @@ function r_super_tenant_update(array $user, array $body, array $params, ?string 
 function r_super_tenant_delete(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super']);
     $id = $params['id'] ?? $body['id'] ?? null; need($id, 'id required');
+    $st = db()->prepare('SELECT * FROM tenants WHERE id=? LIMIT 1'); $st->execute([$id]);
+    $tenant = $st->fetch();
+    need($tenant, 'Account not found', 404);
     $st = db()->prepare('SELECT id FROM users WHERE tenant_id=?'); $st->execute([$id]);
     $uids = $st->fetchAll(PDO::FETCH_COLUMN);
+    /* everything the account held is kept together, so one Restore puts the
+       school back as it was */
+    $records = [['collection' => 'tenants', 'doc' => $tenant]];
     if (count($uids)) {
         $ph = implode(',', array_fill(0, count($uids), '?'));
-        db()->prepare("DELETE FROM submissions WHERE user_id IN ($ph)")->execute($uids);
-        db()->prepare("DELETE FROM certificates WHERE user_id IN ($ph)")->execute($uids);
-        db()->prepare("DELETE FROM thoughts WHERE user_id IN ($ph)")->execute($uids);
-        db()->prepare("DELETE FROM sessions WHERE user_id IN ($ph)")->execute($uids);
+        $st = db()->prepare("SELECT * FROM users WHERE id IN ($ph)"); $st->execute($uids);
+        foreach ($st->fetchAll() as $row) $records[] = ['collection' => 'users', 'doc' => $row];
+        foreach (['submissions', 'certificates', 'thoughts'] as $table) {
+            if (!has_table($table)) continue;
+            $st = db()->prepare("SELECT * FROM `$table` WHERE user_id IN ($ph)"); $st->execute($uids);
+            foreach ($st->fetchAll() as $row) $records[] = ['collection' => $table, 'doc' => $row];
+        }
+    }
+    $entry = trash_put($user, 'tenant', (string)$tenant['name'], $records);
+    if (count($uids)) {
+        $ph = implode(',', array_fill(0, count($uids), '?'));
+        foreach (['submissions', 'certificates', 'thoughts', 'sessions'] as $table) {
+            if (!has_table($table)) continue;
+            db()->prepare("DELETE FROM `$table` WHERE user_id IN ($ph)")->execute($uids);
+        }
         db()->prepare("DELETE FROM users WHERE id IN ($ph)")->execute($uids);
     }
     db()->prepare('DELETE FROM tenants WHERE id=?')->execute([$id]);
-    return ['deleted' => true];
+    return ['deleted' => ['entity' => 'tenant', 'id' => (string)$tenant['id'],
+        'label' => $entry['label'] ?? (string)$tenant['name'], 'trashId' => $entry['id'] ?? null]];
 }
 function r_super_modules(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super']);
@@ -447,8 +470,13 @@ function r_super_module_delete(array $user, array $body, array $params, ?string 
     $id = $params['id'] ?? $body['id'] ?? null; need($id, 'id required');
     $st = db()->prepare('SELECT COUNT(*) FROM books WHERE module_id=?'); $st->execute([$id]);
     need((int)$st->fetchColumn() === 0, 'Cannot delete module with books', 409);
+    $st = db()->prepare('SELECT * FROM modules WHERE id=? LIMIT 1'); $st->execute([$id]);
+    $row = $st->fetch();
+    need($row, 'Module not found', 404);
+    $entry = trash_put($user, 'module', (string)$row['title'], [['collection' => 'modules', 'doc' => $row]]);
     db()->prepare('DELETE FROM modules WHERE id=?')->execute([$id]);
-    return ['deleted' => true];
+    return ['deleted' => ['entity' => 'module', 'id' => (string)$row['id'],
+        'label' => $entry['label'] ?? (string)$row['title'], 'trashId' => $entry['id'] ?? null]];
 }
 /* ------------------------------------------- self-assessment management -- */
 function r_super_assessment_get(array $user, array $body, array $params, ?string $token, array $query): array {
@@ -486,9 +514,15 @@ function r_super_assessment_category_delete(array $user, array $body, array $par
     need($index !== null, 'Category not found', 404);
     $remaining = assessment_statement_count($def) - count($def['categories'][$index]['statements']);
     need($remaining > 0, 'Keep at least one objective question in the self-assessment', 400);
+    $node = $def['categories'][$index];
+    $entry = trash_put($user, 'assessment-category', (string)$node['title'], [[
+        'collection' => 'assessment', 'doc' => $node, 'kind' => 'category', 'index' => $index,
+    ]]);
     array_splice($def['categories'], $index, 1);
     $def = assessment_save($def);
-    return ['assessment'=>assessment_public_def($def)];
+    return ['assessment'=>assessment_public_def($def),
+        'deleted' => ['entity' => 'assessment-category', 'id' => (string)$node['id'],
+            'label' => $entry['label'] ?? (string)$node['title'], 'trashId' => $entry['id'] ?? null]];
 }
 function r_super_assessment_statement_create(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super']);
@@ -524,9 +558,17 @@ function r_super_assessment_statement_delete(array $user, array $body, array $pa
     $found = assessment_statement_find($def, $id);
     need($found !== null, 'Objective question not found', 404);
     need(assessment_statement_count($def) > 1, 'Keep at least one objective question in the self-assessment', 400);
+    $category = $def['categories'][$found['categoryIndex']];
+    $node = $category['statements'][$found['statementIndex']];
+    $entry = trash_put($user, 'assessment-statement', (string)$node['text'], [[
+        'collection' => 'assessment', 'doc' => $node, 'kind' => 'statement',
+        'categoryId' => (string)$category['id'], 'index' => $found['statementIndex'],
+    ]]);
     array_splice($def['categories'][$found['categoryIndex']]['statements'], $found['statementIndex'], 1);
     $def = assessment_save($def);
-    return ['assessment'=>assessment_public_def($def)];
+    return ['assessment'=>assessment_public_def($def),
+        'deleted' => ['entity' => 'assessment-statement', 'id' => (string)$node['id'],
+            'label' => $entry['label'] ?? (string)$node['text'], 'trashId' => $entry['id'] ?? null]];
 }
 function r_super_settings_get(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super']);
@@ -2238,6 +2280,7 @@ function r_users_delete(array $user, array $body, array $params, ?string $token,
     need(($row['role'] ?? '') !== 'super', 'Cannot delete super', 403);
     need(user_can_manage($user, $row), 'Not permitted', 403);
     $pdo = db(); $tenantId = (string)($row['tenant_id'] ?? '');
+    $entry = trash_put($user, 'user', (string)$row['full_name'], [['collection' => 'users', 'doc' => $row]]);
     $pdo->beginTransaction();
     try {
         $pdo->prepare('SELECT id FROM tenants WHERE id=? FOR UPDATE')->execute([$tenantId]);
@@ -2251,7 +2294,8 @@ function r_users_delete(array $user, array $body, array $params, ?string $token,
         if ($pdo->inTransaction()) $pdo->rollBack();
         throw $e;
     }
-    return ['deleted' => true];
+    return ['deleted' => ['entity' => 'user', 'id' => (string)$row['id'],
+        'label' => $entry['label'] ?? (string)$row['full_name'], 'trashId' => $entry['id'] ?? null]];
 }
 function r_admin_branding(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin']);
@@ -2376,8 +2420,23 @@ function r_books_delete(array $user, array $body, array $params, ?string $token,
     $id = $params['id'] ?? $body['id'] ?? null; need($id, 'id required');
     $st = db()->prepare('SELECT * FROM books WHERE id=?'); $st->execute([$id]); $b = $st->fetch();
     need($b, 'Book not found', 404); need(can_edit($user, $b['scope']), 'Not permitted', 403);
-    $st = db()->prepare('SELECT id FROM chapters WHERE book_id=?'); $st->execute([$id]);
-    $cids = $st->fetchAll(PDO::FETCH_COLUMN);
+    $st = db()->prepare('SELECT * FROM chapters WHERE book_id=?'); $st->execute([$id]);
+    $chapters = $st->fetchAll();
+    $cids = array_map(fn($c) => (string)$c['id'], $chapters);
+    $records = [['collection' => 'books', 'doc' => $b]];
+    foreach ($chapters as $chapter) $records[] = ['collection' => 'chapters', 'doc' => $chapter];
+    if (count($cids)) {
+        $ph = implode(',', array_fill(0, count($cids), '?'));
+        $st = db()->prepare("SELECT * FROM objectives WHERE chapter_id IN ($ph)"); $st->execute($cids);
+        foreach ($st->fetchAll() as $row) $records[] = ['collection' => 'objectives', 'doc' => $row];
+        if (has_table('chapter_reads')) {
+            $st = db()->prepare("SELECT * FROM chapter_reads WHERE chapter_id IN ($ph) OR book_id=?"); $st->execute(array_merge($cids, [$id]));
+            foreach ($st->fetchAll() as $row) $records[] = ['collection' => 'chapter_reads', 'doc' => $row];
+        }
+    }
+    /* the book, its chapters, their questions and the reading marks go into the
+       trash together - one Restore brings the whole book back */
+    $entry = trash_put($user, 'book', (string)$b['title'], $records);
     if (count($cids)) {
         $ph = implode(',', array_fill(0, count($cids), '?'));
         db()->prepare("DELETE FROM objectives WHERE chapter_id IN ($ph)")->execute($cids);
@@ -2386,7 +2445,8 @@ function r_books_delete(array $user, array $body, array $params, ?string $token,
     }
     if (has_table('chapter_reads')) db()->prepare('DELETE FROM chapter_reads WHERE book_id=?')->execute([$id]);
     db()->prepare('DELETE FROM books WHERE id=?')->execute([$id]);
-    return ['deleted' => true];
+    return ['deleted' => ['entity' => 'book', 'id' => (string)$b['id'],
+        'label' => $entry['label'] ?? (string)$b['title'], 'trashId' => $entry['id'] ?? null]];
 }
 function r_chapters_create(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin']);
@@ -2441,10 +2501,19 @@ function r_chapters_delete(array $user, array $body, array $params, ?string $tok
     $id = $params['id'] ?? $body['id'] ?? null; need($id, 'id required');
     $st = db()->prepare('SELECT * FROM chapters WHERE id=?'); $st->execute([$id]); $c = $st->fetch();
     need($c, 'Chapter not found', 404); need(can_edit($user, $c['scope']), 'Not permitted', 403);
+    $records = [['collection' => 'chapters', 'doc' => $c]];
+    $st = db()->prepare('SELECT * FROM objectives WHERE chapter_id=?'); $st->execute([$id]);
+    foreach ($st->fetchAll() as $row) $records[] = ['collection' => 'objectives', 'doc' => $row];
+    if (has_table('chapter_reads')) {
+        $st = db()->prepare('SELECT * FROM chapter_reads WHERE chapter_id=?'); $st->execute([$id]);
+        foreach ($st->fetchAll() as $row) $records[] = ['collection' => 'chapter_reads', 'doc' => $row];
+    }
+    $entry = trash_put($user, 'chapter', (string)$c['title'], $records);
     db()->prepare('DELETE FROM objectives WHERE chapter_id=?')->execute([$id]);
     if (has_table('chapter_reads')) db()->prepare('DELETE FROM chapter_reads WHERE chapter_id=?')->execute([$id]);
     db()->prepare('DELETE FROM chapters WHERE id=?')->execute([$id]);
-    return ['deleted' => true];
+    return ['deleted' => ['entity' => 'chapter', 'id' => (string)$c['id'],
+        'label' => $entry['label'] ?? (string)$c['title'], 'trashId' => $entry['id'] ?? null]];
 }
 function r_objectives_create(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin']);
@@ -2473,8 +2542,10 @@ function r_objectives_delete(array $user, array $body, array $params, ?string $t
     $id = $params['id'] ?? $body['id'] ?? null; need($id, 'id required');
     $st = db()->prepare('SELECT * FROM objectives WHERE id=?'); $st->execute([$id]); $o = $st->fetch();
     need($o, 'Objective not found', 404); need(can_edit($user, $o['scope']), 'Not permitted', 403);
+    $entry = trash_put($user, 'objective', (string)$o['question'], [['collection' => 'objectives', 'doc' => $o]]);
     db()->prepare('DELETE FROM objectives WHERE id=?')->execute([$id]);
-    return ['deleted' => true];
+    return ['deleted' => ['entity' => 'objective', 'id' => (string)$o['id'],
+        'label' => $entry['label'] ?? (string)$o['question'], 'trashId' => $entry['id'] ?? null]];
 }
 function r_library_create(array $user, array $body, array $params, ?string $token, array $query): array {
     require_role($user, ['super','tenant_admin']);
@@ -2548,8 +2619,10 @@ function r_library_delete(array $user, array $body, array $params, ?string $toke
     $id = $params['id'] ?? $body['id'] ?? null; need($id, 'id required');
     $st = db()->prepare('SELECT * FROM library WHERE id=?'); $st->execute([$id]); $r = $st->fetch();
     need($r, 'Library item not found', 404); need(can_edit($user, $r['scope']), 'Not permitted', 403);
+    $entry = trash_put($user, 'library', (string)$r['title'], [['collection' => 'library', 'doc' => $r]]);
     db()->prepare('DELETE FROM library WHERE id=?')->execute([$id]);
-    return ['deleted' => true];
+    return ['deleted' => ['entity' => 'library', 'id' => (string)$r['id'],
+        'label' => $entry['label'] ?? (string)$r['title'], 'trashId' => $entry['id'] ?? null]];
 }
 
 /* ------------------------------------------------- the Letter of Christ -- */

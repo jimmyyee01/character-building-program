@@ -22,6 +22,7 @@ function makeEl(tag) {
     dataset: {}, _attrs: {}, style: { setProperty() {}, removeProperty() {} },
     classList: { add() {}, remove() {}, toggle() { return true; }, contains() { return false; } },
     setAttribute(k, v) { this._attrs[k] = String(v); }, getAttribute(k) { return this._attrs[k] == null ? null : this._attrs[k]; },
+    removeAttribute(k) { delete this._attrs[k]; },
     appendChild() {}, remove() {}, click() {}, focus() {}, addEventListener() {},
     querySelector() { return null; }, querySelectorAll() { return []; }, closest() { return null; }
   };
@@ -444,7 +445,7 @@ function cleanSlice(s) {
     };
     await renderEach(superCtx, 'RENDERERS["%s"]',
       ['dashboard', 'portals', 'accounts', 'modules', 'library', 'books', 'users', 'reports',
-        'progress', 'analytics', 'lessons', 'settings'], 'super console', sup);
+        'progress', 'analytics', 'lessons', 'logs', 'trash', 'settings'], 'super console', sup);
     await renderEach(adminCtx, 'RENDER["%s"]',
       ['dashboard', 'users', 'supervisors', 'library', 'books', 'submissions', 'certificates',
         'progress', 'analytics', 'lessons', 'branding'], 'admin console', admin);

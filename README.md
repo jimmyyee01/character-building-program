@@ -87,6 +87,10 @@ node tools/chapter-read-gate-check.js   # a chapter's answer area opens only at 
                                         # (throw-away database; whole learner journey)
 node tools/student-lock-check.js        # a student's sign-in ends when the app goes quiet,
                                         # while a staff session is untouched (throw-away database)
+node tools/system-log-check.js          # who did what and when, and the Trash: every deletion
+                                        # is kept, restored and only then deleted for good
+                                        # (throw-away database; pass a URL for either backend:
+                                        #  node tools/system-log-check.js http://127.0.0.1:8080)
 node tools/student-lock-browser-check.js http://127.0.0.1:3000 # the same rule in a REAL browser:
                                                     # focus lost, second tab, hidden page and
                                                     # closed page all sign the learner out; a file
@@ -372,6 +376,25 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
   (a supervisor sees only the members they look after) — never another account's
   data, and every copy flag is shown together with the person it is connected to.
   video, credentials.
+- **System log** — the whole program on one screen: **every** sign-in, sign-out,
+  failed sign-in, creation, edit, deletion, restore, and "delete for good", with
+  **who** did it, their **role**, the **account** it belongs to, the **item** it
+  touched, what exactly changed and the **time**. It is written by the server for
+  every change made through the API (both backends), never by the browser, so a
+  change cannot happen without a line. Filters for free text, action, type, role,
+  account and a date range; paging, per-action totals, and the newest 20 000 lines
+  are kept. Passwords and uploaded files are never written to it.
+- **Trash** — *nothing is deleted for good by accident*. Every deletion (portal,
+  account, module, library item, book, chapter, question, user, self-assessment
+  category or question) first copies the record — together with what belonged to
+  it, e.g. a book's chapters, their questions and the reading marks — into the
+  Trash, where it says **who** deleted it and **when**. **Put back** restores the
+  whole set in one go (a restored book brings its chapters and questions with it,
+  a restored learner can sign in with the same password); **Delete for good**
+  removes it permanently, and **Empty the Trash** clears everything with one
+  confirmation. Restoring refuses to create a duplicate name (or an orphan) and
+  says what to do first. Tenant admins delete as before — the record simply waits
+  here, so the super admin can put it back.
 
 ### School / Organization admin (`/admin`, also used by supervisors)
 - Users (students, teachers, members), supervisors with **100-user limit**.
@@ -535,6 +558,14 @@ character-building-program/
 ```
 
 ### Key design decisions / limitations
+- **Every change is written down, and nothing is lost.** `server/audit.js` (Node)
+  and `php/audit.php` + `php/routes_audit.php` (PHP) record one line per change in
+  `activity_log` and copy every deletion into `trash` before the record goes. The
+  screen is the super admin's **System log** / **Trash** (React-free, plain DOM
+  like the rest of the console). Both files live in the store itself, so a backup
+  of `data/db.json` (MySQL: the two tables) carries the history with it. The log
+  keeps its newest 20 000 lines and the Trash its newest 5 000 items, so neither
+  can grow without end.
 - **JSON file storage** keeps deployment trivial; it comfortably handles a
   school/organization rollout (thousands of records). Swap `db.js` for a real
   database if you outgrow it.

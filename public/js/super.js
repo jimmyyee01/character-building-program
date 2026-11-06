@@ -12,6 +12,9 @@ const S = {
   assessmentDef: null, assessmentCategories: [],
   editAssessmentCategoryId: null, editAssessmentStatementId: null,
   rpFlagged: false, rpType: '', rpSearch: '', rpRosterSearch: '', rpSupervisorId: '',
+  /* system log + trash */
+  logFilters: { q: '', action: '', entity: '', role: '', tenantId: '', from: '', to: '', limit: 200, offset: 0 },
+  trashFilters: { q: '', entity: '' },
   settings: {}
 };
 
@@ -82,7 +85,7 @@ const RENDERERS = {
   users: renderUsers, reports: renderReports, progress: renderProgress,
   assessment: renderAssessment, analytics: renderAnalytics,
   settings: renderSettings, lessons: renderLessons,
-  videos: renderVideoAlerts
+  videos: renderVideoAlerts, logs: renderLogs, trash: renderTrash
 };
 
 function showView(name) {
@@ -1170,7 +1173,7 @@ async function savePortal(e) {
   } catch (err) { fail(err); }
 }
 async function deletePortal(id) {
-  if (!confirm('Delete this portal? It is only allowed when no tenants remain under it.')) return;
+  if (!confirm('Move this portal to the Trash? It is only allowed when no tenants remain under it - the super admin can put it back.')) return;
   try {
     await API.del('/super/portals/' + encodeURIComponent(id));
     toast('Portal deleted', 'ok');
@@ -1333,7 +1336,7 @@ async function saveTenantBrand(e) {
   } catch (err) { fail(err); }
 }
 async function deleteTenant(id) {
-  if (!confirm('Delete this tenant? All of its users and data will be removed.')) return;
+  if (!confirm('Move this account to the Trash with all of its users and data? The super admin can put it back.')) return;
   try {
     await API.del('/super/tenants/' + encodeURIComponent(id));
     toast('Tenant deleted', 'ok');
@@ -1668,7 +1671,7 @@ async function saveModule(e) {
   } catch (err) { fail(err); }
 }
 async function deleteModule(id) {
-  if (!confirm('Delete this module? It is only allowed when it has no books.')) return;
+  if (!confirm('Move this module to the Trash? It is only allowed when it has no books.')) return;
   try {
     await API.del('/super/modules/' + encodeURIComponent(id));
     toast('Module deleted', 'ok');
@@ -1881,7 +1884,7 @@ async function saveLibrary(e) {
   } catch (err) { fail(err); }
 }
 async function deleteLibrary(id) {
-  if (!confirm('Delete this library item?')) return;
+  if (!confirm('Move this library item to the Trash? The super admin can put it back.')) return;
   try {
     await API.del('/library/' + encodeURIComponent(id));
     toast('Library item deleted', 'ok');
@@ -2381,7 +2384,7 @@ async function addQuestion(e) {
   } catch (err) { fail(err); }
 }
 async function deleteBook(id) {
-  if (!confirm('Delete this book and all of its chapters?')) return;
+  if (!confirm('Move this book, its chapters and their questions to the Trash? They can be put back.')) return;
   try {
     await API.del('/books/' + encodeURIComponent(id));
     toast('Book deleted', 'ok');
@@ -2389,7 +2392,7 @@ async function deleteBook(id) {
   } catch (err) { fail(err); }
 }
 async function deleteChapter(id) {
-  if (!confirm('Delete this chapter and its questions?')) return;
+  if (!confirm('Move this chapter and its questions to the Trash? They can be put back.')) return;
   try {
     await API.del('/chapters/' + encodeURIComponent(id));
     toast('Chapter deleted', 'ok');
@@ -2398,7 +2401,7 @@ async function deleteChapter(id) {
   } catch (err) { fail(err); }
 }
 async function deleteObjective(id) {
-  if (!confirm('Delete this question?')) return;
+  if (!confirm('Move this question to the Trash? It can be put back.')) return;
   try {
     await API.del('/objectives/' + encodeURIComponent(id));
     toast('Question deleted', 'ok');
@@ -2561,7 +2564,7 @@ async function toggleSuspend(id) {
   } catch (err) { fail(err); }
 }
 async function deleteUser(id) {
-  if (!confirm('Delete this user? Their submissions will be removed too.')) return;
+  if (!confirm('Move this user to the Trash? Their account is kept and can be put back.')) return;
   try {
     await API.del('/users/' + encodeURIComponent(id));
     toast('User deleted', 'ok');
@@ -2825,7 +2828,7 @@ async function saveAssessmentQuestion(e) {
   } catch (err) { fail(err); }
 }
 async function deleteAssessmentCategory(id) {
-  if (!confirm('Delete this category and its objective questions?')) return;
+  if (!confirm('Move this category and its questions to the Trash? They can be put back.')) return;
   try {
     await API.del('/super/assessment/categories/' + encodeURIComponent(id));
     toast('Category deleted', 'ok');
@@ -2834,7 +2837,7 @@ async function deleteAssessmentCategory(id) {
   } catch (err) { fail(err); }
 }
 async function deleteAssessmentQuestion(id) {
-  if (!confirm('Delete this objective question?')) return;
+  if (!confirm('Move this objective question to the Trash? It can be put back.')) return;
   try {
     await API.del('/super/assessment/statements/' + encodeURIComponent(id));
     toast('Objective question deleted', 'ok');
@@ -3282,6 +3285,38 @@ async function onAction(btn, e) {
       case 'u-del':
         deleteUser(id);
         break;
+      /* system log + trash */
+      case 'lg-apply':
+        S.logFilters.offset = 0;
+        renderLogs();
+        break;
+      case 'lg-reset':
+        S.logFilters = { q: '', action: '', entity: '', role: '', tenantId: '', from: '', to: '', limit: S.logFilters.limit, offset: 0 };
+        renderLogs();
+        break;
+      case 'lg-reload':
+        renderLogs();
+        break;
+      case 'lg-prev':
+        S.logFilters.offset = Math.max(0, S.logFilters.offset - S.logFilters.limit);
+        renderLogs();
+        break;
+      case 'lg-next':
+        S.logFilters.offset += S.logFilters.limit;
+        renderLogs();
+        break;
+      case 'tr-reload':
+        renderTrash();
+        break;
+      case 'tr-restore':
+        restoreTrashItem(id);
+        break;
+      case 'tr-purge':
+        purgeTrashItem(id);
+        break;
+      case 'tr-empty':
+        emptyTrash();
+        break;
       default:
         break;
     }
@@ -3316,6 +3351,22 @@ function onSubmit(e) {
 }
 function onChange(e) {
   const id = e.target.id;
+  /* system log + trash filters: changing one asks the server again */
+  const logKeys = {
+    lgAction: 'action', lgEntity: 'entity', lgRole: 'role', lgTenant: 'tenantId',
+    lgFrom: 'from', lgTo: 'to', lgLimit: 'limit'
+  };
+  if (logKeys[id]) {
+    S.logFilters[logKeys[id]] = id === 'lgLimit' ? Number(e.target.value) : e.target.value;
+    S.logFilters.offset = 0;
+    renderLogs();
+    return;
+  }
+  if (id === 'trType') {
+    S.trashFilters.entity = e.target.value;
+    renderTrash();
+    return;
+  }
   if (id === 'lfType') {
     /* the clip only belongs on the Letter of Christ */
     const w = $('lfMediaWrap');
@@ -3371,6 +3422,18 @@ function onChange(e) {
   }
 }
 function onInput(e) {
+  /* the search boxes narrow what is already on screen (no re-fetch, so typing
+     never loses the cursor) — Apply/Refresh asks the server again */
+  if (e.target.id === 'lgSearch') {
+    S.logFilters.q = e.target.value;
+    applyTableSearch('lgTable', 'lgSearch');
+    return;
+  }
+  if (e.target.id === 'trSearch') {
+    S.trashFilters.q = e.target.value;
+    applyTableSearch('trTable', 'trSearch');
+    return;
+  }
   if (e.target.id === 'tnName') {
     const slug = $('tnSlug');
     if (slug && slug.dataset.auto === '1') slug.value = slugify(e.target.value);
@@ -3402,6 +3465,8 @@ $('superLoginForm').addEventListener('submit', async function (e) {
     });
     API.setToken(data.token);
     API.setUser(data.user);
+
+
     initCommunicationWidget();
     $('slPw').value = '';
     toast('Signed in', 'ok');
@@ -3414,3 +3479,226 @@ $('superLoginForm').addEventListener('submit', async function (e) {
 $('logoutBtn').addEventListener('click', function () { API.logout(); });
 
 init();
+
+/* ======================================== system log & trash ============= */
+/* The two windows on the past. The System log answers "who did what, and when"
+   for the whole program; the Trash keeps everything that was deleted until the
+   super admin puts it back or deletes it for good. */
+const ENTITY_NAMES = {
+  portal: 'Portal', tenant: 'Account', module: 'Module', book: 'Book',
+  chapter: 'Chapter', objective: 'Question', library: 'Library item',
+  user: 'User', session: 'Sign-in', settings: 'Settings', branding: 'Logo',
+  letter: 'Letter', video: 'Video', reading: 'Reading', submission: 'Submission',
+  certificate: 'Certificate', message: 'Message', thought: 'Thought',
+  'live-lesson': 'Live lesson', notification: 'Notification',
+  assessment: 'Self-assessment', 'assessment-category': 'Assessment category',
+  'assessment-statement': 'Assessment question', 'video-alert': 'Video alert point',
+  file: 'Upload', trash: 'Trash', record: 'Record'
+};
+const ACTION_NAMES = {
+  created: 'Created', updated: 'Updated', deleted: 'Deleted',
+  restored: 'Restored', purged: 'Deleted for good', emptied: 'Trash emptied',
+  'sign-in': 'Signed in', 'sign-out': 'Signed out', 'sign-in-failed': 'Sign-in failed'
+};
+function entityName(key) { return ENTITY_NAMES[key] || String(key || 'Record'); }
+function actionName(key) { return ACTION_NAMES[key] || String(key || ''); }
+function actionBadge(action) {
+  const cls = action === 'deleted' || action === 'purged' || action === 'sign-in-failed' ? 'off'
+    : action === 'created' || action === 'restored' || action === 'sign-in' ? 'ok'
+      : action === 'emptied' ? 'warn' : 'info';
+  return '<span class="badge ' + cls + '">' + esc(actionName(action)) + '</span>';
+}
+function selectOptions(list, selected, anyLabel) {
+  const opts = ['<option value="">' + esc(anyLabel) + '</option>'];
+  list.forEach(function (item) {
+    const value = typeof item === 'string' ? item : item.value;
+    const label = typeof item === 'string' ? actionName(item) : item.label;
+    opts.push('<option value="' + esc(value) + '"' +
+      (String(value) === String(selected) ? ' selected' : '') + '>' + esc(label) + '</option>');
+  });
+  return opts.join('');
+}
+
+async function renderLogs() {
+  const v = $('view-logs');
+  v.innerHTML = loadMsg();
+  /* a server that was not restarted after the update cannot log anything: say
+     so once, instead of showing an empty screen */
+  if (!S.logBuildChecked) {
+    S.logBuildChecked = true;
+    if (typeof warnIfStaleServer === 'function') warnIfStaleServer('super.activity-log', 'super.activity-log');
+  }
+  let tenants = [];
+  try { tenants = await ensure('tenants', '/super/tenants', 'tenants'); }
+  catch (e) { tenants = []; }
+  const f = S.logFilters;
+  const query = [];
+  ['q', 'action', 'entity', 'role', 'tenantId', 'from', 'to'].forEach(function (key) {
+    if (f[key]) query.push(key + '=' + encodeURIComponent(f[key]));
+  });
+  query.push('limit=' + f.limit, 'offset=' + f.offset);
+  let data;
+  try { data = await API.get('/super/log?' + query.join('&')); }
+  catch (e) { v.innerHTML = errBox(e); return; }
+
+  const entries = data.entries || [];
+  const counts = data.counts || {};
+  const rows = entries.length ? entries.map(function (e) {
+    const who = '<b>' + esc(e.userName || '-') + '</b>' + (e.role ? ' ' + roleBadge(e.role) : '');
+    return '<tr data-search="' + esc([e.userName, e.role, e.action, e.entity, e.label,
+      e.detail, e.tenantName, e.ip].join(' | ')) + '">' +
+      '<td class="small">' + esc(fmtDate(e.at)) + '</td>' +
+      '<td>' + who + '</td>' +
+      '<td class="small">' + esc(e.tenantName || '-') + '</td>' +
+      '<td>' + actionBadge(e.action) + '</td>' +
+      '<td class="small"><b>' + esc(entityName(e.entity)) + '</b>' +
+        (e.label ? '<div>' + esc(e.label) + '</div>' : '') + '</td>' +
+      '<td class="small muted" style="max-width:280px">' + esc(e.detail || '') + '</td>' +
+      '</tr>';
+  }).join('') : '<tr><td colspan="6" class="muted">Nothing matches these filters yet.</td></tr>';
+
+  const tenantOptions = selectOptions(tenants.map(function (t) {
+    return { value: t.id, label: t.name };
+  }), f.tenantId, 'Every account');
+  const roleOptions = selectOptions(['super', 'tenant_admin', 'supervisor', 'teacher', 'student', 'member'],
+    f.role, 'Every role');
+  const entityOptions = selectOptions(Object.keys(ENTITY_NAMES).map(function (key) {
+    return { value: key, label: ENTITY_NAMES[key] };
+  }), f.entity, 'Every type');
+  const actionOptions = selectOptions(Object.keys(ACTION_NAMES), f.action, 'Every action');
+  const badges = ['sign-in', 'created', 'updated', 'deleted', 'sign-in-failed', 'restored', 'purged']
+    .filter(function (key) { return counts[key]; })
+    .map(function (key) {
+      return '<span class="badge info">' + esc(actionName(key)) + ' ' + num(counts[key]) + '</span>';
+    }).join(' ');
+
+  v.innerHTML = '<h2>System log</h2>' +
+    '<p class="muted">Every sign-in, change and deletion in the program: who did it, ' +
+      'which account it belongs to, what it touched and when.</p>' +
+    '<div class="card"><div class="row" style="align-items:flex-end">' +
+      '<div style="min-width:220px"><label>Search</label>' +
+        '<input type="text" id="lgSearch" placeholder="Name, action, item, account..." value="' + esc(f.q) + '"></div>' +
+      '<div><label>Action</label><select id="lgAction">' + actionOptions + '</select></div>' +
+      '<div><label>Type</label><select id="lgEntity">' + entityOptions + '</select></div>' +
+      '<div><label>Role</label><select id="lgRole">' + roleOptions + '</select></div>' +
+      '<div><label>Account</label><select id="lgTenant">' + tenantOptions + '</select></div>' +
+    '</div>' +
+    '<div class="row" style="align-items:flex-end">' +
+      '<div><label>From</label><input type="date" id="lgFrom" value="' + esc(f.from) + '"></div>' +
+      '<div><label>To</label><input type="date" id="lgTo" value="' + esc(f.to) + '"></div>' +
+      '<div><label>Show</label><select id="lgLimit">' +
+        [100, 200, 500, 1000].map(function (n) {
+          return '<option value="' + n + '"' + (n === Number(f.limit) ? ' selected' : '') + '>' +
+            n + ' at a time</option>';
+        }).join('') + '</select></div>' +
+      '<div class="fixed" style="padding-bottom:10px">' +
+        '<button type="button" data-act="lg-apply">Apply</button> ' +
+        '<button type="button" class="ghost" data-act="lg-reset">Clear</button> ' +
+        '<button type="button" class="ghost" data-act="lg-reload">Refresh</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="row" style="align-items:center">' +
+      '<div class="fixed">' + (badges || '<span class="badge lock">Nothing logged yet</span>') + '</div>' +
+      '<div class="spacer"></div>' +
+      '<div class="fixed"><span class="badge lock" id="lgTableCount">' + entries.length +
+        ' shown</span> <span class="badge info">' + num(data.total) + ' entries</span></div>' +
+    '</div>' +
+    '<table id="lgTable"><thead><tr><th>When</th><th>Who</th><th>Account</th>' +
+      '<th>Action</th><th>Item</th><th>Details</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+    '<div class="row" style="align-items:center">' +
+      '<div class="fixed"><button type="button" class="ghost" data-act="lg-prev"' +
+        (Number(f.offset) > 0 ? '' : ' disabled') + '>&lt;- Newer</button> ' +
+        '<button type="button" class="ghost" data-act="lg-next"' +
+        (Number(f.offset) + Number(f.limit) < Number(data.total) ? '' : ' disabled') +
+        '>Older -&gt;</button></div>' +
+      '<div class="spacer"></div>' +
+      '<div class="fixed muted small">Showing ' + (data.total ? (Number(f.offset) + 1) : 0) + '-' +
+        Math.min(Number(f.offset) + Number(f.limit), Number(data.total)) + ' of ' + num(data.total) +
+        ' - the newest ' + num(data.kept) + ' entries are kept</div>' +
+    '</div></div>';
+}
+
+
+async function renderTrash() {
+  const v = $('view-trash');
+  v.innerHTML = loadMsg();
+  const f = S.trashFilters;
+  const query = [];
+  if (f.q) query.push('q=' + encodeURIComponent(f.q));
+  if (f.entity) query.push('entity=' + encodeURIComponent(f.entity));
+  let data;
+  try { data = await API.get('/super/trash' + (query.length ? '?' + query.join('&') : '')); }
+  catch (e) { v.innerHTML = errBox(e); return; }
+
+  const items = data.items || [];
+  const counts = data.counts || {};
+  const rows = items.length ? items.map(function (t) {
+    const shared = t.size > 1 ? ' <span class="muted small">(+' + (t.size - 1) + ' together)</span>' : '';
+    const back = t.restoredAt ? ' <span class="badge ok">PUT BACK</span>' : '';
+    return '<tr data-search="' + esc([t.label, t.entity, t.byName, t.byRole, t.tenantName].join(' | ')) + '">' +
+      '<td class="small">' + esc(fmtDate(t.at)) + '</td>' +
+      '<td>' + '<b>' + esc(t.byName || '-') + '</b>' + (t.byRole ? ' ' + roleBadge(t.byRole) : '') + '</td>' +
+      '<td class="small"><b>' + esc(entityName(t.entity)) + '</b></td>' +
+      '<td class="small">' + esc(t.label || '-') + shared + back + '</td>' +
+      '<td class="small">' + esc(t.tenantName || '-') + '</td>' +
+      '<td class="fixed">' +
+        (t.restoredAt ? '' :
+          '<button type="button" class="ghost small" data-act="tr-restore" data-id="' + esc(t.id) + '">Put back</button> ') +
+        '<button type="button" class="ghost small" data-act="tr-purge" data-id="' + esc(t.id) + '">Delete for good</button>' +
+      '</td></tr>';
+  }).join('') : '<tr><td colspan="6" class="muted">The Trash is empty.</td></tr>';
+
+  const typeOptions = selectOptions(Object.keys(ENTITY_NAMES).filter(function (key) {
+    return ['portal', 'tenant', 'module', 'book', 'chapter', 'objective', 'library', 'user',
+      'assessment-category', 'assessment-statement'].indexOf(key) !== -1;
+  }).map(function (key) { return { value: key, label: ENTITY_NAMES[key] }; }), f.entity, 'Every type');
+  const badges = Object.keys(counts).map(function (key) {
+    return '<span class="badge info">' + esc(entityName(key)) + ' ' + num(counts[key]) + '</span>';
+  }).join(' ');
+
+  v.innerHTML = '<h2>Trash</h2>' +
+    '<p class="muted">Nothing is lost by deleting it: a deleted item waits here, with ' +
+      'everything that belonged to it, until you put it back or delete it for good.</p>' +
+    '<div class="card"><div class="row" style="align-items:flex-end">' +
+      '<div style="min-width:220px"><label>Search</label>' +
+        '<input type="text" id="trSearch" placeholder="Name, who deleted it, account..." value="' + esc(f.q) + '"></div>' +
+      '<div><label>Type</label><select id="trType">' + typeOptions + '</select></div>' +
+      '<div class="fixed" style="padding-bottom:10px">' +
+        '<button type="button" data-act="tr-reload">Refresh</button> ' +
+        '<button type="button" class="ghost" data-act="tr-empty">Empty the Trash</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="row" style="align-items:center">' +
+      '<div class="fixed">' + (badges || '<span class="badge ok">Nothing in the Trash</span>') + '</div>' +
+      '<div class="spacer"></div>' +
+      '<div class="fixed"><span class="badge lock" id="trTableCount">' + items.length +
+        ' shown</span> <span class="badge info">' + num(data.total) + ' in the Trash</span></div>' +
+    '</div>' +
+    '<table id="trTable"><thead><tr><th>Deleted</th><th>By</th><th>Type</th>' +
+      '<th>Item</th><th>Account</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+}
+
+async function restoreTrashItem(id) {
+  try {
+    const out = await API.post('/super/trash/' + encodeURIComponent(id) + '/restore', {});
+    toast('Put back' + (Number(out.restored) > 1 ? ' (' + out.restored + ' records)' : ''), 'ok');
+    drop('library'); drop('books'); drop('tenants'); drop('modules');
+    renderTrash();
+  } catch (e) { fail(e); }
+}
+async function purgeTrashItem(id) {
+  if (!confirm('Delete this for good? It cannot be recovered afterwards.')) return;
+  try {
+    await API.del('/super/trash/' + encodeURIComponent(id));
+    toast('Deleted for good', 'ok');
+    renderTrash();
+  } catch (e) { fail(e); }
+}
+async function emptyTrash() {
+  if (!confirm('Delete everything in the Trash for good? This cannot be undone.')) return;
+  try {
+    const out = await API.del('/super/trash');
+    toast('The Trash was emptied (' + (out.purged || 0) + ' item(s))', 'ok');
+    renderTrash();
+  } catch (e) { fail(e); }
+}

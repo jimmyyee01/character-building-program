@@ -210,6 +210,31 @@ function r_auth_register($user, $body, $params, $token, $query): array {
 
 function r_auth_login($user, $body, $params, $token, $query): array {
     $body = is_array($body) ? $body : [];
+    try {
+        return sign_in_tenant($body);
+    } catch (Throwable $e) {
+        /* a failed sign-in is worth knowing about: the person is not signed in
+           yet, so the dispatcher cannot label it by itself */
+        if (has_table('activity_log')) {
+            $tenant = null;
+            $st = db()->prepare('SELECT * FROM tenants WHERE slug=? LIMIT 1');
+            $st->execute([trim((string)($body['slug'] ?? ''))]);
+            $found = $st->fetch();
+            if ($found) $tenant = $found;
+            record_activity([
+                'action' => 'sign-in-failed', 'entity' => 'session',
+                'label' => trim((string)($body['identifier'] ?? '')),
+                'detail' => $e->getMessage(),
+                'tenant_id' => $tenant['id'] ?? null,
+                'tenant_name' => $tenant['name'] ?? null,
+                'ip' => client_ip(),
+            ]);
+        }
+        throw $e;
+    }
+}
+
+function sign_in_tenant(array $body): array {
     $slug = trim((string)($body['slug'] ?? ''));
     $identifier = trim((string)($body['identifier'] ?? ''));
     $pw = (string)($body['password'] ?? '');
@@ -233,11 +258,28 @@ function r_auth_login($user, $body, $params, $token, $query): array {
     need(!$closed || ($row['role'] ?? '') === 'tenant_admin', 'Portal closed', 403);
     $row = normalize_user($row);
     $tok = create_session($row);
-    return ['token' => $tok, 'user' => public_user($row), 'portalClosed' => $closed];
+    return ['token' => $tok, 'user' => public_user($row), 'portalClosed' => $closed,
+        'logEntry' => ['action' => 'sign-in', 'entity' => 'session', 'entityId' => $row['id'],
+            'label' => public_user($row)['fullName'], 'actorId' => $row['id']]];
 }
 
 function r_auth_superlogin($user, $body, $params, $token, $query): array {
     $body = is_array($body) ? $body : [];
+    try {
+        return super_sign_in($body);
+    } catch (Throwable $e) {
+        if (has_table('activity_log')) {
+            record_activity([
+                'action' => 'sign-in-failed', 'entity' => 'session',
+                'label' => trim((string)($body['username'] ?? '')),
+                'detail' => $e->getMessage(), 'ip' => client_ip(),
+            ]);
+        }
+        throw $e;
+    }
+}
+
+function super_sign_in(array $body): array {
     $username = trim((string)($body['username'] ?? ''));
     $pw = (string)($body['password'] ?? '');
     need($username !== '', 'Username required', 400);
@@ -259,12 +301,15 @@ function r_auth_superlogin($user, $body, $params, $token, $query): array {
     }
     $row = normalize_user($row);
     $tok = create_session($row);
-    return ['token' => $tok, 'user' => public_user($row)];
+    return ['token' => $tok, 'user' => public_user($row),
+        'logEntry' => ['action' => 'sign-in', 'entity' => 'session', 'entityId' => $row['id'],
+            'label' => public_user($row)['fullName'], 'actorId' => $row['id']]];
 }
 
 function r_auth_logout($user, $body, $params, $token, $query): array {
     destroy_session();
-    return [];
+    return ['logEntry' => ['action' => 'sign-out', 'entity' => 'session',
+        'label' => $user ? public_user($user)['fullName'] : 'Signed out']];
 }
 
 /* The learner's page says "I am still here" every few seconds. A session that

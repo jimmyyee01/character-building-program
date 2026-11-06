@@ -3,6 +3,7 @@
 
 const crypto = require('crypto');
 const dbm = require('./db');
+const audit = require('./audit');
 
 const SESSION_DAYS = 7;
 
@@ -92,11 +93,23 @@ function beatSession(token) {
 }
 
 /* A student session that has been silent past the idle limit is over: it is
-   removed so the same link cannot be used again from anywhere. */
-function endSilentSession(token) {
+   removed so the same link cannot be used again from anywhere. The system log
+   says so too, because "signed out by itself" must never look like a mystery. */
+function endSilentSession(token, user) {
   liveAt.delete(token);
   dbm.db.sessions = (dbm.db.sessions || []).filter(s => s.token !== token);
   dbm.save();
+  if (user) {
+    try {
+      audit.record({
+        action: 'sign-out', entity: 'session', entityId: user.id,
+        label: user.fullName || user.email || user.studentNumber || 'Learner',
+        detail: 'Left the program - no sign of life from the window',
+        userId: user.id, userName: user.fullName || null, role: user.role || null,
+        tenantId: user.tenantId || null, tenantName: audit.tenantNameOf(user.tenantId)
+      });
+    } catch (e) { /* the log must never break a request */ }
+  }
 }
 
 function currentUser(req) {
@@ -113,7 +126,7 @@ function currentUser(req) {
     const last = liveAt.get(token) || 0;
     if (!last) beatSession(token);                 /* first sighting after a restart */
     else if (now - last > STUDENT_IDLE_MS) {       /* the app was left: sign out */
-      endSilentSession(token);
+      endSilentSession(token, user);
       return null;
     } else beatSession(token);
   }

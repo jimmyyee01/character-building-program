@@ -132,6 +132,22 @@ function current_user(): ?array {
         unset($user['session_live_at']);
         if (student_leave_locked($user) && $last && time() - $last > STUDENT_IDLE_SECONDS) {
             $pdo->prepare('DELETE FROM sessions WHERE token=?')->execute([$token]);
+            /* the system log says the sign-in ended by itself, so nobody has to
+               guess later why a learner had to sign in again */
+            if (function_exists('record_activity')) {
+                record_activity([
+                    'action' => 'sign-out', 'entity' => 'session',
+                    'entity_id' => (string)($user['id'] ?? ''),
+                    'label' => (string)($user['full_name'] ?? $user['email'] ?? 'Learner'),
+                    'detail' => 'Left the program - no sign of life from the window',
+                    'user_id' => $user['id'] ?? null,
+                    'user_name' => $user['full_name'] ?? null,
+                    'role' => $user['role'] ?? null,
+                    'tenant_id' => $user['tenant_id'] ?? null,
+                    'tenant_name' => function_exists('tenant_name_of') ? tenant_name_of($user['tenant_id'] ?? null) : null,
+                    'ip' => function_exists('client_ip') ? client_ip() : null,
+                ]);
+            }
             return null;
         }
         if (student_leave_locked($user)) beat_session($token);

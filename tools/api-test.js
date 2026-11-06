@@ -35,7 +35,7 @@ async function main() {
     (r.data.features || []).indexOf('admin.analytics') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
   check('the login serves the live top-performers build and its features',
-    r.ok && r.data.build === '2026-11-06-student-leave-lock' &&
+    r.ok && r.data.build === '2026-11-06-system-log-and-trash' &&
       (r.data.features || []).indexOf('reports.module-performers') !== -1 &&
       (r.data.features || []).indexOf('reports.top-performers') !== -1 &&
       (r.data.features || []).indexOf('public.top-performers') !== -1 &&
@@ -45,6 +45,10 @@ async function main() {
       (r.data.features || []).indexOf('assessment') !== -1 &&
       (r.data.features || []).indexOf('assessment.admin') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
+  check('this deployment keeps a system log and a trash',
+    r.ok && (r.data.features || []).indexOf('super.activity-log') !== -1 &&
+      (r.data.features || []).indexOf('super.trash') !== -1,
+    'features ' + JSON.stringify(r.data.features || []));
   check('this deployment carries the letter that closes each module',
     r.ok && (r.data.features || []).indexOf('letter.after-module') !== -1,
     'features ' + JSON.stringify(r.data.features || []));
