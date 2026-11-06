@@ -1132,7 +1132,9 @@ function chapterHtml(ch, idx, can, book) {
       esc(ch.id) + '">Delete</button></p>';
   }
   const objs = ch.objectives || [];
-  h += '<p class="small muted" style="margin-bottom:6px">Questions (' + objs.length + ')</p>';
+  h += '<p class="small muted" style="margin-bottom:6px">Questions (' + objs.length + ')' +
+    (isSummaryModule(book) ? '' : ' — add as many as you like; each learner is asked three of them') +
+    '</p>';
   if (!objs.length) h += '<p class="small muted">No questions yet.</p>';
   objs.forEach(function (o, i) {
     const opts = o.options || [];

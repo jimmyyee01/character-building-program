@@ -35,7 +35,7 @@ async function main() {
     (r.data.features || []).indexOf('admin.analytics') !== -1,
     'build ' + (r.data.build || '?') + ' features ' + JSON.stringify(r.data.features || []));
   check('the login serves the live top-performers build and its features',
-    r.ok && r.data.build === '2026-11-05-letter-mandatory' &&
+    r.ok && r.data.build === '2026-11-06-objective-three' &&
       (r.data.features || []).indexOf('reports.module-performers') !== -1 &&
       (r.data.features || []).indexOf('reports.top-performers') !== -1 &&
       (r.data.features || []).indexOf('public.top-performers') !== -1 &&
@@ -760,6 +760,75 @@ async function part3(r, tok, check) {
     .filter(function (m) { return m.id === gateNextMod.id; })[0] || {};
   check('only now does the next module open', gateAfter.status === 'active',
     'status ' + gateAfter.status);
+
+  /* -------- one chapter, many questions: only three are asked ------------ */
+  /* The rule: the school admin and the super admin may keep adding objective
+     questions to a chapter, and each learner is served THREE of them — drawn
+     with their own account as the seed — so the bank is shared but no class can
+     copy one another. The bank's own questions are never taken away, and only
+     the three that were served are ever marked. The learner who just certified
+     module 1 is standing in module 2 (objective mode), so this runs there. */
+  check('the module now open is answered with objective questions',
+    gateAfter.mode === 'objectives', 'mode ' + gateAfter.mode);
+  const bankProgress = await call('/module/' + encodeURIComponent(gateNextMod.id), null, gateTok);
+  const bankBookState = (((bankProgress.data || {}).progress || {}).books || [])
+    .filter(function (b) { return b.chapters && b.chapters.length; })[0] || {};
+  const bankCh = (bankBookState.chapters || [])[0] || {};
+  const bankStart = Number(bankCh.objectiveCount) || 0;
+  const added = [];
+  for (let i = 1; i <= 3; i++) {
+    const ores = await call('/chapters/' + encodeURIComponent(bankCh.id) + '/objectives', { method: 'POST',
+      body: { question: 'Bank question ' + i + ' of ' + bankCh.title + '?',
+        options: ['First ' + i, 'Second ' + i, 'Third ' + i], answerIndex: 1 } }, suTok);
+    /* the two backends answer either {objective} or the objective itself */
+    const made = (ores.data || {}).objective || ores.data || {};
+    added.push(ores.ok && made && made.id ? made.id : null);
+  }
+  const bankPool = bankStart + added.filter(Boolean).length;
+  check('the super admin can keep adding questions to one chapter',
+    added.filter(Boolean).length === 3 && bankPool > 3,
+    'start ' + bankStart + ' added ' + added.filter(Boolean).length);
+  if (bankCh.requiresReading && !bankCh.read) {
+    await call('/chapter/' + encodeURIComponent(bankCh.id) + '/read', { method: 'POST',
+      body: { page: bankCh.pageEnd } }, gateTok);
+  }
+  const bankView = await call('/chapter/' + encodeURIComponent(bankCh.id) + '/objectives', null, gateTok);
+  const served = ((bankView.data || {}).objectives || []);
+  const servedIds = served.map(function (o) { return o.id; });
+  check('a learner is served three questions from the chapter, never the whole bank',
+    bankView.ok && served.length === 3 &&
+      (((bankView.data || {}).counts) || {}).pool === bankPool &&
+      (((bankView.data || {}).counts) || {}).pick === 3,
+    'status ' + bankView.status + ' ' + JSON.stringify((bankView.data || {}).counts || null));
+  check('the questions served do not carry the right answer',
+    served.every(function (o) { return o.answerIndex === undefined; }),
+    JSON.stringify(served[0] || {}).slice(0, 160));
+  const bankAgain = await call('/chapter/' + encodeURIComponent(bankCh.id) + '/objectives', null, gateTok);
+  const againIds = (((bankAgain.data || {}).objectives) || []).map(function (o) { return o.id; }).sort();
+  check('the same learner is served the same three questions on a reload',
+    againIds.length === 3 && againIds.join(',') === servedIds.slice().sort().join(','),
+    againIds.join(','));
+  const bankSub = await call('/submissions', { method: 'POST', body: { type: 'objectives',
+    chapterId: bankCh.id,
+    answers: served.map(function (o) { return { objectiveId: o.id, choice: 0 }; }) } }, gateTok);
+  check('answering the three served questions is enough to submit the chapter',
+    bankSub.ok && ((bankSub.data || {}).submission || {}).total === 3,
+    'status ' + bankSub.status + ' ' + JSON.stringify(bankSub.data || {}).slice(0, 160));
+  const bankDone = await call('/chapter/' + encodeURIComponent(bankCh.id) + '/objectives', null, gateTok);
+  const bankDoneIds = (((bankDone.data || {}).objectives) || []).map(function (o) { return o.id; }).sort();
+  check('after submitting, the chapter shows back the three questions that were marked',
+    ((bankDone.data || {}).submitted) === true && bankDoneIds.length === 3 &&
+      bankDoneIds.join(',') === servedIds.slice().sort().join(','),
+    bankDoneIds.join(','));
+  /* the whole bank is still there for the administrators to edit */
+  const bankStill = await call('/chapter/' + encodeURIComponent(bankCh.id) + '/objectives', null, stuTok);
+  check('the rest of the bank is kept for the administrators',
+    (((bankStill.data || {}).counts) || {}).pool === bankPool,
+    JSON.stringify((bankStill.data || {}).counts || null));
+  for (const oid of added) {
+    if (oid) await call('/objectives/' + encodeURIComponent(oid), { method: 'DELETE' }, suTok);
+  }
+
   /* put the module back the way it was, then drop the throwaway learner */
   await call('/super/modules/' + encodeURIComponent(gateMod.id), { method: 'PUT',
     body: { letter: { enabled: false, mode: 'objectives', questions: [] } } }, suTok);

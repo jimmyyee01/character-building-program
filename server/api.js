@@ -18,7 +18,7 @@ function need(cond, message, status) { if (!cond) throw new HttpError(message, s
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-const BUILD = '2026-11-05-letter-mandatory';
+const BUILD = '2026-11-06-objective-three';
 const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.students', 'reports.student-roster',
   'reports.student-detail', 'reports.student-assessment', 'reports.module-performers', 'reports.top-performers',
   'public.top-performers', 'reading.activity', 'reading.video-alerts',
@@ -489,6 +489,20 @@ function chaptersOf(bookId, tenantId) {
 function objectivesOf(chapterId, tenantId) {
   return ordered(dbm.where('objectives', o => o.chapterId === chapterId && (o.scope === 'global' || o.scope === tenantId)));
 }
+/* A chapter of an objectives module may carry ANY number of questions — the
+   school/organization administrator and the super admin keep adding them. Each
+   learner is served only THREE of them: the three are drawn from the chapter's
+   bank with the learner's own account as the seed, so every student answers a
+   different three and no two students can copy each other, while one learner
+   always gets the same three back on a reload. The same draw grades the
+   submission, so nothing outside those three is ever marked. Mirrors
+   objectives_for_learner() in php/engine.php. */
+const OBJECTIVE_PICK = 3;
+function learnerObjectives(user, chapterId, tenantId) {
+  const all = objectivesOf(chapterId, tenantId);
+  if (all.length <= OBJECTIVE_PICK) return all;
+  return shuffleWithSeed(all, user.id + '|' + chapterId + '|objectives').slice(0, OBJECTIVE_PICK);
+}
 function findSub(userId, type, match) {
   const keys = match ? Object.keys(match) : [];
   return dbm.where('submissions', s => s.userId === userId && s.type === type &&
@@ -555,7 +569,8 @@ function assessOf(s) {
 
 function subMeta(s) {
   const kw = assessOf(s);
-  return s ? { id: s.id, createdAt: s.createdAt, submittedAt: s.submittedAt || s.createdAt, score: s.score, flagged: !!s.flagged,
+  return s ? { id: s.id, createdAt: s.createdAt, submittedAt: s.submittedAt || s.createdAt, score: s.score,
+    total: s.total == null ? null : s.total, flagged: !!s.flagged,
     similarity: s.similarity || 0, color: s.color || null, text: s.text || null,
     bookId: s.bookId || null, chapterId: s.chapterId || null,
     moduleId: s.moduleId || null, index: s.index || null,
@@ -579,10 +594,13 @@ function bookProgress(user, module, book) {
        gate above); a chapter with no pages of its own is always answerable */
     const range = readingRangeOf(book, ch);
     const readRow = findChapterRead(user.id, ch.id);
+    /* the whole bank the administrators wrote, and how many of it is asked */
+    const objPool = objectivesOf(ch.id, tenantId).length;
     const state = {
       id: ch.id, title: ch.title, content: ch.content,
       pageStart: ch.pageStart, pageEnd: ch.pageEnd, order: ch.order,
-      objectiveCount: objectivesOf(ch.id, tenantId).length,
+      objectiveCount: objPool,
+      objectivePick: Math.min(OBJECTIVE_PICK, objPool),
       keywords: kwords.list, keywordsSource: kwords.source,
       requiresReading: !!range,
       read: !range || !!(readRow && readRow.completedAt),
@@ -1328,29 +1346,39 @@ route('GET', '/api/book/([a-z0-9_-]+)', ({ user, params }) => {
     letter: progress.letter, letterSubmission: progress.letterSubmission };
 });
 
-/* Objectives for a chapter, shuffled for this login (answers hidden until submitted). */
+/* The three objectives this learner has to answer, shuffled for this login
+   (answers hidden until submitted). The rest of the chapter's bank stays on the
+   server: it is never sent, and it is never marked. */
 route('GET', '/api/chapter/([a-z0-9_-]+)/objectives', ({ user, token, params }) => {
   requireRole(user, PARTICIPANTS);
   const chapter = dbm.byId('chapters', params[0]);
   need(chapter, 'Chapter not found', 404);
   const book = dbm.byId('books', chapter.bookId);
   need(book.scope === 'global' || book.scope === user.tenantId, 'Not available', 403);
-  const module = dbm.byId('modules', book.moduleId);
-  const objs = objectivesOf(chapter.id, user.tenantId);
+  const pool = objectivesOf(chapter.id, user.tenantId);
+  const picked = learnerObjectives(user, chapter.id, user.tenantId);
+  const counts = { pool: pool.length, pick: picked.length };
   const done = findSub(user.id, 'objectives', { chapterId: chapter.id });
 
   if (done) {
-    const answers = done.answers || [];
-    return { ok: true, submitted: true, submission: subMeta(done),
-      objectives: objs.map(o => {
-        const a = answers.find(x => x.objectiveId === o.id);
-        return { id: o.id, question: o.question, options: o.options,
-          yourChoice: a ? a.choice : null, correct: a ? !!a.correct : null,
-          answerIndex: o.answerIndex };
+    /* only what this learner was served is shown back — the answers they gave,
+       not the questions they were never asked */
+    const answers = Array.isArray(done.answers) && done.answers.length
+      ? done.answers
+      : picked.map(o => ({ objectiveId: o.id }));
+    return { ok: true, submitted: true, counts, submission: subMeta(done),
+      objectives: answers.map(a => {
+        const o = dbm.byId('objectives', a.objectiveId) || null;
+        return { id: a.objectiveId,
+          question: o ? o.question : 'This question is no longer in the chapter',
+          options: o ? o.options : [],
+          yourChoice: a.choice == null ? null : a.choice,
+          correct: a.correct == null ? null : !!a.correct,
+          answerIndex: o ? o.answerIndex : null };
       }) };
   }
-  const shuffled = shuffledForLogin(user, token, objs);
-  return { ok: true, submitted: false,
+  const shuffled = shuffledForLogin(user, token, picked);
+  return { ok: true, submitted: false, counts,
     objectives: shuffled.map(o => ({ id: o.id, question: o.question, options: shuffleWithSeed(o.options, o.id + token) })) };
 });
 
@@ -1500,12 +1528,13 @@ route('POST', '/api/submissions', ({ user, token, body }) => {
     chapterGates(book, chapter);
     requireChapterRead(user, book, chapter);
     need(!findSub(user.id, 'objectives', { chapterId: chapter.id }), 'You already submitted this chapter');
-    const objs = objectivesOf(chapter.id, tenantId);
-    need(objs.length, 'No objectives have been set for this chapter yet. Ask your administrator.');
+    /* only the three questions this learner was served are marked */
+    const served = learnerObjectives(user, chapter.id, tenantId);
+    need(served.length, 'No objectives have been set for this chapter yet. Ask your administrator.');
     const answers = Array.isArray(body.answers) ? body.answers : [];
     let score = 0;
     const detail = [];
-    objs.forEach(o => {
+    served.forEach(o => {
       const a = answers.find(x => x && x.objectiveId === o.id);
       need(a, 'Answer every objective before submitting');
       const choice = Number(a.choice);
@@ -1517,7 +1546,7 @@ route('POST', '/api/submissions', ({ user, token, body }) => {
       detail.push({ objectiveId: o.id, choice: originalChoice, correct });
     });
     store({ type, chapterId: chapter.id, bookId: book.id, moduleId: mod.id,
-      answers: detail, score, total: objs.length }, {});
+      answers: detail, score, total: served.length }, {});
 
   } else if (type === 'letter_summary') {
     const book = dbm.byId('books', body.bookId);

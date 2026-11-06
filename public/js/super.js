@@ -2106,7 +2106,10 @@ function chapterHTML(ch) {
     (S.curBookSummary
       ? kwRow + '<p class="muted small">MODE: SUMMARY — learners type their answer for this chapter, so ' +
         'questions are not used in this module.</p>'
-      : '<b class="small">Questions</b>' + objList + questionFormHTML(id)) +
+      : '<b class="small">Questions</b>' +
+        '<p class="muted small" style="margin:2px 0 6px">Add as many as you like — each learner is ' +
+        'asked three of them, drawn from this chapter for their own account.</p>' +
+        objList + questionFormHTML(id)) +
   '</div>';
 }
 /* Normalise a book's attached clip: the Node list carries flat mediaUrl/Kind/
@@ -2173,7 +2176,7 @@ function insertMediaMarker(field) {
     try { document.execCommand('insertText', false, marker); }
     catch (err) { field.innerHTML += esc(marker); }
   }
-  toast('Media link inserted â€” save to keep it.', 'ok');
+  toast('Media link inserted — save to keep it.', 'ok');
 }
 function bookCardHTML(b, isSummary) {
   S.curBook = b;

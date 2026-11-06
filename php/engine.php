@@ -99,6 +99,21 @@ function objectives_of(string $chapterId, ?string $tenantId): array {
     $stmt->execute([$chapterId, $tenantId]);
     return ordered(array_map('n_objective', $stmt->fetchAll()));
 }
+/* A chapter of an objectives module may carry ANY number of questions — the
+   school/organization administrator and the super admin keep adding them. Each
+   learner is served only THREE of them: the three are drawn from the chapter's
+   bank with the learner's own account as the seed, so every student answers a
+   different three and no two students can copy each other, while one learner
+   always gets the same three back on a reload. The same draw grades the
+   submission, so nothing outside those three is ever marked. Mirrors
+   learnerObjectives() in server/api.js. */
+const OBJECTIVE_PICK = 3;
+function objectives_for_learner(array $user, string $chapterId, ?string $tenantId): array {
+    $all = objectives_of($chapterId, $tenantId);
+    if (count($all) <= OBJECTIVE_PICK) return $all;
+    $order = shuffle_with_seed($all, $user['id'] . '|' . $chapterId . '|objectives');
+    return array_slice($order, 0, OBJECTIVE_PICK);
+}
 function find_sub(string $userId, string $type, array $match): ?array {
     $sql = 'SELECT * FROM submissions WHERE user_id=? AND type=?';
     $args = [$userId, $type];
@@ -126,6 +141,7 @@ function user_submissions(string $userId, ?string $type = null): array {
 function sub_meta(?array $s): ?array {
     if (!$s) return null;
     return ['id' => $s['id'], 'createdAt' => $s['createdAt'], 'score' => $s['score'],
+        'total' => isset($s['total']) ? (int)$s['total'] : null,
         'flagged' => $s['flagged'], 'similarity' => $s['similarity'],
         'color' => $s['color'], 'text' => $s['text'],
         'bookId' => $s['bookId'], 'chapterId' => $s['chapterId'],
@@ -199,10 +215,13 @@ function book_progress(array $user, array $module, array $book): array {
         $range = chapter_reading_range($book, $ch);
         $readRow = $range ? find_chapter_read($user['id'], $ch['id']) : null;
         $readDone = $readRow !== null && !empty($readRow['completed_at']);
+        /* the whole bank the administrators wrote, and how many of it is asked */
+        $objPool = count(objectives_of($ch['id'], $tenantId));
         $states[] = ['id' => $ch['id'], 'title' => $ch['title'], 'content' => $ch['content'],
             'pageStart' => $ch['pageStart'], 'pageEnd' => $ch['pageEnd'], 'order' => $ch['order'],
             'keywords' => $kwList['list'], 'keywordsSource' => $kwList['source'],
-            'objectiveCount' => count(objectives_of($ch['id'], $tenantId)),
+            'objectiveCount' => $objPool,
+            'objectivePick' => min(OBJECTIVE_PICK, $objPool),
             'requiresReading' => (bool)$range, 'read' => !$range || $readDone,
             'readAt' => $readDone ? iso($readRow['completed_at']) : null,
             'lastPage' => ($readRow && $readRow['last_page'] !== null) ? (int)$readRow['last_page'] : null,

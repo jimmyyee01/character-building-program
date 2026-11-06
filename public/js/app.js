@@ -791,7 +791,8 @@ function chapterPanel(d, ch) {
           '<div class="mt"><button id="chSubmit">Submit chapter summary</button></div>');
   } else {
     html += '<hr><h4>Objectives for this chapter</h4>' +
-      '<p class="muted small">Answer every objective. The order reshuffles each time you log in.</p>' +
+      '<p class="muted small">Your questions are drawn from this chapter\'s bank — answer every one you are given. ' +
+      'The order reshuffles each time you log in.</p>' +
       '<div id="objBox"' + (locked ? ' data-locked="1"' : '') + '>Loading objectives…</div>';
   }
   return html + '</div>';
@@ -996,7 +997,13 @@ async function loadObjectives(ch, box, locked) {
       ' — score ' + data.submission.score + '/' + data.submission.total + '</p>';
       return;
     }
-    box.innerHTML = data.objectives.map(function (o, i) {
+    /* how many of the chapter's questions this learner was given */
+    const counts = data.counts || { pool: data.objectives.length, pick: data.objectives.length };
+    const drawnNote = counts.pool > counts.pick
+      ? '<p class="muted small">You were given ' + esc(counts.pick) + ' of the ' + esc(counts.pool) +
+        ' questions written for this chapter.</p>'
+      : '';
+    box.innerHTML = drawnNote + data.objectives.map(function (o, i) {
       return '<div class="obj' + (locked ? ' locked' : '') + '"><div class="q">' + (i + 1) + '. ' + esc(o.question) + '</div>' +
         o.options.map(function (opt, oi) {
           return '<label class="opt"><input type="radio" name="o_' + esc(o.id) + '" value="' + oi + '"' +

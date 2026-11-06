@@ -186,29 +186,39 @@ function r_chapter_objectives($user, $body, $params, $token, $query) {
   $brow = $st->fetch();
   need($brow, 'Book not found', 404);
   need(($brow['scope'] === 'global' || $brow['scope'] === $user['tenant_id']), 'Not permitted for this book', 403);
-  $objs = objectives_of($ch['id'], $user['tenant_id']);
+  $pool = objectives_of($ch['id'], $user['tenant_id']);
+  $picked = objectives_for_learner($user, $ch['id'], $user['tenant_id']);
+  $counts = ['pool' => count($pool), 'pick' => count($picked)];
   $sub = find_sub($user['id'], 'objectives', ['chapter_id' => $ch['id']]);
   if ($sub) {
+    /* only what this learner was served is shown back — the answers they gave,
+       not the questions they were never asked */
     $ans = $sub['answers'] ?? [];
     $byId = [];
     if (is_array($ans)) foreach ($ans as $a) if (is_array($a) && isset($a['objectiveId'])) $byId[$a['objectiveId']] = $a;
+    $ids = $byId ? array_keys($byId) : array_map(fn($o) => $o['id'], $picked);
+    $poolById = [];
+    foreach ($pool as $o) $poolById[$o['id']] = $o;
     $out = [];
-    foreach ($objs as $o) {
-      $a = $byId[$o['id']] ?? null;
-      $out[] = ['id' => $o['id'], 'question' => $o['question'], 'options' => $o['options'],
+    foreach ($ids as $oid) {
+      $o = $poolById[$oid] ?? null;
+      $a = $byId[$oid] ?? null;
+      $out[] = ['id' => $oid,
+        'question' => $o !== null ? $o['question'] : 'This question is no longer in the chapter',
+        'options' => $o !== null ? $o['options'] : [],
         'yourChoice' => $a !== null ? ($a['choice'] ?? null) : null,
-        'correct' => $a !== null ? (bool)($a['correct'] ?? false) : false,
-        'answerIndex' => $o['answerIndex']];
+        'correct' => $a !== null ? (bool)($a['correct'] ?? false) : null,
+        'answerIndex' => $o !== null ? $o['answerIndex'] : null];
     }
-    return ['submitted' => true, 'submission' => sub_meta($sub), 'objectives' => $out];
+    return ['submitted' => true, 'counts' => $counts, 'submission' => sub_meta($sub), 'objectives' => $out];
   }
-  $shuffled = shuffled_for_login($user, $token, $objs);
+  $shuffled = shuffled_for_login($user, $token, $picked);
   $out = [];
   foreach ($shuffled as $o) {
     $out[] = ['id' => $o['id'], 'question' => $o['question'],
       'options' => shuffle_with_seed(is_array($o['options']) ? $o['options'] : [], $o['id'] . '.' . ($token ?? ''))];
   }
-  return ['submitted' => false, 'objectives' => $out];
+  return ['submitted' => false, 'counts' => $counts, 'objectives' => $out];
 }
 /* ------------------------------------------------------------- reading --- */
 /* One row per book open (mirrors the Node route). A book is either a book of a
@@ -412,7 +422,8 @@ function r_submissions($user, $body, $params, $token, $query) {
         'color' => null, 'label' => null, 'similarity' => $cp['similarity'], 'flagged' => $cp['flagged'] ? 1 : 0,
         'created_at' => now_dt()];
     } else {
-      $objs = objectives_of($ch['id'], $user['tenant_id']);
+      /* only the three questions this learner was served are marked */
+      $objs = objectives_for_learner($user, $ch['id'], $user['tenant_id']);
       need(count($objs) > 0, 'No objectives for this chapter', 400);
       $rawAns = $body['answers'] ?? null;
       $map = [];
@@ -425,10 +436,17 @@ function r_submissions($user, $body, $params, $token, $query) {
       foreach ($objs as $o) {
         need(array_key_exists($o['id'], $map), 'All questions must be answered', 400);
         $choice = (int)$map[$o['id']];
-        need($choice >= 0 && $choice < count($o['options']), 'Invalid choice', 400);
-        $correct = ($choice === (int)$o['answerIndex']);
+        $opts = is_array($o['options']) ? $o['options'] : [];
+        need($choice >= 0 && $choice < count($opts), 'Invalid choice', 400);
+        /* the options reach the learner shuffled (see r_chapter_objectives), so
+           the position they picked is mapped back to the authored index first */
+        $served = shuffle_with_seed($opts, $o['id'] . '.' . ($token ?? ''));
+        $pickedText = array_key_exists($choice, $served) ? $served[$choice] : null;
+        $authored = $pickedText === null ? false : array_search($pickedText, $opts, true);
+        $original = $authored === false ? $choice : (int)$authored;
+        $correct = ($original === (int)$o['answerIndex']);
         if ($correct) $score++;
-        $detail[] = ['objectiveId' => $o['id'], 'choice' => $choice, 'correct' => $correct];
+        $detail[] = ['objectiveId' => $o['id'], 'choice' => $original, 'correct' => $correct];
       }
       $cp = assess_copy($user, $type, [], null);
       $newRow = ['id' => uid('sub'), 'user_id' => $user['id'], 'tenant_id' => $user['tenant_id'],
