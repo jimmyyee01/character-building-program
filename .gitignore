@@ -1,0 +1,92 @@
+# === OS / user junk (home directory is the git root) ==========================
+.AppData/
+.android/
+.cache/
+.claude/
+.cline/
+.config/
+.copilot/
+.docker/
+.gradle/
+.local/
+.vscode/
+.vscode-shared/
+.*)/
+
+NTUSER.DAT*
+ntuser.dat.*
+desktop.ini
+Thumbs.db
+
+# === VirtualBox logs ==========================================================
+*-VirtualBoxVM.exe-*.log
+*-VBoxHeadless.exe-*.log
+
+# === Python / venv ============================================================
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+
+# === Databases / local state ==================================================
+*.db
+*.sqlite
+*.sqlite3
+local_studio.db
+test_studio.db
+sim_aggregator.db
+
+# === Tool / test outputs ======================================================
+*-validate.out
+*-validate.err
+sim-ui.out
+chrome-studio.out
+chrome-studio.err
+studio-local.out
+studio-local.err
+sim-validate.out
+sim-validate.err
+ui-compile.log
+
+# === Temp / scratch ===========================================================
+tmp-*.txt
+test_*.py
+test_*.ps1
+start_server*.ps1
+start_uvicorn.*
+C:/temp/
+
+# === Packaged outputs =========================================================
+raw-switch-iot.zip
+onomondo-clone-deploy.zip
+kivu-systems.zip
+rawtechnologyug.com_*.zip
+
+# === User data folders ========================================================
+Documents/
+Desktop/
+Downloads/
+Pictures/
+Music/
+Videos/
+"Agrivi*"
+"hologram*"
+"kivu-systems/"
+"network_sandbox/"
+"supermarket*"
+"CrossDevice/"
+"Saved Games/"
+
+# === Project files to KEEP (not ignored) ======================================
+!sim_aggregator/
+!nexora-iot/
+!RAW-SWITCH-USAGE-GUIDE.md
+!README.md
+!start-local.ps1
+!requirements.txt
+!DEPLOY-VPS.md
+!deploy.ps1
+!deploy_remote.sh
+!server.log
