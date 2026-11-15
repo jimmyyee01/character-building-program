@@ -203,6 +203,19 @@ function buildLibrary() {
   BOOK_LETTERS.forEach((l, i) => lib.push(mk('lib_book_letter_' + (i + 1), 'letter', l[0], l[1], null)));
   lib.push(mk('lib_extra_book_1', 'book', 'Daily Meditations for Young Minds', 'A collection of short daily readings on discipline, kindness and courage. Not part of the modules — available in the library as an “other book”.', null));
   lib.push(mk('lib_extra_book_2', 'book', 'Letters to a Future Leader', 'Practical letters on servant leadership, written for young people preparing to carry responsibility. Available in the library as an “other book”.', null));
+  /* graduation reading list: at least the 5 required + 10 optional slots the
+     graduation library supports (super admin assigns 5; the learner may pick up
+     to 10 of the rest) */
+  const GRAD_BOOK_TITLES = [
+    'The Quiet Hour', 'Words That Build', 'The Courage to Begin Again', 'A Table of Kindness',
+    'The Steward’s Ledger', 'Listening Well', 'The Habit of Truth', 'Strength Under Control',
+    'A Life of Thanks', 'The Long Obedience', 'Peace in the Storm', 'The Generous Hand',
+    'Learning to Wait', 'The Whole Heart', 'Character in Ordinary Days'
+  ];
+  GRAD_BOOK_TITLES.forEach(function (title, i) {
+    lib.push(mk('lib_grad_book_' + (i + 1), 'book', title,
+      'A graduation library reading book: ' + title + '. Available to a graduated learner as a required or optional selection.', null));
+  });
   lib.push(mk('lib_extra_video_1', 'video', 'The Story of Character (library video)', null, SAMPLE_VIDEO_URL));
   return lib;
 }
@@ -296,11 +309,23 @@ function build() {
   const modules = defaultModules();
   const library = buildLibrary();
   const content = buildContent(modules);
+  /* a video alert attached to a specific book (shown when the learner opens it) */
+  if (content.books[0]) content.books[0].videoAlertId = 'lib_extra_video_1';
   const demo = demoTenants();
   /* ---- demo graduate: one learner who finished the whole programme ------- */
   const grad = makeUser({ tenantId: 'ten_greenfield', role: 'student', fullName: 'Grace Graduate',
     studentNumber: 'STU-100', className: 'Grade 12A', password: 'Student@123' });
   demo.users.push(grad);
+  /* demo graduation library: 5 required (chosen by the super admin) + 10 optional */
+  grad.graduated = true;
+  grad.copyCount = 0;
+  grad.library = {
+    required: ['lib_grad_book_1', 'lib_grad_book_2', 'lib_grad_book_3', 'lib_grad_book_4', 'lib_grad_book_5'],
+    optional: ['lib_grad_book_6', 'lib_grad_book_7', 'lib_grad_book_8', 'lib_grad_book_9', 'lib_grad_book_10',
+      'lib_grad_book_11', 'lib_grad_book_12', 'lib_grad_book_13', 'lib_grad_book_14', 'lib_grad_book_15'],
+    addedAt: iso(),
+    reads: { lib_grad_book_1: 3, lib_grad_book_2: 2, lib_grad_book_6: 4, lib_grad_book_7: 1 }
+  };
   const submissions = [], certificates = [];
   let seq = 0;
   const stamp = i => new Date(Date.now() - (90 - i) * 86400000).toISOString();

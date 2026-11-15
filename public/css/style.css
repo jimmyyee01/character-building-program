@@ -28,14 +28,39 @@ h1, h2, h3, h4 { margin: 0 0 .5em; line-height: 1.25; }
 img { max-width: 100%; }
 .hidden { display: none !important; }
 
-/* =========================================================== layout ===== */
+/* ------------------------------------------------ self-assessment (B & C) -- */
+/* The written parts of the self-assessment: Section B's observation columns
+   and Section C's question + answer blocks. An input of the stage that is not
+   active is disabled, which the browser renders greyed on its own. */
+.assess-section h4 { margin: 18px 0 6px; }
+.assess-section .table-wrap { overflow-x: auto; }
+.assess-table-wide { width: 100%; }
+.assess-table .assess-beh-area { width: 26%; font-weight: 600; }
+.assess-input { width: 100%; min-height: 56px; resize: vertical; font: inherit; }
+.assess-input:disabled { background: #f1f4f9; color: #8a93a6; cursor: not-allowed; }
+.assess-text-val { white-space: pre-wrap; background: #f6f8fd; border: 1px dashed var(--line);
+  border-radius: 8px; padding: 8px 10px; }
+.assess-refl-q { margin: 12px 0; }
+.assess-refl-text { font-weight: 600; margin-bottom: 6px; }
+.assess-refl-q .assess-input { min-height: 80px; }
+
+/* ========================================================== layout ====== */
 .topbar {
   background: linear-gradient(120deg, var(--brand-2), var(--brand));
   color: #fff; padding: 14px 22px; display: flex; align-items: center;
   gap: 14px; position: sticky; top: 0; z-index: 40; box-shadow: var(--shadow);
 }
 .topbar .brand { display: flex; align-items: center; gap: 12px; font-weight: 700; font-size: 17px; }
-.topbar .brand img { height: 34px; width: auto; border-radius: 6px; background: #fff; padding: 2px; }
+.topbar .brand img { height: 34px; width: auto; max-width: 130px; object-fit: contain;
+  border-radius: 6px; background: #fff; padding: 2px; }
+/* The programme logo sits in the menu bar and must keep the bar's own
+   background behind it, so it is drawn on a white plate rather than floating
+   over the coloured gradient. */
+.topbar .brand img#progLogo {
+  height: 36px; width: 36px; object-fit: contain; object-position: center;
+  background: #fff; padding: 3px; border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .25); flex: 0 0 auto;
+}
 .topbar .spacer { flex: 1; }
 .topbar .who { font-size: 13px; opacity: .92; display: flex; align-items: center; gap: 10px; }
 .topbar .who img.avatar { height: 32px; width: 32px; border-radius: 50%; object-fit: cover; border: 2px solid #ffffff88; }
@@ -460,7 +485,8 @@ table.nested td { font-size: 12px; }
 .app-side { width: 250px; background: #14213d; color: #dbe4f5; padding: 18px 12px;
   display: flex; flex-direction: column; gap: 6px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
 .app-side .head { display: flex; align-items: center; gap: 10px; padding: 6px 8px 16px; color: #fff; }
-.app-side .head img { height: 38px; background: #fff; padding: 3px; border-radius: 8px; }
+.app-side .head img { height: 38px; width: 38px; max-width: 130px; object-fit: contain;
+  background: #fff; padding: 3px; border-radius: 8px; flex: 0 0 auto; }
 .app-side .head b { font-size: 14.5px; }
 .app-side .sec { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
   color: #8ea2c6; margin: 16px 8px 6px; }

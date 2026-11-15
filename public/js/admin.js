@@ -483,6 +483,16 @@ function usersTableHtml() {
     if (isAdmin()) {
       acts += '<button type="button" class="ghost small" data-act="toggle" data-id="' + esc(u.id) +
         '">' + (u.suspended ? 'Unsuspend' : 'Suspend') + '</button> ';
+      if (u.role === 'student' || u.role === 'member') {
+        acts += '<label class="small" style="white-space:nowrap"><input type="checkbox" data-grad="' +
+          esc(u.id) + '"' + (u.graduated ? ' checked' : '') + '> Graduated</label> ';
+        acts += '<button type="button" class="ghost small" data-act="grad-books" data-id="' +
+          esc(u.id) + '">Library</button> ';
+        if (u.graduated) {
+          acts += '<button type="button" class="ghost small" data-act="make-supervisor" data-id="' +
+            esc(u.id) + '">Make supervisor</button> ';
+        }
+      }
     }
     acts += '<button type="button" class="danger small" data-act="del" data-id="' +
       esc(u.id) + '">Delete</button>';
@@ -544,6 +554,13 @@ async function renderUsers() {
     (usersCache.length ? usersTableHtml() : '<p class="muted">No users yet.</p>') +
   '</div></div>';
   el.innerHTML = html;
+  el.querySelectorAll('[data-grad]').forEach(function (cb) {
+    cb.onchange = wrap(async function () {
+      await API.put('/users/' + cb.dataset.grad + '/promote', { graduated: cb.checked });
+      toast(cb.checked ? 'Marked as graduated' : 'Graduation cleared', 'ok');
+      renderUsers();
+    });
+  });
   wireRibbonPhotos(el);
 
   const roleSel = document.getElementById('ufRole');
@@ -626,6 +643,11 @@ async function userRowClick(e) {
   } else if (act === 'toggle') {
     await API.put('/users/' + u.id, { suspended: !u.suspended });
     toast(u.suspended ? 'User unsuspended' : 'User suspended', 'ok');
+  } else if (act === 'grad-books') {
+    await openGraduationLibraryModal(u, { openModal: openModal, closeModal: closeModal, onSaved: renderUsers });
+  } else if (act === 'make-supervisor') {
+    await API.put('/users/' + u.id + '/promote', { graduated: true, makeSupervisor: true });
+    toast(u.fullName + ' is now a supervisor', 'ok');
   } else if (act === 'del') {
     if (u.id === ME.user.id) { toast('You cannot delete your own account', 'err'); return; }
     if (!confirm('Move ' + u.fullName + ' to the Trash? The account is kept and the super admin can put it back.')) return;
@@ -966,6 +988,7 @@ async function renderBooks() {
     '<div><label>Order (optional)</label><input type="number" id="bfOrder" min="1"></div>' +
     '<div><label>Linked reading (library)</label><select id="bfLib">' + libOpts('book') + '</select></div>' +
     '<div><label>Linked letter</label><select id="bfLetter">' + libOpts('letter') + '</select></div>' +
+    '<div><label>Video alert (optional)</label><select id="bfVideoAlert">' + libOpts('video') + '</select></div>' +
     '<div class="fixed"><button type="submit">Add book</button></div>' +
     '</div></form></div><div id="booksArea"></div>';
 
@@ -988,6 +1011,8 @@ async function renderBooks() {
     if (libId) body.libraryId = libId;
     const letId = document.getElementById('bfLetter').value;
     if (letId) body.letterId = letId;
+    const videoAlertId = document.getElementById('bfVideoAlert').value;
+    if (videoAlertId) body.videoAlertId = videoAlertId;
     await API.post('/books', body);
     toast('Book added', 'ok');
     document.getElementById('bfTitle').value = '';
@@ -1542,20 +1567,47 @@ function certPicked() {
   });
   return certsCache.filter(function (c) { return ids.indexOf(c.id) !== -1; });
 }
-function openCertModal(c) {
-  openModal(certSheetHtml(c) +
-    '<div class="no-print center mt"><div class="row export-buttons"><button type="button" class="ghost" data-export="cert-pdf">PDF</button><button type="button" class="ghost" data-export="cert-word">Word</button><button type="button" class="ghost" data-export="cert-print">Print</button></div></div>', true);
+async function openCertModal(c) {
+  let qr = null;
+  try {
+    const r = await API.get('/certificates/' + encodeURIComponent(c.id) + '/qr');
+    qr = r.ok ? r : null;
+  } catch (e) {
+    qr = null;
+  }
+  const base = '<div style="position:relative">' + certSheetHtml(c) +
+    (qr ? '<div style="position:absolute;left:14px;bottom:14px;background:#fff;padding:4px;border:1px solid #ddd;border-radius:6px"><img src="' + esc(qr.qr) + '" style="width:110px;height:110px" alt="Certificate QR"></div>' : '') +
+    '</div>';
+  const qrBlock = '';
+  const certsList = qr
+    ? '<div class="card no-print"><h3>All certificates &amp; transcript</h3><table class="small">' + qr.certificates.map(function (x) {
+        return '<tr><td><b>' + esc(x.code || '—') + '</b><br><span class="muted small">' + esc(x.title || '') + '</span></td><td class="mono">' + esc(x.type || '') + '</td></tr>';
+      }).join('') + '</table>' + (qr.payload ? '<p class="muted small">Transcript data: ' + esc(qr.payload) + '</p>' : '') + '</div>'
+    : '';
+  openModal(base + qrBlock + '<div class="no-print center mt"><div class="row export-buttons"><button type="button" class="ghost" data-export="cert-pdf">PDF</button><button type="button" class="ghost" data-export="cert-word">Word</button><button type="button" class="ghost" data-export="cert-print">Print</button></div></div>' + certsList, true);
 }
 /* ============================================================= branding ==== */
 function updateTopbarLogos() {
   const t = document.getElementById('logoTenant');
-  if (ME.branding.tenantLogo) {
-    t.src = ME.branding.tenantLogo;
+  if (!t) return;
+  const b = (ME && ME.branding) || {};
+  /* The account's logo sits on the menu bar with the bar's own background
+     behind it. With no uploaded logo the account's initials are drawn in the
+     account colour, so the bar always says which account this is. */
+  const src = b.tenantLogo || (typeof portalMarkSrc === 'function'
+    ? portalMarkSrc(b.tenantName || b.programName,
+      themeIsHex(b.themeColor) ? b.themeColor : '#24508c')
+    : null);
+  if (src) {
+    t.src = src;
+    t.alt = (b.tenantName || 'Account') + ' logo';
     t.classList.remove('hidden');
   } else {
     t.removeAttribute('src');
     t.classList.add('hidden');
   }
+  const nameEl = document.getElementById('tenantName');
+  if (nameEl && (b.tenantName || b.programName)) nameEl.textContent = b.tenantName || b.programName;
 }
 async function renderBranding() {
   const el = sec('branding');
@@ -2463,9 +2515,18 @@ async function renderAnalytics() {
     return;
   }
   ASTAT.data = d;
+  let extraStats = '';
+  try {
+    const [lib, cp, libAll] = await Promise.all([
+      API.get('/reports/library-stats'),
+      API.get('/reports/copy-by-student'),
+      API.get('/library')
+    ]);
+    extraStats = libraryCopyStatsHtml(lib, cp, libAll.library || []);
+  } catch (e) { extraStats = ''; }
   el.innerHTML = '<h2><span class="motto">Be True</span>Analytics &amp; impact</h2>' +
     astatFiltersHtml(d) + astatKpisHtml(d) + astatChartsHtml(d) + astatReadingHtml(d) +
-    astatLearnersHtml(d) + astatModulesHtml(d) + astatFlagsHtml(d);
+    astatLearnersHtml(d) + astatModulesHtml(d) + astatFlagsHtml(d) + extraStats;
   wireAstats(el);
 }
 function wireAstats(el) {

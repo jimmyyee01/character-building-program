@@ -338,15 +338,20 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
   long scrolling document. Every page is shown WHOLE inside the sheet (the
   viewer fits the page, so the text may be smaller but nothing is cut off) and
   the viewer's scrollbar strip is covered rather than cropped.
-- **Video alerts** — every third finished chapter opens a **point** and puts one
-  library video in the learner's messages (point 1 = after 3 chapters, point 2 =
-  after 6, and so on). The super admin chooses the video each point unlocks in
-  this screen, so nothing is handed out anonymously; a point left at
-  *automatic* still sends a video the learner has never had, so a milestone is
-  never lost. A point belongs to every account, which is why only a program-wide
-  (Global) library video can be chosen. The screen also lists the alerts handed
-  out lately, with the learner, the point and whether the video was chosen or
-  automatic.
+- **Video alerts** — attach a video to **one chapter of one book**
+  (*Add a video to a chapter of a book* → Book → Chapter → Video → **Attach
+  video**). The video arrives the moment the learner's work for that chapter is
+  submitted, once, and the alert names the book and chapter. **Remove** detaches
+  it. A rule belongs to every account, which is why only a program-wide (Global)
+  library video can be chosen.
+  A rule is delivered only as an **alert in the learner's messages**: it never
+  starts playing by itself. Opening the alert shows the player and the learner
+  presses play. The learner is told where to find it ("A video has been added to
+  your Alerts — open Messages to watch it.").
+  The screen also lists the alerts handed out lately, with the learner, where it
+  came from and whether the video was chosen or automatic. (The counting points —
+  every third finished chapter — still send an automatic video when no chapter
+  rule applies; they are no longer configured on this page.)
 - **Books & Chapters** — set chapters (title, content, page ranges) and enter
   the objective questions (question, options, correct answer). A chapter of an
   objectives module may hold **as many questions as the administrators care to
@@ -534,6 +539,146 @@ php -S 127.0.0.1:8080 -t . tools/php-router.php
 ---
 
 ## Architecture
+
+---
+
+## Graduation library, copy rules, certificate QR and launchers (added)
+
+### Graduation library
+When a learner graduates, the super admin (or the account admin) assigns **5 required
+books** and the learner may pick **up to 10 optional books** from the main library.
+
+| API | Who | What it does |
+|---|---|---|
+| `GET /api/me/library` | learner / staff | Current required + optional lists and per-book pick counts |
+| `PUT /api/me/library` | learner / staff | Add or remove optional books (`optional`, `picked`) |
+| `POST /api/me/library/reads` | learner | Record one book pick (increments the hit count) |
+| `GET /api/reports/library-stats?tenantId=` | super / account admin | Per-book picks for all learners (only the requested school for an account admin) |
+| `PUT /api/users/<id>/promote` | super / account admin | Mark a learner `graduated`, set their required/optional library, or appoint them as a supervisor |
+
+The learner’s **Library** screen shows the required list, the optional list and the
+number of times each selected book has been picked. An admin sees the same
+statistics on the Analytics page (super admin: all accounts; account admin: only
+their own school/organisation).
+
+### Copy limits
+`POST /api/users/<id>/copy-flag` records a copy. The learner is warned on copies
+**2 and 3**; the account is automatically suspended on the **4th** copy. Only the
+account admin can re-activate the account. The per-learner copy count appears next
+to the library statistics.
+
+### Certificates + QR
+`GET /api/certificates/<id>/qr` returns a PNG QR image (via the public QR API) whose
+payload contains the learner, school, **every certificate** and the module
+transcript. The account admin’s certificate modal shows the QR and the certificate
+list; the learner’s certificate view/print is unchanged.
+
+### Video alerts on a book
+A library video can be attached to a book. Attach it when creating the book
+(**Modules & Books → Video alert**) and the learner sees a **Video alert** button at
+the top of that book. The endpoint is `PUT /api/books/<id>` with `videoAlertId`
+(an empty value detaches it). The demo seed attaches one to the first book.
+
+### Video alerts on a chapter of a book
+One chapter of one book can carry its own video, independent of the counting
+points. In the Super Admin console (**Video alerts → Add a video to a chapter of
+a book**) choose the book, its chapter and the video, then **Attach video**.
+
+| | |
+|---|---|
+| `GET /api/super/video-alerts` | returns `points`, `videos`, `recent`, plus `books` (every global book with its chapters) and `chapterRules` |
+| `PUT /api/super/video-alerts` | `{ bookId, chapterId, libraryId }` attaches a video to that chapter; `libraryId: ""` removes it |
+| `PUT /api/super/video-alerts` | `{ chapters, libraryId }` sets a counting point (point 1 = 3 chapters) — API only; the console no longer offers it |
+
+A rule is stored in `video_alert_plan` as `{ kind:'chapter', bookId, chapterId,
+libraryId }`. When the learner submits that chapter's work the alert fires once
+(milestone `chapter:<chapterId>`), is recorded in `video_alerts` with its
+`bookId`/`chapterId`, and arrives as a `video_alert` notification naming the
+chapter. Only a program-wide (Global) video may be attached, because one rule
+serves every account.
+
+`npm run check:video-chapter` runs `tools/video-alert-chapter-check.js`, which
+proves the whole path (rule stored → alert sent once → notification created →
+counting points still work) against a throw-away copy of the database.
+
+### Demo data
+`npm run migrate:demo` adds the 15-book graduation reading list, the demo
+graduate’s 5-required + 10-optional library, the pick counts and the book video
+alert to an existing `data/db.json`. `npm run fresh` recreates the whole demo.
+
+### Desktop / taskbar / Android launcher
+
+The icon of every launcher is the **account's own logo**, never a generic mark.
+One account logo feeds all four places at once, so a school never sees another
+account's picture on its own machine:
+
+| Place | What it reads |
+|---|---|
+| Desktop shortcut | `assets/icons/<slug>.ico` |
+| Taskbar button | the same `.ico` (via the shortcut) |
+| Browser tab / PWA | `GET /api/public/tenant/<slug>/icon` |
+| Android home screen | `GET /api/public/tenant/<slug>/manifest.webmanifest` → `icon.png` |
+
+**Build the shortcuts**
+
+```bash
+npm run shortcut -- --slug greenfield-academy          # one account
+npm run shortcut:all                                   # every account
+npm run shortcut -- --slug greenfield-academy --taskbar  # also pin it
+```
+
+Each run writes:
+
+- a `.lnk` on the Desktop, the OneDrive Desktop and in the Start Menu
+  (`Start Menu ▸ Programs ▸ Character Building Program`);
+- a launcher (`assets/launchers/<slug>.cmd`) that starts the Node server if it is
+  not already running and then opens the selected account;
+- `assets/icons/<slug>.ico` — the account logo fitted into the icon box (a wide
+  logo is centred rather than squashed, so it keeps normal logo proportions);
+- with `--taskbar`, the same `.lnk` is dropped into the shell's pinned-taskbar
+  folder. If Windows refuses, right-click the shortcut and choose
+  **Pin to taskbar**.
+
+**It happens by itself, too**
+
+- **First open.** The first visit to `/t/<slug>` creates that account's desktop
+  and taskbar shortcut with its own logo, once per account.
+- **On every update.** On server start the shortcut icons are rebuilt, so a
+  deployment refreshes them.
+- **When a logo changes.** Saving a logo in *Branding* rebuilds the icon and the
+  shortcut immediately; the browser tab and the Android app pick up the new
+  picture because the icon URL carries the logo's fingerprint.
+
+`npm run icons` rewrites every icon file on its own (no shortcuts),
+`npm run icons -- --list` lists what exists.
+
+**Android.** Open `http://<host>:3000/t/<slug>` in Chrome/Edge and use
+**Add to Home Screen**. The manifest points at the account's PNG icon at 192 and
+512 px, with a maskable entry, so the phone shows the account's logo.
+Android does not allow a website to create a home-screen icon without that tap.
+
+**Icon endpoints**
+
+- `GET /api/public/tenant/<slug>/icon` — 256 px PNG + an `X-CBP-Icon`
+  fingerprint header
+- `GET /api/public/tenant/<slug>/icon.png` — 512 px PNG
+- `GET /api/public/tenant/<slug>/manifest.webmanifest` — the Android manifest
+
+### Showing real data, not test residue
+
+The automated check scripts create throw-away users (`API Student`,
+`Sup Member`, `Copy Check A`, …). They are removed from the live database with:
+
+```bash
+npm run clean:api-data -- --dry-run   # show what would go
+npm run clean:api-data                # remove it (writes data/db.backup-*.json first)
+npm run clean:demo                    # ALSO remove the seeded demo accounts
+```
+
+A removed user's submissions, certificates, messages, notifications, book opens,
+chapter reads and sessions go with them, so no screen is left pointing at a
+person who is not there. Restore by copying the backup over `data/db.json`.
+
 
 ```
 character-building-program/

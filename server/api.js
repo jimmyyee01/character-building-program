@@ -4,12 +4,14 @@
    A handler returns a plain object (sent as JSON 200) or writes the response itself. */
 
 const crypto = require('crypto');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const dbm = require('./db');
 const auth = require('./auth');
 const audit = require('./audit');
 const live = require('./live');
+const icons = require('./icons');
 
 const UPLOADS = path.join(__dirname, '..', 'uploads');
 
@@ -20,7 +22,7 @@ function need(cond, message, status) { if (!cond) throw new HttpError(message, s
 
 /* Which build is actually running? Bump this on every release — /api/health
    reports it, so a server that was not updated is easy to spot. */
-const BUILD = '2026-11-08-live-room-fixes';
+const BUILD = '2026-11-14-account-icons';
 const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.students', 'reports.student-roster',
   'reports.student-detail', 'reports.student-assessment', 'reports.module-performers', 'reports.top-performers',
   'public.top-performers', 'reading.activity', 'reading.video-alerts', 'reading.video-alert-points',
@@ -28,7 +30,9 @@ const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.stude
   'reader.book', 'library.lock', 'library.media', 'library.letters', 'certificates', 'chapter.pages',
   'chapter.reading-gate', 'exports', 'assessment', 'assessment.admin', 'read-aloud',
   'letter.after-module', 'auth.student-leave-lock', 'super.activity-log', 'super.trash',
-  'live.video-room', 'live.captions', 'live.transcript', 'live.scheduling', 'live.alerts'];
+  'live.video-room', 'live.captions', 'live.transcript', 'live.scheduling', 'live.alerts',
+  /* an account's own logo is its desktop / taskbar / Android icon */
+  'icons.account', 'icons.manifest', 'icons.auto-refresh'];
 
 
 function send(res, code, obj) {
@@ -94,6 +98,7 @@ function publicUser(u) {
     supervisorCode: u.supervisorCode || null,
     letterFeedbackAt: u.letterFeedbackAt || null,
     optionalVideoSeen: !!u.optionalVideoSeen,
+    graduated: !!u.graduated, copyCount: Number(u.copyCount) || 0, library: u.library || null,
     suspended: !!u.suspended, createdAt: u.createdAt
   };
 }
@@ -113,6 +118,24 @@ function tenantBranding(tenant) {
     themeColor: (tenant && tenant.themeColor) || null,
     programName: settings.programName
   };
+}
+
+/* When an account's logo changes, the desktop and taskbar shortcuts must show
+   the new picture too. The shortcuts are rebuilt in the background — a missing
+   shortcut (a server on a machine with no desktop) must never fail a save. */
+function refreshLauncherIcon(tenant) {
+  if (!tenant || !tenant.slug) return;
+  if (process.platform !== 'win32') return;
+  if (process.env.CBP_SKIP_SHORTCUT === '1') return;
+  setTimeout(function () {
+    try {
+      const tool = require('../tools/make-shortcut');
+      const result = tool.buildFor(tenant);
+      console.log('[icons] launcher refreshed for ' + result.name + ' (' + result.slug + ')');
+    } catch (e) {
+      console.log('[icons] could not refresh the launcher: ' + (e && e.message ? e.message : e));
+    }
+  }, 500);
 }
 
 function slugify(s) {
@@ -1102,7 +1125,33 @@ function normalizeAssessmentDef(def) {
           order: Number.isFinite(Number(s.order)) ? Number(s.order) : si + 1
         }))
     }));
-  return { scale: scale, note: String(def.note || ''), categories: categories };
+  /* SECTION B — behaviour indicators. One row per behaviour area the super
+     admin writes; the learner observes each area twice (pre and post). */
+  const behaviors = (Array.isArray(def.behaviors) ? def.behaviors : [])
+    .filter(b => b && b.id && b.text)
+    .map((b, bi) => ({
+      id: String(b.id),
+      text: String(b.text).trim(),
+      order: Number.isFinite(Number(b.order)) ? Number(b.order) : bi + 1
+    }));
+  /* SECTION C — open reflection questions. The pre set is answered at the
+     pre assessment, the post set only at the post assessment. */
+  const preQuestions = (Array.isArray(def.preQuestions) ? def.preQuestions : [])
+    .filter(q => q && q.id && q.text)
+    .map((q, qi) => ({
+      id: String(q.id),
+      text: String(q.text).trim(),
+      order: Number.isFinite(Number(q.order)) ? Number(q.order) : qi + 1
+    }));
+  const postQuestions = (Array.isArray(def.postQuestions) ? def.postQuestions : [])
+    .filter(q => q && q.id && q.text)
+    .map((q, qi) => ({
+      id: String(q.id),
+      text: String(q.text).trim(),
+      order: Number.isFinite(Number(q.order)) ? Number(q.order) : qi + 1
+    }));
+  return { scale: scale, note: String(def.note || ''), categories: categories,
+    behaviors: behaviors, preQuestions: preQuestions, postQuestions: postQuestions };
 }
 function assessmentDef() {
   if (!dbm.db.assessment) {
@@ -1145,6 +1194,32 @@ function assessmentStatementId(category) {
     id = category.id + '-' + Date.now().toString(36) + crypto.randomBytes(2).toString('hex');
   } while (used.has(id));
   return id;
+}
+/* SECTION B ids and lookups */
+function assessmentBehaviorId() {
+  /* never reuse a deleted area's id: a learner's stored pre/post observations
+     are keyed by it */
+  return 'beh_' + Date.now().toString(36) + crypto.randomBytes(2).toString('hex');
+}
+function assessmentBehaviorById(def, id) {
+  const index = (def.behaviors || []).findIndex(b => b.id === id);
+  if (index === -1) return null;
+  return { list: def.behaviors, index: index, item: def.behaviors[index] };
+}
+/* SECTION C ids and lookups. The id says which set a question belongs to, so an
+   edit never moves a question between the pre and the post set. */
+function assessmentQuestionId(set) {
+  return (set === 'post' ? 'postq_' : 'preq_') +
+    Date.now().toString(36) + crypto.randomBytes(2).toString('hex');
+}
+function assessmentQuestionById(def, id) {
+  const pre = def.preQuestions || [];
+  const post = def.postQuestions || [];
+  let index = pre.findIndex(q => q.id === id);
+  if (index !== -1) return { set: 'pre', list: pre, index: index, question: pre[index] };
+  index = post.findIndex(q => q.id === id);
+  if (index !== -1) return { set: 'post', list: post, index: index, question: post[index] };
+  return null;
 }
 function assessmentCategoryById(def, id) {
   return (def.categories || []).find(c => c.id === id) || null;
@@ -1212,12 +1287,29 @@ function assessmentReportScope(user, studentId) {
   else if (user.role === 'supervisor') need(student.supervisorId === user.id, 'Not permitted', 403);
   return student;
 }
+/* The written parts of the self-assessment (Section B observations and Section
+   C reflections): every item the super admin defined must be answered, in the
+   right stage — pre questions only at the pre assessment, post questions only
+   at the post. */
+function assessmentTextAnswers(body, field, list, message) {
+  const out = {};
+  if (!list || !list.length) return out;
+  const raw = body && typeof body[field] === 'object' ? (body[field] || {}) : {};
+  list.forEach(function (item) {
+    const text = String(raw[item.id] != null ? raw[item.id] : '').trim();
+    need(text.length > 0, 'Write your answer for every ' + message + ' before saving');
+    out[item.id] = text;
+  });
+  return out;
+}
 route('GET', '/api/assessment', ({ user }) => {
   requireRole(user, PARTICIPANTS);
   const def = assessmentActiveDef(assessmentDef());
   const allDone = flowFor(user).allDone;
   return {
     ok: true, scale: def.scale, categories: def.categories, note: def.note || '',
+    behaviors: def.behaviors || [], preQuestions: def.preQuestions || [],
+    postQuestions: def.postQuestions || [],
     pre: user.assessmentPre || null, post: user.assessmentPost || null,
     totals: {
       pre: user.assessmentPre ? assessmentTotals(user.assessmentPre.answers, def) : null,
@@ -1231,8 +1323,15 @@ route('POST', '/api/assessment/pre', ({ user, body }) => {
   need(!user.assessmentPre, 'Your pre-score has already been submitted');
   const def = assessmentActiveDef(assessmentDef());
   const answers = assessmentAnswers(body, def);
+  /* SECTION B: the PRE-program observation of every behaviour area */
+  const behavior = assessmentTextAnswers(body, 'behavior', def.behaviors,
+    'pre-program observation (Section B)');
+  /* SECTION C: only the PRE assessment questions are answered here */
+  const reflections = assessmentTextAnswers(body, 'reflections', def.preQuestions,
+    'pre assessment question (Section C)');
   const t = assessmentTotals(answers, def);
-  user.assessmentPre = { answers, total: t.total, max: t.max, at: dbm.nowISO() };
+  user.assessmentPre = { answers, behavior: behavior, reflections: reflections,
+    total: t.total, max: t.max, at: dbm.nowISO() };
   dbm.save();
   return { ok: true, pre: user.assessmentPre, total: t.total, max: t.max };
 });
@@ -1242,11 +1341,18 @@ route('POST', '/api/assessment/post', ({ user, body }) => {
   need(!user.assessmentPost, 'Your post-score has already been submitted');
   const def = assessmentActiveDef(assessmentDef());
   const answers = assessmentAnswers(body, def);
+  /* SECTION B: the POST-program observation of every behaviour area */
+  const behavior = assessmentTextAnswers(body, 'behavior', def.behaviors,
+    'post-program observation (Section B)');
+  /* SECTION C: only the POST assessment questions are answered here */
+  const reflections = assessmentTextAnswers(body, 'reflections', def.postQuestions,
+    'post assessment question (Section C)');
   const t = assessmentTotals(answers, def);
-  user.assessmentPost = { answers, total: t.total, max: t.max, at: dbm.nowISO() };
+  user.assessmentPost = { answers, behavior: behavior, reflections: reflections,
+    total: t.total, max: t.max, at: dbm.nowISO() };
   dbm.save();
   const growth = user.assessmentPre ? t.total - user.assessmentPre.total : null;
-  return { ok: true, post: user.assessmentPost, total: t.total, max: t.max, growth };
+  return { ok: true, post: user.assessmentPost, total: t.total, max: t.max, growth: growth };
 });
 
 /* Super-admin management: the saved definition is global and shared by every
@@ -1259,6 +1365,9 @@ function assessmentPublicDef(def) {
       id: c.id, title: c.title, order: c.order, max: c.statements.length * 5,
       statements: c.statements.map(s => ({ id: s.id, text: s.text, order: s.order }))
     })),
+    behaviors: (def.behaviors || []).map(b => ({ id: b.id, text: b.text, order: b.order })),
+    preQuestions: (def.preQuestions || []).map(q => ({ id: q.id, text: q.text, order: q.order })),
+    postQuestions: (def.postQuestions || []).map(q => ({ id: q.id, text: q.text, order: q.order })),
     statementCount: assessmentStatementCount(def),
     max: assessmentStatementCount(def) * 5
   };
@@ -1351,6 +1460,88 @@ route('DELETE', '/api/super/assessment/statements/([A-Za-z0-9_-]+)', ({ user, pa
       label: entry ? entry.label : found.statement.text, trashId: entry ? entry.id : null } };
 });
 
+/* ---------------------------------------------- SECTION B: behaviour areas -- */
+route('POST', '/api/super/assessment/behaviors', ({ user, body }) => {
+  requireRole(user, SUPER);
+  body = body || {};
+  const text = String(body.text || '').trim();
+  need(text.length >= 3, 'Enter the behaviour area (at least 3 characters)');
+  const def = assessmentDef();
+  const item = { id: assessmentBehaviorId(), text: text, order: (def.behaviors || []).length + 1 };
+  def.behaviors.push(item);
+  saveAssessmentDef(def);
+  return { ok: true, assessment: assessmentPublicDef(def), behavior: item };
+});
+route('PUT', '/api/super/assessment/behaviors/([A-Za-z0-9_-]+)', ({ user, params, body }) => {
+  requireRole(user, SUPER);
+  body = body || {};
+  const def = assessmentDef();
+  const found = assessmentBehaviorById(def, params[0]);
+  need(found, 'Behaviour area not found', 404);
+  const text = String(body.text || '').trim();
+  need(text.length >= 3, 'Enter the behaviour area (at least 3 characters)');
+  found.item.text = text;
+  saveAssessmentDef(def);
+  return { ok: true, assessment: assessmentPublicDef(def), behavior: found.item };
+});
+route('DELETE', '/api/super/assessment/behaviors/([A-Za-z0-9_-]+)', ({ user, params }) => {
+  requireRole(user, SUPER);
+  const def = assessmentDef();
+  const found = assessmentBehaviorById(def, params[0]);
+  need(found, 'Behaviour area not found', 404);
+  const entry = audit.trash(user, 'assessment-behavior', found.item.text, [{
+    collection: 'assessment', kind: 'behavior', index: found.index, doc: found.item
+  }]);
+  found.list.splice(found.index, 1);
+  saveAssessmentDef(def);
+  return { ok: true, assessment: assessmentPublicDef(def),
+    deleted: { entity: 'assessment-behavior', id: params[0],
+      label: entry ? entry.label : found.item.text, trashId: entry ? entry.id : null } };
+});
+
+/* --------------------------------------- SECTION C: reflection questions -- */
+route('POST', '/api/super/assessment/questions', ({ user, body }) => {
+  requireRole(user, SUPER);
+  body = body || {};
+  const set = body.set === 'post' ? 'post' : 'pre';
+  const text = String(body.text || '').trim();
+  need(text.length >= 5, 'Enter the reflection question (at least 5 characters)');
+  const def = assessmentDef();
+  const list = set === 'post' ? def.postQuestions : def.preQuestions;
+  const question = { id: assessmentQuestionId(set), text: text, order: list.length + 1 };
+  list.push(question);
+  saveAssessmentDef(def);
+  return { ok: true, assessment: assessmentPublicDef(def), question: question, set: set };
+});
+route('PUT', '/api/super/assessment/questions/([A-Za-z0-9_-]+)', ({ user, params, body }) => {
+  requireRole(user, SUPER);
+  body = body || {};
+  const def = assessmentDef();
+  const found = assessmentQuestionById(def, params[0]);
+  need(found, 'Reflection question not found', 404);
+  const text = String(body.text || '').trim();
+  need(text.length >= 5, 'Enter the reflection question (at least 5 characters)');
+  /* the question is edited where it lives: a pre question stays a pre question */
+  found.question.text = text;
+  saveAssessmentDef(def);
+  return { ok: true, assessment: assessmentPublicDef(def), question: found.question, set: found.set };
+});
+route('DELETE', '/api/super/assessment/questions/([A-Za-z0-9_-]+)', ({ user, params }) => {
+  requireRole(user, SUPER);
+  const def = assessmentDef();
+  const found = assessmentQuestionById(def, params[0]);
+  need(found, 'Reflection question not found', 404);
+  const entry = audit.trash(user, 'assessment-question-' + found.set, found.question.text, [{
+    collection: 'assessment', kind: 'question', set: found.set, index: found.index,
+    doc: found.question
+  }]);
+  found.list.splice(found.index, 1);
+  saveAssessmentDef(def);
+  return { ok: true, assessment: assessmentPublicDef(def),
+    deleted: { entity: 'assessment-question', id: params[0], set: found.set,
+      label: entry ? entry.label : found.question.text, trashId: entry ? entry.id : null } };
+});
+
 route('GET', '/api/modules', ({ user }) => {
   requireRole(user, PARTICIPANTS.concat(ADMINS));
   return { ok: true, modules: moduleStatuses(user), performance: performance(user), allDone: flowFor(user).allDone };
@@ -1415,7 +1606,11 @@ route('GET', '/api/book/([a-z0-9_-]+)', ({ user, params }) => {
   return { ok: true, moduleStatus: st.status, pdfUnlocked: allModulesComplete(user),
     module: { id: module.id, mode: module.mode, title: module.title },
     book: Object.assign({}, progress.book, { pdf: lib && lib.type === 'book' ? (lib.url || null) : null,
-      pdfTitle: lib ? lib.title : null, media: mediaOut(book) }),
+      pdfTitle: lib ? lib.title : null, media: mediaOut(book),
+      videoAlert: book.videoAlertId ? (function () {
+        const av = dbm.byId('library', book.videoAlertId);
+        return av && av.type === 'video' && av.url ? { id: av.id, title: av.title, url: av.url } : null;
+      })() : null }),
     chapters: progress.chapters, stage: progress.stage, summaries: progress.summaries,
     letter: progress.letter, letterSubmission: progress.letterSubmission };
 });
@@ -2070,11 +2265,21 @@ route('GET', '/api/dashboard', ({ user }) => {
 
 route('GET', '/api/library', ({ user }) => {
   need(user, 'Sign in required', 401);
-  const items = dbm.where('library', l => l.scope === 'global' || l.scope === user.tenantId);
+  let items = dbm.where('library', l => l.scope === 'global' || l.scope === user.tenantId);
   const canConfig = user.role === 'super' || user.role === 'tenant_admin';
   const allDone = PARTICIPANTS.indexOf(user.role) !== -1 ? allModulesComplete(user) : true;
+  const gradLib = (!canConfig && user.graduated && PARTICIPANTS.indexOf(user.role) !== -1)
+    ? ensureUserLibrary(user) : null;
+  const allowedBookIds = gradLib ? new Set((gradLib.required || []).concat(gradLib.optional || [])) : null;
   return { ok: true, library: items.map(l => {
     const type = l.type === 'mp3' ? 'audio' : l.type;
+    /* A graduated learner can browse the whole main library, but only the
+       5 required + up to 10 optional books carry their text/URL. The rest are
+       metadata-only until the learner adds one to their optional list. */
+    if (allowedBookIds && type === 'book' && !allowedBookIds.has(l.id)) {
+      return { id: l.id, type, title: l.title, scope: l.scope, selectable: true,
+        locked: true, lockedReason: 'Add this book to your optional library (10 maximum) to open it.' };
+    }
     const base = Object.assign({}, l, { type }, canConfig ? { canEdit: canEdit(user, l) } : {});
     /* learners may not open the books or letters before they finish every module */
     if (!canConfig && (type === 'book' || type === 'letter') && l.url && !allDone) {
@@ -2603,6 +2808,7 @@ route('PUT', '/api/super/tenants/([a-z0-9_-]+)', ({ user, params, body }) => {
   if (body.programLogo !== undefined) t.programLogo = body.programLogo;
   if (body.themeColor !== undefined) t.themeColor = hexColor(body.themeColor);
   dbm.save();
+  refreshLauncherIcon(t);
   return { ok: true, tenant: t };
 });
 
@@ -2747,7 +2953,9 @@ function videoAlertPoints() {
   const points = [];
   for (let i = 1; i <= VIDEO_ALERT_POINTS; i++) {
     const chapters = i * 3;
-    const entry = plan.find(row => Number(row.chapters) === chapters) || null;
+    /* a chapter rule has no `chapters` number, so it can never be mistaken for
+       a point */
+    const entry = plan.find(row => row.kind !== 'chapter' && Number(row.chapters) === chapters) || null;
     const chosenId = entry && entry.libraryId ? String(entry.libraryId) : '';
     const video = chosenId ? dbm.byId('library', chosenId) : null;
     points.push({
@@ -2763,6 +2971,66 @@ function videoAlertPoints() {
   return points;
 }
 
+/* ------------------------------------------------- chapter video rules ---- */
+/* A video may also be attached to ONE chapter of ONE book, instead of to a
+   "point" that counts chapters. The rule fires the moment the learner's work on
+   that chapter is submitted, whatever the running chapter total is, so a school
+   can say "after Chapter 2 of The Foundation of Character, play this". */
+function videoAlertChapterRules() {
+  return videoAlertPlan()
+    .filter(function (row) { return row.kind === 'chapter' && row.chapterId; })
+    .map(function (row) {
+      const chapter = dbm.byId('chapters', row.chapterId);
+      const book = chapter ? dbm.byId('books', chapter.bookId) : null;
+      const video = row.libraryId ? dbm.byId('library', row.libraryId) : null;
+      return {
+        id: row.id || ('vap_' + row.chapterId),
+        bookId: book ? book.id : row.bookId || null,
+        bookTitle: book ? book.title : null,
+        chapterId: row.chapterId,
+        chapterTitle: chapter ? chapter.title : null,
+        libraryId: row.libraryId || null,
+        title: video ? video.title : null,
+        /* a chosen video that was deleted (or is no longer playable) is flagged
+           so the console can ask for a new one */
+        ok: !!(video && video.type === 'video' && video.url && video.scope === 'global'),
+        updatedAt: row.updatedAt || null
+      };
+    })
+    .sort(function (a, b) {
+      return String(a.bookTitle || '').localeCompare(String(b.bookTitle || ''));
+    });
+}
+
+/* Every programme-wide book with its chapters, so the console can offer
+   Book → Chapter → Video. Only global content: one rule serves every account,
+   and an account-only book would leak into another school. */
+function videoAlertChapterCatalogue() {
+  const books = (dbm.db.books || []).filter(function (b) { return b.scope === 'global'; });
+  return books
+    .slice()
+    .sort(function (a, b) {
+      return (Number(a.order) || 0) - (Number(b.order) || 0) ||
+        String(a.title || '').localeCompare(String(b.title || ''));
+    })
+    .map(function (b) {
+      const module = dbm.byId('modules', b.moduleId);
+      const chapters = (dbm.db.chapters || [])
+        .filter(function (c) { return c.bookId === b.id && (!c.scope || c.scope === 'global'); })
+        .slice()
+        .sort(function (x, y) {
+          return (Number(x.order) || 0) - (Number(y.order) || 0) ||
+            String(x.title || '').localeCompare(String(y.title || ''));
+        })
+        .map(function (c) { return { id: c.id, title: c.title, order: c.order || null }; });
+      return {
+        id: b.id, title: b.title, moduleId: b.moduleId || null,
+        moduleTitle: module ? module.title : null, chapters: chapters
+      };
+    })
+    .filter(function (b) { return b.chapters.length; });
+}
+
 route('GET', '/api/super/video-alerts', ({ user }) => {
   requireRole(user, SUPER);
   const videos = dbm.db.library
@@ -2774,26 +3042,63 @@ route('GET', '/api/super/video-alerts', ({ user }) => {
     .slice(0, 20)
     .map(alert => {
       const learner = dbm.byId('users', alert.userId);
+      const chapter = alert.chapterId ? dbm.byId('chapters', alert.chapterId) : null;
+      const book = alert.bookId ? dbm.byId('books', alert.bookId) : null;
       return {
         id: alert.id, learner: (learner && learner.fullName) || 'Learner',
-        title: alert.title, point: alert.point || videoAlertPoint(alert.chaptersCompleted || 0),
+        title: alert.title,
+        point: alert.chapterId ? null : (alert.point || videoAlertPoint(alert.chaptersCompleted || 0)),
+        chapterId: alert.chapterId || null,
+        chapterTitle: chapter ? chapter.title : null,
+        bookTitle: book ? book.title : null,
         chapters: alert.chaptersCompleted || 0, chosenBy: alert.chosenBy || 'auto',
         createdAt: alert.createdAt
       };
     });
   return { ok: true, points: videoAlertPoints(), videos, recent,
+    chapterRules: videoAlertChapterRules(), books: videoAlertChapterCatalogue(),
     maxPoint: VIDEO_ALERT_POINTS };
 });
 
 route('PUT', '/api/super/video-alerts', ({ user, body }) => {
   requireRole(user, SUPER);
   body = body || {};
+  const plan = videoAlertPlan();
+  const libraryId = body.libraryId ? String(body.libraryId) : '';
+
+  /* ---------------- a video attached to ONE chapter of ONE book ----------- */
+  if (body.chapterId) {
+    const chapter = dbm.byId('chapters', String(body.chapterId));
+    need(chapter, 'Chapter not found', 404);
+    const book = dbm.byId('books', chapter.bookId);
+    need(book, 'The book this chapter belongs to was not found', 404);
+    if (body.bookId) need(String(body.bookId) === String(book.id), 'That chapter is not part of that book');
+    const at = plan.findIndex(row => row.kind === 'chapter' && row.chapterId === chapter.id);
+    if (!libraryId) {
+      /* an empty choice removes the rule for this chapter */
+      if (at !== -1) plan.splice(at, 1);
+    } else {
+      const video = dbm.byId('library', libraryId);
+      need(video && video.type === 'video', 'Only a library video can be attached to a chapter');
+      need(!!video.url, 'That video has no file or link yet');
+      need(video.scope === 'global', 'A chapter rule is shared by every account: choose a global video');
+      const entry = {
+        id: 'vap_' + chapter.id, kind: 'chapter',
+        bookId: book.id, chapterId: chapter.id, libraryId,
+        updatedAt: dbm.nowISO(), updatedBy: user.id
+      };
+      if (at === -1) plan.push(entry); else plan[at] = entry;
+    }
+    dbm.save();
+    return { ok: true, points: videoAlertPoints(),
+      chapterRules: videoAlertChapterRules(), books: videoAlertChapterCatalogue() };
+  }
+
+  /* ------------------- a "point": after N finished chapters --------------- */
   const chapters = Number(body.chapters);
   need(Number.isFinite(chapters) && chapters >= 3 && chapters % 3 === 0 &&
     chapters <= VIDEO_ALERT_POINTS * 3, 'Choose one of the programme video points');
-  const plan = videoAlertPlan();
-  const at = plan.findIndex(row => Number(row.chapters) === chapters);
-  const libraryId = body.libraryId ? String(body.libraryId) : '';
+  const at = plan.findIndex(row => row.kind !== 'chapter' && Number(row.chapters) === chapters);
   if (!libraryId) {
     /* an empty choice hands the point back to the automatic pick */
     if (at !== -1) plan.splice(at, 1);
@@ -2807,7 +3112,8 @@ route('PUT', '/api/super/video-alerts', ({ user, body }) => {
   }
   plan.sort((a, b) => Number(a.chapters) - Number(b.chapters));
   dbm.save();
-  return { ok: true, points: videoAlertPoints() };
+  return { ok: true, points: videoAlertPoints(),
+    chapterRules: videoAlertChapterRules(), books: videoAlertChapterCatalogue() };
 });
 
 /* ============================================= content management ======== */
@@ -2922,7 +3228,9 @@ route('GET', '/api/books', ({ req, user }) => {
   return { ok: true, books: list.map(b => {
     const chs = ordered(dbm.where('chapters', c => c.bookId === b.id &&
       (user.role === 'super' || c.scope === 'global' || c.scope === user.tenantId)));
+    const alertVideo = b.videoAlertId ? dbm.byId('library', b.videoAlertId) : null;
     return Object.assign({}, b, { canEdit: canEdit(user, b),
+      videoAlertTitle: alertVideo && alertVideo.type === 'video' ? alertVideo.title : null,
       chapters: chs.map(c => Object.assign({}, c, {
         keywords: cleanKeywords(c.keywords),
         suggestedKeywords: suggestKeywords(c.content, 8),
@@ -2941,10 +3249,15 @@ route('POST', '/api/books', ({ user, body }) => {
   const scope = user.role === 'super' ? (body.scope || 'global') : user.tenantId;
   const order = Number(body.order) ||
     (dbm.db.books.filter(b => b.moduleId === mod.id && b.scope === scope).length + 1);
+  const videoAlertId = body.videoAlertId || null;
+  if (videoAlertId) {
+    const av = dbm.byId('library', videoAlertId);
+    need(av && av.type === 'video' && av.url, 'Choose a library video for the video alert', 400);
+  }
   const book = { id: dbm.uid('bk'), moduleId: mod.id, scope, order,
     title: String(body.title).trim(),
     libraryId: body.libraryId || null, letterId: body.letterId || null,
-    createdAt: dbm.nowISO() };
+    videoAlertId, createdAt: dbm.nowISO() };
   Object.assign(book, mediaFieldsFrom(body));
   dbm.collection('books').push(book);
   dbm.save();
@@ -2962,6 +3275,15 @@ route('PUT', '/api/books/([a-z0-9_-]+)', ({ user, params, body }) => {
   if (body.moduleId && dbm.byId('modules', body.moduleId)) book.moduleId = body.moduleId;
   if (body.libraryId !== undefined) book.libraryId = body.libraryId || null;
   if (body.letterId !== undefined) book.letterId = body.letterId || null;
+  if (body.videoAlertId !== undefined) {
+    if (body.videoAlertId) {
+      const av = dbm.byId('library', body.videoAlertId);
+      need(av && av.type === 'video' && av.url, 'Choose a library video for the video alert', 400);
+      book.videoAlertId = String(body.videoAlertId);
+    } else {
+      book.videoAlertId = null;
+    }
+  }
   Object.assign(book, mediaFieldsFrom(body));
   dbm.save();
   return { ok: true, book };
@@ -3135,6 +3457,77 @@ function allowedRolesFor(portalType, creatorRole) {
   return ['member', 'supervisor'];
 }
 
+/* Public: library selection hit totals for every learner in a school or
+   organization, so a teacher or supervisor can see the same statistics that
+   the super admin sees, but only for learners in their own account. */
+route('GET', '/api/reports/library-stats', ({ req, user }) => {
+  requireRole(user, ADMINS);
+  const tenantId = qp(req, 'tenantId');
+  let users;
+  if (user.role === 'super') {
+    users = tenantId ? dbm.db.users.filter(u => u.tenantId === tenantId) : dbm.db.users;
+  } else if (user.role === 'tenant_admin') {
+    users = dbm.db.users.filter(u => u.tenantId === user.tenantId);
+  } else {
+    users = [];
+  }
+  const byBook = {};
+  users.forEach(function (u) {
+    const lib = normalizeLibrary(u);
+    lib.required.forEach(function (id) { byBook[id] = (byBook[id] || 0) + (lib.reads[id] || 0); });
+    lib.optional.forEach(function (id) { byBook[id] = (byBook[id] || 0) + (lib.reads[id] || 0); });
+  });
+  return { ok: true, tenantId, books: Object.keys(byBook).filter(function (id) { return byBook[id] > 0; }).map(function (id) { return { bookId: id, hits: byBook[id] }; }) };
+});
+/* Public: how many times each learner has been marked for copying, with the
+   action the system took for that count (warn at 2 and 3, suspend at 4). */
+route('GET', '/api/reports/copy-by-student', ({ req, user }) => {
+  requireRole(user, ADMINS);
+  const tenantId = qp(req, 'tenantId');
+  let users;
+  if (user.role === 'super') {
+    users = dbm.db.users;
+  } else if (user.role === 'tenant_admin') {
+    users = dbm.db.users.filter(u => u.tenantId === user.tenantId);
+  } else {
+    users = [];
+  }
+  const rows = users.map(function (u) {
+    return { id: u.id, fullName: u.fullName, email: u.email, tenantId: u.tenantId, copyCount: Number(u.copyCount) || 0 };
+  }).filter(function (x) { return !tenantId || x.tenantId === tenantId; });
+  return { ok: true, students: rows };
+});
+/* Record that a learner has copied. The system warns at 2 and 3 copies and
+   automatically suspends the account on the 4th copy. Only the accounts admin
+   can flag a learner inside their own account; the super admin can flag anyone. */
+route('POST', '/api/users/([a-z0-9_-]+)/copy-flag', ({ user, params, body }) => {
+  const id = params[0];
+  const target = dbm.byId('users', id);
+  need(target, 'Student not found', 404);
+  const allowed = user.role === 'super' ||
+    (user.role === 'tenant_admin' && target.tenantId === user.tenantId);
+  need(allowed, 'You may only mark copies for learners in your own account or the whole system', 403);
+  need(target.role === 'student' || target.role === 'member', 'Only learners can be flagged for copying', 400);
+  const count = Math.max(0, Number(target.copyCount) || 0) + 1;
+  target.copyCount = count;
+  if (count >= 4) {
+    target.suspended = true;
+    target.suspendedAt = dbm.nowISO();
+    notificationFor(target.id, { type: 'copy-suspend', title: 'Account suspended',
+      body: 'Your account has been suspended after four copy flags. Contact your account administrator to re-activate it.' });
+  } else {
+    target.suspended = false;
+    target.suspendedAt = null;
+    if (count === 2 || count === 3) {
+      notificationFor(target.id, { type: 'copy-warning', title: 'Copy warning ' + (count - 1),
+        body: 'Your work has been flagged for copying ' + count + ' times. Copying again will suspend your account.' });
+    }
+  }
+  dbm.save();
+  return { ok: true, student: publicUser(target), copyCount: count,
+    action: count === 2 ? 'warn' : count === 3 ? 'warn' : count === 4 ? 'suspended' : 'ok' };
+});
+
 route('GET', '/api/users', ({ req, user }) => {
   need(user, 'Sign in required', 401);
   let list;
@@ -3156,6 +3549,74 @@ route('GET', '/api/users', ({ req, user }) => {
       supervisorName: u.supervisorId ? ((dbm.byId('users', u.supervisorId) || {}).fullName || null) : null,
       progress: PARTICIPANTS.indexOf(u.role) !== -1 ? performance(u).overall : null })),
     limit: user.role === 'supervisor' ? { max: SUPERVISOR_CAPACITY, used: supervisedLearnerCount(user.id) } : null };
+});
+
+/* ================================================================ user library & copy tracking ================================================================ */
+
+/* A learner's per-tenant library: the 5 required books chosen when the learner
+   graduates, and up to 10 optional books picked from the main library. */
+function defaultLibrary() {
+  return { required: [], optional: [], addedAt: null, reads: {} };
+}
+function ensureUserLibrary(user) {
+  if (!user.library || typeof user.library !== 'object') user.library = defaultLibrary();
+  const lib = user.library;
+  if (!Array.isArray(lib.required)) lib.required = [];
+  if (!Array.isArray(lib.optional)) lib.optional = [];
+  if (typeof lib.addedAt !== 'string') lib.addedAt = dbm.nowISO();
+  if (!lib.reads || typeof lib.reads !== 'object') lib.reads = {};
+  return lib;
+}
+function normalizeLibrary(user) {
+  const lib = ensureUserLibrary(user);
+  lib.required = lib.required.filter(id => typeof id === 'string').slice(0, 5);
+  lib.optional = lib.optional.filter(id => typeof id === 'string').slice(0, 10);
+  lib.reads = Object.keys(lib.reads || {}).reduce(function (acc, id) {
+    acc[id] = Number(lib.reads[id]) || 0; return acc;
+  }, {});
+  return lib;
+}
+function validateLibraryPatch(patch) {
+  const out = { required: [], optional: [] };
+  if (patch && Array.isArray(patch.required)) out.required = patch.required.filter(id => typeof id === 'string').slice(0, 5);
+  if (patch && Array.isArray(patch.optional)) out.optional = patch.optional.filter(id => typeof id === 'string').slice(0, 10);
+  return out;
+}
+/* Public: the current learner sees their required (5) and optional (10) library
+   selections and how many times each selected book was picked. */
+route('GET', '/api/me/library', ({ user }) => {
+  requireRole(user, PARTICIPANTS.concat(ADMINS));
+  const lib = normalizeLibrary(user);
+  return { ok: true, library: lib, hits: lib.reads };
+});
+/* Admin sets the learner's required (5) and optional (10) library books; a
+   `picked` array records selections as hits in the same call. */
+route('PUT', '/api/me/library', ({ user, body }) => {
+  requireRole(user, PARTICIPANTS.concat(ADMINS));
+  body = body || {};
+  const lib = ensureUserLibrary(user);
+  const patch = validateLibraryPatch(body);
+  if (patch.required.length) lib.required = patch.required;
+  if (patch.optional.length) lib.optional = patch.optional;
+  if (body.addedAt) lib.addedAt = String(body.addedAt);
+  if (body.picked && Array.isArray(body.picked)) {
+    body.picked.forEach(function (id) {
+      if (typeof id === 'string') lib.reads[id] = (Number(lib.reads[id]) || 0) + 1;
+    });
+  }
+  dbm.save();
+  return { ok: true, library: normalizeLibrary(user), hits: lib.reads };
+});
+/* A learner records a library book selection so hit totals can be shown to
+   supervisors and account admins. */
+route('POST', '/api/me/library/reads', ({ user, body }) => {
+  requireRole(user, PARTICIPANTS.concat(ADMINS));
+  const bookId = body && body.bookId ? String(body.bookId) : null;
+  need(bookId, 'bookId required', 400);
+  const lib = ensureUserLibrary(user);
+  lib.reads[bookId] = (Number(lib.reads[bookId]) || 0) + 1;
+  dbm.save();
+  return { ok: true, hits: lib.reads, library: normalizeLibrary(user) };
 });
 
 function buildUserRecord(actingUser, body) {
@@ -3362,6 +3823,48 @@ route('PUT', '/api/users/([a-z0-9_-]+)', ({ user, params, body }) => {
   return { ok: true, user: publicUser(t) };
 });
 
+/* Promote a graduated learner to a supervisor for an account, or simply mark a
+   learner as graduated and attach their required (5) / optional (10) library. */
+route('PUT', '/api/users/([a-z0-9_-]+)/promote', ({ user, params, body }) => {
+  const id = params[0];
+  const target = dbm.byId('users', id);
+  need(target, 'User not found', 404);
+  const allowed = user.role === 'super' ||
+    (user.role === 'tenant_admin' && target.tenantId === user.tenantId);
+  need(allowed, 'You may only promote learners in your own account or the whole system', 403);
+  body = body || {};
+  if (body.graduated !== undefined) target.graduated = Boolean(body.graduated);
+  if (body.makeSupervisor) {
+    need(target.graduated || body.graduated, 'Only a graduated learner can become a supervisor', 400);
+    target.role = 'supervisor';
+    target.supervisorId = null;
+    target.supervisorWaitlisted = false;
+    if (!target.supervisorCode) target.supervisorCode = 'SUP-' + String(Math.floor(1000 + Math.random() * 9000));
+    target.suspended = false;
+    target.suspendedAt = null;
+  }
+  if (body.copyCount !== undefined) target.copyCount = Number(body.copyCount) || 0;
+  if (body.library) {
+    const targetLib = ensureUserLibrary(target);
+    const patch = validateLibraryPatch(body.library);
+    if (patch.required.length) targetLib.required = patch.required;
+    if (patch.optional.length) targetLib.optional = patch.optional;
+    if (body.library.addedAt) targetLib.addedAt = String(body.library.addedAt);
+  }
+  if (body.supervisorId !== undefined) {
+    const supervisor = body.supervisorId ? dbm.byId('users', String(body.supervisorId)) : null;
+    need(supervisor && supervisor.role === 'supervisor', 'Choose a valid supervisor account', 400);
+    need(user.role === 'super' || (user.role === 'tenant_admin' && supervisor.tenantId === user.tenantId), 'You may only appoint supervisors in your own account', 403);
+    if (target.role !== 'supervisor') target.role = 'supervisor';
+    target.supervisorId = supervisor.id;
+    target.supervisorWaitlisted = false;
+    target.suspended = false;
+    target.suspendedAt = null;
+  }
+  dbm.save();
+  return { ok: true, user: publicUser(target) };
+});
+
 route('DELETE', '/api/users/([a-z0-9_-]+)', ({ user, params }) => {
   need(user, 'Sign in required', 401);
   const t = dbm.byId('users', params[0]);
@@ -3396,6 +3899,7 @@ route('PUT', '/api/admin/branding', ({ user, body }) => {
   if (body.themeColor !== undefined) t.themeColor = hexColor(body.themeColor);
   if (body.name && user.role === 'super') t.name = String(body.name).trim();
   dbm.save();
+  refreshLauncherIcon(t);
   return { ok: true, tenant: t };
 });
 
@@ -3897,11 +4401,49 @@ function completedChapterCount(userId) {
 function maybeSendVideoAlert(user, submission) {
   if (!submission || !submission.chapterId) return null;
   if (['student', 'member'].indexOf(user.role) === -1) return null;
+  const alerts = dbm.collection('video_alerts');
+  const mine = alerts.filter(alert => alert.userId === user.id);
+
+  /* 1. A video attached to THIS chapter of THIS book wins over the counting
+        points: it fires the moment that chapter's work is submitted. */
+  const rule = videoAlertPlan().find(row =>
+    row.kind === 'chapter' && row.chapterId === submission.chapterId && row.libraryId);
+  if (rule) {
+    const milestone = 'chapter:' + submission.chapterId;
+    if (!mine.some(alert => alert.milestone === milestone)) {
+      const video = dbm.byId('library', rule.libraryId);
+      if (video && video.type === 'video' && video.url &&
+        (video.scope === 'global' || video.scope === user.tenantId)) {
+        const chapter = dbm.byId('chapters', submission.chapterId);
+        const book = dbm.byId('books', submission.bookId || (chapter && chapter.bookId));
+        const alert = {
+          id: dbm.uid('val'), tenantId: user.tenantId, userId: user.id,
+          libraryId: video.id, title: video.title, videoUrl: video.url,
+          milestone, chaptersCompleted: completedChapterCount(user.id), point: null,
+          bookId: book ? book.id : null, chapterId: submission.chapterId,
+          chosenBy: 'super', createdAt: dbm.nowISO()
+        };
+        alerts.push(alert);
+        notificationFor(user.id, {
+          type: 'video_alert',
+          title: 'A video for finishing ' + (chapter ? chapter.title : 'this chapter'),
+          body: 'You finished ' + (chapter ? '"' + chapter.title + '"' : 'this chapter') +
+            (book ? ' in "' + book.title + '"' : '') + '. The video chosen for it: "' +
+            video.title + '". Watch it whenever you like.',
+          libraryId: video.id, videoUrl: video.url
+        });
+        dbm.save();
+        return alert;
+      }
+    }
+    /* the chapter has its own rule: do not also fire a counting point here */
+    return null;
+  }
+
+  /* 2. The counting points: every third finished chapter opens one. */
   const chapters = completedChapterCount(user.id);
   if (!chapters || chapters % 3 !== 0) return null;
-  const alerts = dbm.collection('video_alerts');
   const milestone = 'chapters:' + chapters;
-  const mine = alerts.filter(alert => alert.userId === user.id);
   if (mine.some(alert => alert.milestone === milestone)) return null;
   const sent = new Set(mine.map(alert => alert.libraryId));
   const point = videoAlertPoint(chapters);
@@ -4332,4 +4874,120 @@ route('DELETE', '/api/super/trash', ({ user }) => {
 
 
 
-module.exports = { handle };
+/* Generate a QR payload that contains the student plus every certificate issued
+   (module and general) and a short transcript. */
+function certificateQrPayload(student, cert) {
+  const tenantName = student.tenantId ? ((dbm.byId('tenants', student.tenantId) || {}).name || '\u2014') : '\u2014';
+  const modules = ordered(dbm.db.modules);
+  const transcript = modules.map(function (m) {
+    const c = dbm.db.certificates.find(function (x) {
+      return x.userId === student.id && x.type === 'module' && x.moduleId === m.id;
+    });
+    return { module: m.key, certificate: m.certificateName, performance: c ? c.performance : null, objectiveScore: c ? c.objectiveScore : null };
+  });
+  const certificates = dbm.db.certificates.filter(function (x) { return x.userId === student.id; }).map(function (x) {
+    return { code: x.code, title: x.title, type: x.type, issuedAt: x.issuedAt };
+  });
+  return JSON.stringify({ s: student.id, n: student.fullName, t: tenantName, c: certificates, tx: transcript });
+}
+/* Generate a small QR code image data URL via the public QR API so the
+   certificate can do that without a build-time dependency. */
+function qrDataUrl(payload, size) {
+  const query = [size + 'x' + size, 'margin=10', 'color=2b478c', 'bgcolor=f4f6fa', 'data=' + encodeURIComponent(payload)].join('&');
+  return new Promise(function (resolve, reject) {
+    https.get('https://api.qrserver.com/v1/create-qr-code/?' + query, function (res) {
+      const chunks = [];
+      res.on('data', function (chunk) { chunks.push(chunk); });
+      res.on('end', function () {
+        if (res.statusCode !== 200) return reject(new Error('QR request failed: ' + res.statusCode));
+        resolve('data:image/png;base64,' + Buffer.concat(chunks).toString('base64'));
+      });
+    }).on('error', reject);
+  });
+}
+route('GET', '/api/certificates/([a-z0-9_-]+)/qr', async ({ user, params }) => {
+  const cert = dbm.byId('certificates', params[0]);
+  need(cert, 'Certificate not found', 404);
+  requireRole(user, ADMINS);
+  const student = dbm.byId('users', cert.userId);
+  need(student, 'Student not found', 404);
+  const payload = certificateQrPayload(student, cert);
+  const qr = await qrDataUrl(payload, 320);
+  return { ok: true, qr, payload, student: publicUser(student), certificates: dbm.db.certificates.filter(function (x) { return x.userId === student.id; }) };
+});
+
+/* ================================================================ account icon & manifest ================================================================ */
+function tenantBySlug(slug) {
+  return dbm.db.tenants.find(function (t) { return t.slug === slug; }) || null;
+}
+function initialsOf(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return 'CBP';
+  return parts.slice(0, 2).map(function (p) { return p.charAt(0).toUpperCase(); }).join('');
+}
+function tenantIconSvg(tenant) {
+  const colour = /^#[0-9a-f]{6}$/i.test(tenant.themeColor || '') ? tenant.themeColor : '#24508c';
+  const letters = initialsOf(tenant.name);
+  return '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">' +
+    '<rect width="256" height="256" rx="52" fill="' + colour + '"/>' +
+    '<text x="128" y="150" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="92" font-weight="700" fill="#ffffff">' + letters + '</text>' +
+    '</svg>';
+}
+route('GET', '/api/public/tenant/([a-z0-9-]+)/icon', ({ params, res }) => {
+  const tenant = tenantBySlug(params[0]);
+  need(tenant, 'Account not found', 404);
+  /* The account's own logo, drawn into a square PNG of the right size. The
+     fingerprint in the URL changes whenever the logo changes, so the browser,
+     the taskbar and the Android home screen all refresh the icon by themselves
+     after an update. */
+  const png = icons.logoPng(tenant, 256);
+  res.writeHead(200, {
+    'Content-Type': 'image/png',
+    'Content-Length': png.length,
+    'Cache-Control': 'public, max-age=3600',
+    'X-CBP-Icon': icons.logoFingerprint(tenant)
+  });
+  res.end(png);
+});
+route('GET', '/api/public/tenant/([a-z0-9-]+)/icon.png', ({ params, res }) => {
+  const tenant = tenantBySlug(params[0]);
+  need(tenant, 'Account not found', 404);
+  const png = icons.logoPng(tenant, 512);
+  res.writeHead(200, {
+    'Content-Type': 'image/png',
+    'Content-Length': png.length,
+    'Cache-Control': 'public, max-age=3600'
+  });
+  res.end(png);
+});
+route('GET', '/api/public/tenant/([a-z0-9-]+)/manifest.webmanifest', ({ params, res }) => {
+  const tenant = tenantBySlug(params[0]);
+  need(tenant, 'Account not found', 404);
+  /* The fingerprint makes the icon URL change when the logo changes, so an
+     installed app picks up the new picture without the user clearing it. */
+  const fp = icons.logoFingerprint(tenant);
+  const icon = '/api/public/tenant/' + tenant.slug + '/icon.png?v=' + fp;
+  const manifest = {
+    name: tenant.name + ' \u2014 Character Building Program',
+    short_name: tenant.name,
+    description: 'Character Building Program for ' + tenant.name,
+    id: '/t/' + tenant.slug,
+    start_url: '/t/' + tenant.slug,
+    scope: '/t/' + tenant.slug,
+    display: 'standalone',
+    background_color: '#f4f6fa',
+    theme_color: /^#[0-9a-f]{6}$/i.test(tenant.themeColor || '') ? tenant.themeColor : '#24508c',
+    icons: [
+      { src: icon, sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: icon, sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: icon, sizes: '512x512', type: 'image/png', purpose: 'maskable' }
+    ]
+  };
+  res.writeHead(200, { 'Content-Type': 'application/manifest+json', 'Cache-Control': 'public, max-age=3600' });
+  res.end(JSON.stringify(manifest));
+});
+
+module.exports = { handle,
+  /* the video-alert decision, exposed so a check can prove a rule fires without
+     walking a whole learner through the programme */
+  _internal: { maybeSendVideoAlert, videoAlertChapterRules, videoAlertPoints, videoAlertChapterCatalogue } };

@@ -11,6 +11,7 @@ const S = {
   editChapterId: null,
   assessmentDef: null, assessmentCategories: [],
   editAssessmentCategoryId: null, editAssessmentStatementId: null,
+  editAssessmentBehaviorId: null, editAssessmentReflectionId: null,
   rpFlagged: false, rpType: '', rpSearch: '', rpRosterSearch: '', rpSupervisorId: '',
   /* system log + trash */
   logFilters: { q: '', action: '', entity: '', role: '', tenantId: '', from: '', to: '', limit: 200, offset: 0 },
@@ -117,6 +118,29 @@ function startApp(user) {
   $('whoName').textContent = (user && (user.fullName || user.username)) || 'Super admin';
   if (typeof initCommunicationWidget === 'function') initCommunicationWidget();
   showView(S.view);
+  loadProgramBrand();
+}
+/* The programme's own logo sits at the left of the menu bar, on the bar's own
+   background. It is loaded on its own so a change of logo shows up the moment
+   the super admin saves it. */
+async function loadProgramBrand() {
+  try {
+    const d = await API.get('/public/portals');
+    const logo = d.programLogo;
+    const img = $('progLogo');
+    if (!img) return;
+    if (logo) {
+      img.src = logo;
+      img.classList.remove('hidden');
+    } else {
+      img.removeAttribute('src');
+      img.classList.add('hidden');
+    }
+    if (d.programName) {
+      $('brandName').textContent = d.programName + ' — Super Admin';
+      document.title = d.programName + ' — Super Admin';
+    }
+  } catch (e) { /* the menu bar works without the logo */ }
 }
 /* ======================================================= dashboard ======= */
 async function renderDashboard() {
@@ -449,13 +473,23 @@ async function renderAnalytics() {
     return;
   }
   ANALYTICS.data = d;
+  let extraStats = '';
+  try {
+    const q = ANALYTICS.tenantId ? '?tenantId=' + encodeURIComponent(ANALYTICS.tenantId) : '';
+    const [lib, cp, libAll] = await Promise.all([
+      API.get('/reports/library-stats' + q),
+      API.get('/reports/copy-by-student' + q),
+      API.get('/library')
+    ]);
+    extraStats = libraryCopyStatsHtml(lib, cp, libAll.library || []);
+  } catch (e) { extraStats = ''; }
   v.innerHTML = '<h2><span class="motto">Be True</span>Analytics &amp; impact</h2>' +
     analyticsFiltersHtml(d) +
     analyticsKpisHtml(d) +
     analyticsChartsHtml(d) +
     analyticsAccountsCard(d) +
     analyticsModulesCard(d) +
-    analyticsLearnersCard(d);
+    analyticsLearnersCard(d) + extraStats;
   wireAnalytics();
 }
 function wireAnalytics() {
@@ -1893,12 +1927,10 @@ async function deleteLibrary(id) {
     renderLibrary();
   } catch (err) { fail(err); }
 }
-/* ============================================ video alerts / points ====== */
-/* A learner unlocks ONE library video every third finished chapter. The super
-   admin chooses which video each point opens (point 1 = after 3 chapters, point
-   2 = after 6 …), so nothing is picked anonymously. A point left at
-   "automatic" still sends a video the learner has never had. A point belongs to
-   every account, so the picker offers the program-wide (global) videos only. */
+/* ============================================ video alerts / chapters ==== */
+/* A video is attached to ONE chapter of ONE book: the learner receives it when
+   that chapter's work is submitted, once. The picker offers the programme-wide
+   (global) videos only, because one rule serves every account. */
 async function renderVideoAlerts() {
   const v = $('view-videos');
   if (!v) return;
@@ -1906,7 +1938,6 @@ async function renderVideoAlerts() {
   let d;
   try { d = await API.get('/super/video-alerts'); }
   catch (e) { v.innerHTML = errBox(e); return; }
-  const points = d.points || [];
   const videos = d.videos || [];
   const recent = d.recent || [];
   if (!videos.length) {
@@ -1915,59 +1946,119 @@ async function renderVideoAlerts() {
       'the <b>Library</b> (scope: Global) and it appears here.</p></div>';
     return;
   }
-  const auto = points.filter(function (p) { return !p.libraryId; }).length;
-  const broken = points.filter(function (p) { return p.libraryId && !p.ok; }).length;
-  const opts = function (selected) {
-    return '<option value="">— automatic —</option>' + videos.map(function (i) {
-      const sel = String(i.id) === String(selected) ? ' selected' : '';
-      return '<option value="' + esc(String(i.id)) + '"' + sel + '>' +
+  const books = d.books || [];
+  const chapterRules = d.chapterRules || [];
+  /* the video list offered by the chapter picker */
+  const videoOptions = function () {
+    return videos.map(function (i) {
+      return '<option value="' + esc(String(i.id)) + '">' +
         esc(i.title || i.id) + '</option>';
     }).join('');
   };
-  const pointRows = points.map(function (p) {
-    const badge = !p.libraryId
-      ? '<span class="badge off">AUTOMATIC</span>'
-      : (p.ok ? '<span class="badge ok">CHOSEN</span>'
-        : '<span class="badge warn">VIDEO GONE</span>');
-    return '<tr><td><b>Point ' + esc(String(p.point)) + '</b>' +
-      '<div class="small muted">after ' + esc(String(p.chapters)) + ' chapters</div></td>' +
-      '<td>' + badge + (p.title ? ' <span class="small">' + esc(p.title) + '</span>' : '') + '</td>' +
-      '<td><select class="va-pick" data-chapters="' + esc(String(p.chapters)) + '">' +
-        opts(p.libraryId) + '</select></td></tr>';
-  }).join('');
   const recentRows = recent.length ? recent.map(function (a) {
+    /* a chapter alert is named by its chapter; a counting alert by its point */
+    const where = a.chapterTitle
+      ? '<span title="' + esc(a.bookTitle || '') + '">' + esc(a.chapterTitle) + '</span>'
+      : 'Point ' + esc(String(a.point || '—'));
     return '<tr><td>' + esc(a.learner || 'Learner') + '</td>' +
-      '<td>Point ' + esc(String(a.point || '—')) + '</td>' +
+      '<td>' + where + '</td>' +
       '<td>' + esc(a.title || '—') + ' ' +
         (a.chosenBy === 'super' ? '<span class="badge ok">CHOSEN</span>'
           : '<span class="badge off">AUTOMATIC</span>') + '</td>' +
       '<td class="small">' + esc(a.createdAt ? fmtDate(a.createdAt) : '—') + '</td></tr>';
   }).join('') : '<tr><td colspan="4" class="muted">No video has been unlocked yet.</td></tr>';
+
+  /* A video may also be pinned to one chapter of one book, instead of to a
+     counting point: it plays when that chapter's work is submitted. */
+  const bookOpts = '<option value="">— choose a book —</option>' + books.map(function (b) {
+    return '<option value="' + esc(String(b.id)) + '">' + esc(b.title || b.id) +
+      (b.moduleTitle ? ' — ' + esc(b.moduleTitle) : '') + '</option>';
+  }).join('');
+  const chapterRuleRows = chapterRules.length ? chapterRules.map(function (r) {
+    return '<tr><td><b>' + esc(r.bookTitle || '—') + '</b>' +
+      '<div class="small muted">' + esc(r.chapterTitle || r.chapterId) + '</div></td>' +
+      '<td>' + (r.ok ? '' : '<span class="badge warn">VIDEO GONE</span> ') +
+        esc(r.title || '—') + '</td>' +
+      '<td class="nowrap"><button type="button" class="small ghost" data-va-remove="' +
+        esc(String(r.chapterId)) + '" data-va-book="' + esc(String(r.bookId || '')) +
+        '">Remove</button></td></tr>';
+  }).join('') : '<tr><td colspan="3" class="muted">No chapter has its own video yet.</td></tr>';
+  const chapterCard = '<div class="card"><h3>Add a video to a chapter of a book</h3>' +
+    '<p class="small muted">Choose a book, then one of its chapters, then the video that ' +
+      'should play when a learner submits the work for that chapter. This is a rule of its ' +
+      'own: it does not wait for a counting point, and the learner receives it once.</p>' +
+    (books.length ? (
+      '<div class="row">' +
+        '<div><label>Book</label><select id="vaBook">' + bookOpts + '</select></div>' +
+        '<div><label>Chapter</label><select id="vaChapter"><option value="">— choose a book first —</option></select></div>' +
+        '<div><label>Video</label><select id="vaVideo">' + videoOptions() + '</select></div>' +
+        '<div class="fixed" style="padding-bottom:10px"><label style="display:block">&nbsp;</label>' +
+          '<button type="button" id="vaAttach">Attach video</button></div>' +
+      '</div>'
+    ) : '<p class="muted small">The programme has no book with chapters yet — create one in ' +
+        '<b>Books &amp; Chapters</b> first.</p>') +
+    '<h4 class="mt">Videos already attached to a chapter</h4>' +
+    '<table><thead><tr><th>Book &amp; chapter</th><th>Video</th><th></th></tr></thead>' +
+      '<tbody>' + chapterRuleRows + '</tbody></table></div>';
+
   v.innerHTML = '<h2>Video alerts</h2>' +
-    '<div class="card"><h3>Which video each point unlocks</h3>' +
-      '<p class="small muted">Every third finished chapter opens a point and puts one ' +
-      'library video in the learner\'s messages. Choose the video here instead of leaving ' +
-      'it to a random pick — <b>point 1</b> is the third chapter, <b>point 2</b> the sixth, ' +
-      'and so on. A point left at <i>automatic</i> still sends a video the learner has ' +
-      'never had.</p>' +
-      (broken ? '<p class="badge warn">' + broken + ' chosen video(s) are no longer in the ' +
-        'library — pick another.</p>' : '') +
-      (auto ? '<p class="small muted">' + auto + ' of ' + points.length +
-        ' point(s) still automatic.</p>' : '') +
-      '<table><thead><tr><th>Point</th><th>Chosen video</th><th>Select a video</th>' +
-      '</tr></thead><tbody>' + pointRows + '</tbody></table></div>' +
+    chapterCard +
     '<div class="card"><h3>Unlocked lately</h3><table><thead><tr>' +
-      '<th>Learner</th><th>Point</th><th>Video</th><th>When</th>' +
+      '<th>Learner</th><th>Where</th><th>Video</th><th>When</th>' +
       '</tr></thead><tbody>' + recentRows + '</tbody></table></div>';
-  v.querySelectorAll('.va-pick').forEach(function (sel) {
-    sel.addEventListener('change', async function () {
-      const chapters = Number(sel.dataset.chapters) || 0;
+
+  /* -------- one book → one chapter → one video ---------------------------- */
+  const bookSel = $('vaBook');
+  const chapterSel = $('vaChapter');
+  const videoSel = $('vaVideo');
+  const byBook = {};
+  books.forEach(function (b) { byBook[String(b.id)] = b; });
+  function fillChapters() {
+    if (!bookSel || !chapterSel) return;
+    const b = byBook[String(bookSel.value)];
+    if (!b || !b.chapters.length) {
+      chapterSel.innerHTML = '<option value="">— choose a book first —</option>';
+      return;
+    }
+    chapterSel.innerHTML = '<option value="">— choose a chapter —</option>' +
+      b.chapters.map(function (c) {
+        return '<option value="' + esc(String(c.id)) + '">' + esc(c.title || c.id) + '</option>';
+      }).join('');
+    /* a chapter that already has a video shows it, so the picker is not misleading */
+    if (chapterSel.options.length === 2 && chapterRules.length === 0) chapterSel.selectedIndex = 0;
+  }
+  if (bookSel) {
+    bookSel.addEventListener('change', fillChapters);
+    fillChapters();
+  }
+  const attach = $('vaAttach');
+  if (attach) {
+    attach.addEventListener('click', async function () {
+      const bookId = bookSel ? bookSel.value : '';
+      const chapterId = chapterSel ? chapterSel.value : '';
+      const libraryId = videoSel ? videoSel.value : '';
+      if (!bookId) { toast('Choose a book first', 'err'); return; }
+      if (!chapterId) { toast('Choose a chapter of that book', 'err'); return; }
+      if (!libraryId) { toast('Choose the video for that chapter', 'err'); return; }
+      const b = byBook[String(bookId)];
+      const c = b && b.chapters.filter(function (x) { return String(x.id) === String(chapterId); })[0];
       try {
-        await API.put('/super/video-alerts', { chapters: chapters, libraryId: sel.value || '' });
-        toast(sel.value ? 'Video chosen for point ' + (chapters / 3)
-          : 'Point ' + (chapters / 3) + ' is automatic again', 'ok');
+        await API.put('/super/video-alerts',
+          { bookId: bookId, chapterId: chapterId, libraryId: libraryId });
+        toast('Video attached to ' + (c ? c.title : 'that chapter'), 'ok');
         renderVideoAlerts();
-      } catch (e) { fail(e); renderVideoAlerts(); }
+      } catch (e) { fail(e); }
+    });
+  }
+  v.querySelectorAll('[data-va-remove]').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      try {
+        await API.put('/super/video-alerts', {
+          chapterId: btn.dataset.vaRemove, bookId: btn.dataset.vaBook || '', libraryId: ''
+        });
+        toast('Video removed from that chapter', 'ok');
+        renderVideoAlerts();
+      } catch (e) { fail(e); }
     });
   });
 }
@@ -2426,6 +2517,14 @@ function userRow(u) {
       ? '<span class="badge off">SUSPENDED</span>'
       : '<span class="badge ok">ACTIVE</span>') + '</td>' +
     '<td class="nowrap">' +
+      (u.role === 'student' || u.role === 'member'
+        ? '<label class="small" style="white-space:nowrap"><input type="checkbox" data-grad="' +
+          esc(String(u.id)) + '"' + (u.graduated ? ' checked' : '') + '> Graduated</label> ' +
+          '<button type="button" class="small ghost" data-act="u-grad-books" data-id="' +
+            esc(String(u.id)) + '">Library</button> ' +
+          (u.graduated ? '<button type="button" class="small ghost" data-act="u-make-sup" data-id="' +
+            esc(String(u.id)) + '">Make supervisor</button> ' : '')
+        : '') +
       '<button type="button" class="small ' + (u.suspended ? 'ghost' : 'danger') +
         '" data-act="u-susp" data-id="' + esc(String(u.id)) + '">' +
         (u.suspended ? 'Unsuspend' : 'Suspend') + '</button> ' +
@@ -2508,6 +2607,15 @@ async function renderUsers() {
     applyTableSearch('usTable', 'usSearch');
   });
   applyTableSearch('usTable', 'usSearch');
+  v.querySelectorAll('[data-grad]').forEach(function (cb) {
+    cb.onchange = async function () {
+      try {
+        await API.put('/users/' + encodeURIComponent(cb.dataset.grad) + '/promote', { graduated: cb.checked });
+        toast(cb.checked ? 'Marked as graduated' : 'Graduation cleared', 'ok');
+        renderUsers();
+      } catch (err) { fail(err); }
+    };
+  });
   initUserPhotoPreview();
 }
 /* Photo preview for user creation form. */
@@ -2551,6 +2659,13 @@ async function createUser(e) {
     }
     await API.post('/super/users', body);
     toast('User created', 'ok');
+    renderUsers();
+  } catch (err) { fail(err); }
+}
+async function makeSupervisor(id) {
+  try {
+    await API.put('/users/' + encodeURIComponent(id) + '/promote', { graduated: true, makeSupervisor: true });
+    toast('User is now a supervisor', 'ok');
     renderUsers();
   } catch (err) { fail(err); }
 }
@@ -2764,6 +2879,84 @@ function assessmentCategoryAdminHtml(c) {
   return h + '</div>';
 }
 
+/* ============================== SECTIONS B & C of the self-assessment ==== */
+/* Section B — the behaviour areas the super admin writes. Each area becomes a
+   row of the learner's table with a pre-program observation column (active at
+   the pre assessment) and a post-program observation column (active only at the
+   end of the programme). */
+function assessmentBehaviorAdminHtml(def) {
+  const list = def.behaviors || [];
+  const rows = list.length ? list.map(function (b) {
+    if (String(S.editAssessmentBehaviorId) === String(b.id)) {
+      return '<tr><td colspan="2"><form class="assess-beh-edit" data-id="' + esc(b.id) + '">' +
+        '<label>Behaviour area</label>' +
+        '<input type="text" name="text" required minlength="3" value="' + esc(b.text) + '">' +
+        '<div class="mt row"><div class="fixed"><button type="submit">Save area</button></div>' +
+        '<div class="fixed"><button type="button" class="ghost" data-act="as-beh-cancel">Cancel</button></div></div>' +
+        '</form></td></tr>';
+    }
+    return '<tr><td>' + esc(b.text) + '</td>' +
+      '<td class="nowrap"><button type="button" class="small ghost" data-act="as-beh-edit" data-id="' +
+        esc(b.id) + '">Edit</button> ' +
+      '<button type="button" class="small danger" data-act="as-beh-del" data-id="' +
+        esc(b.id) + '">Delete</button></td></tr>';
+  }).join('') : '<tr><td colspan="2" class="muted">No behaviour areas yet — add the first one below.</td></tr>';
+  return '<div class="card"><h3>Section B — Behaviour indicators</h3>' +
+    '<p class="muted small">Every behaviour area added here becomes a row of the learner\'s ' +
+    'self-assessment table. The learner writes a <b>pre-program observation</b> when the form ' +
+    'opens and a <b>post-program observation</b> at the end of the programme — that column ' +
+    'stays inactive until then.</p>' +
+    '<form class="assess-beh-add"><div class="row">' +
+    '<div><label>Behaviour area</label>' +
+    '<input type="text" name="text" required minlength="3" placeholder="e.g. How I handle anger"></div>' +
+    '<div class="fixed" style="padding-bottom:10px"><button type="submit">Add behaviour area</button></div>' +
+    '</div></form>' +
+    '<div class="table-wrap"><table class="assess-table"><thead><tr>' +
+    '<th>Behaviour area</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+}
+/* Section C — the open reflection questions. Two sets: the pre set is answered
+   at the pre assessment, the post set only at the post assessment. */
+function assessmentReflectionAdminHtml(def) {
+  function rowsFor(set) {
+    const list = (set === 'pre' ? def.preQuestions : def.postQuestions) || [];
+    return list.length ? list.map(function (q) {
+      if (String(S.editAssessmentReflectionId) === String(q.id)) {
+        return '<tr><td colspan="2"><form class="assess-refl-edit" data-id="' + esc(q.id) + '">' +
+          '<label>Reflection question</label>' +
+          '<input type="text" name="text" required minlength="5" value="' + esc(q.text) + '">' +
+          '<div class="mt row"><div class="fixed"><button type="submit">Save question</button></div>' +
+          '<div class="fixed"><button type="button" class="ghost" data-act="as-refl-cancel">Cancel</button></div></div>' +
+          '</form></td></tr>';
+      }
+      return '<tr><td>' + esc(q.text) + '</td>' +
+        '<td class="nowrap"><button type="button" class="small ghost" data-act="as-refl-edit" data-id="' +
+          esc(q.id) + '">Edit</button> ' +
+        '<button type="button" class="small danger" data-act="as-refl-del" data-id="' +
+          esc(q.id) + '">Delete</button></td></tr>';
+    }).join('') : '<tr><td colspan="2" class="muted">No ' + set +
+      ' assessment questions yet — add one below.</td></tr>';
+  }
+  function head(set) {
+    return '<h4 class="mt">' + (set === 'pre' ? 'Pre assessment questions' : 'Post assessment questions') + '</h4>' +
+      '<p class="muted small">' + (set === 'pre'
+        ? 'Shown to the learner with a text area under each question, once, when the self-assessment first opens.'
+        : 'Shown the same way, but answered only at the end of the programme, with the post assessment.') + '</p>' +
+      '<form class="assess-refl-add" data-set="' + set + '"><div class="row">' +
+      '<div><label>Question</label>' +
+      '<input type="text" name="text" required minlength="5" placeholder="' +
+      (set === 'pre' ? 'e.g. What do you hope will change in you?'
+        : 'e.g. What changed in you during the programme?') + '"></div>' +
+      '<div class="fixed" style="padding-bottom:10px"><button type="submit">Add question</button></div>' +
+      '</div></form>' +
+      '<div class="table-wrap"><table class="assess-table"><thead><tr>' +
+      '<th>Question</th><th>Actions</th></tr></thead><tbody>' + rowsFor(set) + '</tbody></table></div>';
+  }
+  return '<div class="card"><h3>Section C — Open reflection questions</h3>' +
+    '<p class="muted small">Each question is printed with a text area under it for the learner\'s ' +
+    'own words. The <b>pre</b> set is answered at the pre assessment; the <b>post</b> set stays ' +
+    'inactive until the post assessment at the end of the programme.</p>' +
+    head('pre') + head('post') + '</div>';
+}
 async function renderAssessment() {
   const v = $('view-assessment');
   v.innerHTML = loadMsg();
@@ -2778,21 +2971,25 @@ async function renderAssessment() {
   });
   const cats = def.categories || [];
   const editableCats = cats.filter(function (c) { return (c.statements || []).length; });
+  const behaviorCount = (def.behaviors || []).length;
+  const questionCount = (def.preQuestions || []).length + (def.postQuestions || []).length;
   v.innerHTML = '<h2>Self-assessment</h2>' +
     '<div class="grid cols-4">' +
       statCardBox(cats.length, 'Categories', 'blue') +
       statCardBox(def.statementCount || 0, 'Objective questions', 'violet') +
-      statCardBox(def.max || 0, 'Maximum score', 'green') +
-      statCardBox(editableCats.length, 'Active in reports', 'teal') +
+      statCardBox(behaviorCount, 'Behaviour areas', 'amber') +
+      statCardBox(questionCount, 'Reflection questions', 'pink') +
     '</div>' +
-    '<div class="card"><h3>Add a category</h3>' +
+    '<div class="card"><h3>Section A — Objective statements</h3>' +
       '<p class="muted small">Categories group the objective questions learners rate before and after the programme. ' +
       'Empty categories are hidden from learners until they have at least one question.</p>' +
       '<form class="assess-cat-add"><div class="row"><div><label>Category name</label>' +
       '<input type="text" name="title" required minlength="2" placeholder="e.g. Faith &amp; Spiritual Life"></div>' +
       '<div class="fixed" style="padding-bottom:10px"><button type="submit">Add category</button></div></div></form></div>' +
     (cats.length ? cats.map(assessmentCategoryAdminHtml).join('')
-      : '<div class="card"><p class="muted">No categories yet. Add the first one above.</p></div>');
+      : '<div class="card"><p class="muted">No categories yet. Add the first one above.</p></div>') +
+    assessmentBehaviorAdminHtml(def) +
+    assessmentReflectionAdminHtml(def);
 }
 async function saveAssessmentCategory(e) {
   e.preventDefault();
@@ -2842,6 +3039,56 @@ async function deleteAssessmentQuestion(id) {
     await API.del('/super/assessment/statements/' + encodeURIComponent(id));
     toast('Objective question deleted', 'ok');
     S.editAssessmentStatementId = null;
+    renderAssessment();
+  } catch (err) { fail(err); }
+}
+/* -------- Section B (behaviour areas) and Section C (reflection questions) -- */
+async function saveAssessmentBehavior(e) {
+  e.preventDefault();
+  const form = e.target;
+  const input = form.querySelector('input[name="text"]');
+  const text = input ? input.value.trim() : '';
+  if (!text) { toast('Enter the behaviour area', 'err'); return; }
+  try {
+    const id = form.dataset.id;
+    if (id) await API.put('/super/assessment/behaviors/' + encodeURIComponent(id), { text: text });
+    else await API.post('/super/assessment/behaviors', { text: text });
+    toast(id ? 'Behaviour area updated' : 'Behaviour area added', 'ok');
+    S.editAssessmentBehaviorId = null;
+    renderAssessment();
+  } catch (err) { fail(err); }
+}
+async function deleteAssessmentBehavior(id) {
+  if (!confirm('Move this behaviour area to the Trash? Learners answer only the remaining ones.')) return;
+  try {
+    await API.del('/super/assessment/behaviors/' + encodeURIComponent(id));
+    toast('Behaviour area deleted', 'ok');
+    S.editAssessmentBehaviorId = null;
+    renderAssessment();
+  } catch (err) { fail(err); }
+}
+async function saveAssessmentReflection(e) {
+  e.preventDefault();
+  const form = e.target;
+  const input = form.querySelector('input[name="text"]');
+  const text = input ? input.value.trim() : '';
+  if (!text) { toast('Enter the reflection question', 'err'); return; }
+  try {
+    const id = form.dataset.id;
+    if (id) await API.put('/super/assessment/questions/' + encodeURIComponent(id), { text: text });
+    else await API.post('/super/assessment/questions',
+      { set: form.dataset.set === 'post' ? 'post' : 'pre', text: text });
+    toast(id ? 'Reflection question updated' : 'Reflection question added', 'ok');
+    S.editAssessmentReflectionId = null;
+    renderAssessment();
+  } catch (err) { fail(err); }
+}
+async function deleteAssessmentReflection(id) {
+  if (!confirm('Move this reflection question to the Trash? It can be put back.')) return;
+  try {
+    await API.del('/super/assessment/questions/' + encodeURIComponent(id));
+    toast('Reflection question deleted', 'ok');
+    S.editAssessmentReflectionId = null;
     renderAssessment();
   } catch (err) { fail(err); }
 }
@@ -3141,6 +3388,34 @@ async function onAction(btn, e) {
       case 'as-q-del':
         deleteAssessmentQuestion(id);
         break;
+      /* self-assessment: Section B behaviour areas */
+      case 'as-beh-edit':
+        S.editAssessmentBehaviorId = id;
+        S.editAssessmentStatementId = null;
+        S.editAssessmentReflectionId = null;
+        renderAssessment();
+        break;
+      case 'as-beh-cancel':
+        S.editAssessmentBehaviorId = null;
+        renderAssessment();
+        break;
+      case 'as-beh-del':
+        deleteAssessmentBehavior(id);
+        break;
+      /* self-assessment: Section C reflection questions */
+      case 'as-refl-edit':
+        S.editAssessmentReflectionId = id;
+        S.editAssessmentStatementId = null;
+        S.editAssessmentBehaviorId = null;
+        renderAssessment();
+        break;
+      case 'as-refl-cancel':
+        S.editAssessmentReflectionId = null;
+        renderAssessment();
+        break;
+      case 'as-refl-del':
+        deleteAssessmentReflection(id);
+        break;
       /* library */
       case 'l-play': {
         const chosen = (S.library || []).filter(function (x) { return String(x.id) === String(id); })[0];
@@ -3265,6 +3540,13 @@ async function onAction(btn, e) {
         deleteObjective(id);
         break;
       /* users */
+      case 'u-grad-books':
+        openGraduationLibraryModal(S.users.find(function (x) { return String(x.id) === String(id); }),
+          { openModal: openModal, closeModal: closeModal, onSaved: renderUsers });
+        break;
+      case 'u-make-sup':
+        makeSupervisor(id);
+        break;
       case 'u-susp':
         toggleSuspend(id);
         break;
@@ -3320,6 +3602,12 @@ function onSubmit(e) {
   }
   if (f.classList.contains('assess-q-add') || f.classList.contains('assess-q-edit')) {
     saveAssessmentQuestion(e); return;
+  }
+  if (f.classList.contains('assess-beh-add') || f.classList.contains('assess-beh-edit')) {
+    saveAssessmentBehavior(e); return;
+  }
+  if (f.classList.contains('assess-refl-add') || f.classList.contains('assess-refl-edit')) {
+    saveAssessmentReflection(e); return;
   }
   const map = {
     portalForm: savePortal,

@@ -1,7 +1,10 @@
 {
-  "build": "2026-11-08-live-room-fixes",
+  "build": "2026-11-14-account-icons",
   "features": [
     "health",
+    "icons.account",
+    "icons.manifest",
+    "icons.auto-refresh",
     "super.analytics",
     "admin.analytics",
     "reports.students",

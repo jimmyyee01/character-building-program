@@ -14,6 +14,51 @@ const api = require('./api');
 const ROOT = path.join(__dirname, '..');
 const PUBLIC = path.join(ROOT, 'public');
 const UPLOADS = path.join(ROOT, 'uploads');
+/* Keep the desktop / Start Menu launcher icon in step with the account logo on
+   every start (Windows only). Set CBP_SKIP_SHORTCUT=1 to turn this off. */
+if (process.platform === 'win32' && process.env.CBP_SKIP_SHORTCUT !== '1' &&
+  fs.existsSync(path.join(ROOT, 'shortcut.config.json'))) {
+  /* deferred and unref'd: launcher maintenance must never hold up the server.
+     Every account's icon is rebuilt, so a deployment that changed a logo is
+     reflected on the desktop, the taskbar and the phone. */
+  const t = setTimeout(function () {
+    try {
+      const tool = require('../tools/make-shortcut');
+      const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'shortcut.config.json'), 'utf8'));
+      const tenants = (dbm.db && dbm.db.tenants) || [];
+      const list = tenants.filter(function (x) { return !cfg.slug || x.slug === cfg.slug; });
+      list.forEach(function (x) { tool.buildFor(x); });
+      console.log('[icons] launcher icons refreshed for ' + list.length + ' account(s)');
+    } catch (e) { /* a desktop is optional */ }
+  }, 3000);
+  if (t && t.unref) t.unref();
+}
+/* ============================================ first-open launcher ========= */
+/* The first time an account's system is opened (/t/<slug>), its desktop and
+   taskbar shortcut are created with that account's own logo. It happens once
+   per account: a marker file records it, so later visits are free. */
+const launcherSeen = new Set();
+function ensureLauncherFor(slug) {
+  if (process.platform !== 'win32') return;
+  if (process.env.CBP_SKIP_SHORTCUT === '1') return;
+  if (!slug || launcherSeen.has(slug)) return;
+  launcherSeen.add(slug);
+  const marker = path.join(ROOT, 'assets', 'icons', '.' + slug + '.shortcut');
+  if (fs.existsSync(marker)) return;
+  const t = setTimeout(function () {
+    try {
+      const tenant = ((dbm.db && dbm.db.tenants) || []).find(function (x) { return x.slug === slug; });
+      if (!tenant) return;
+      const tool = require('../tools/make-shortcut');
+      const r = tool.buildFor(tenant);
+      fs.mkdirSync(path.dirname(marker), { recursive: true });
+      fs.writeFileSync(marker, new Date().toISOString(), 'utf8');
+      console.log('[icons] first open of ' + tenant.name + ' — desktop shortcut created (' + r.icon + ')');
+    } catch (e) { /* a machine without a desktop still serves the app */ }
+  }, 1500);
+  if (t && t.unref) t.unref();
+}
+
 const PORT = Number(process.env.PORT) || 3000;
 /* 400 MB by default (photo/logo/file uploads arrive base64-encoded in JSON).
    Overridable so a check can prove the 413 answer without moving 400 MB. */
@@ -230,7 +275,12 @@ const handler = async (req, res) => {
       return serveFile(req, res, f);
     }
     if (PAGES[p]) return serveFile(req, res, path.join(PUBLIC, PAGES[p]));
-    if (p.startsWith('/t/')) return serveFile(req, res, path.join(PUBLIC, 'login.html'));
+    if (p.startsWith('/t/')) {
+      /* the first visit to an account's system gives it its own desktop /
+         taskbar shortcut carrying that account's logo */
+      ensureLauncherFor(decodeURIComponent(p.slice(3)).split('/')[0]);
+      return serveFile(req, res, path.join(PUBLIC, 'login.html'));
+    }
     if (p === '/favicon.ico') return serveFile(req, res, path.join(PUBLIC, 'favicon.ico'));
 
     const f = safeJoin(PUBLIC, p);

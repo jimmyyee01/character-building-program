@@ -3346,8 +3346,82 @@ function initCommunicationWidget() {
 /* One belt for every page that shows it: the students page, the student progress
    page and the learner's own dashboard. It carries the best 50 learners of the
    account — faces, names, marks and coverage — drifting from left to right.
-   Profile photos are used when the server exposes one, otherwise initials are
-   painted behind it. */
+/* Shared library-selection and copy-flag statistics card. The same renderer is
+   used by the super admin page (all accounts) and the account admin page (only
+   the learners in that school / organization — the server applies the filter). */
+function libraryCopyStatsHtml(libStats, copyStats, libItems) {
+  const titles = {};
+  (libItems || []).forEach(function (i) { titles[i.id] = i.title; });
+  const books = (libStats && libStats.books ? libStats.books : []).slice()
+    .sort(function (a, b) { return (Number(b.hits) || 0) - (Number(a.hits) || 0); });
+  const copies = (copyStats && copyStats.students ? copyStats.students : [])
+    .filter(function (s) { return (Number(s.copyCount) || 0) > 0; });
+  return '<div class="grid cols-2">' +
+    '<div class="card"><h3>Library selection hits</h3>' +
+      (books.length
+        ? '<table class="small"><thead><tr><th>Book</th><th>Times picked</th></tr></thead><tbody>' +
+          books.map(function (b) {
+            return '<tr><td>' + esc(titles[b.bookId] || b.bookId) + '</td><td class="mono">' + (Number(b.hits) || 0) + '</td></tr>';
+          }).join('') + '</tbody></table>'
+        : '<p class="muted">No selections yet.</p>') + '</div>' +
+    '<div class="card"><h3>Copy flags</h3>' +
+      (copies.length
+        ? '<table class="small"><thead><tr><th>Learner</th><th>Copies</th><th>Action</th></tr></thead><tbody>' +
+          copies.map(function (s) {
+            const n = Number(s.copyCount) || 0;
+            const action = n >= 4 ? 'Suspended' : n === 3 ? 'Warning 2' : n === 2 ? 'Warning 1' : '—';
+            return '<tr><td>' + esc(s.fullName || s.email || s.id) + '</td><td class="mono">' + n + '</td><td>' + esc(action) + '</td></tr>';
+          }).join('') + '</tbody></table>'
+        : '<p class="muted">No copy flags recorded.</p>') + '</div>' +
+    '</div>';
+}
+
+/* Opens the 5-required / 10-optional graduation-library picker. The page
+   supplies its own openModal/closeModal (admin and super each have one). */
+async function openGraduationLibraryModal(user, helpers) {
+  helpers = helpers || {};
+  const open = helpers.openModal || (typeof openModal === 'function' ? openModal : null);
+  const close = helpers.closeModal || (typeof closeModal === 'function' ? closeModal : null);
+  if (!open) return;
+  let data;
+  try { data = await API.get('/library'); } catch (e) { toast(e.message || 'Could not load the library', 'err'); return; }
+  const books = (data.library || []).filter(function (i) { return i.type === 'book'; });
+  const lib = user.library || {};
+  const required = new Set(lib.required || []);
+  const optional = new Set(lib.optional || []);
+  function row(b, group) {
+    const set = group === 'required' ? required : optional;
+    return '<label class="small" style="display:block"><input type="checkbox" data-grad-book="' +
+      esc(b.id) + '" data-group="' + group + '"' + (set.has(b.id) ? ' checked' : '') + '> ' + esc(b.title) + '</label>';
+  }
+  open('<h3>Graduation library — ' + esc(user.fullName || user.email || '') + '</h3>' +
+    '<p class="muted small">Tick exactly 5 required books. The learner may add up to 10 optional books from the main library.</p>' +
+    '<div class="grid cols-2"><div><b>Required (5)</b>' +
+    books.map(function (b) { return row(b, 'required'); }).join('') + '</div>' +
+    '<div><b>Optional (10)</b>' +
+    books.map(function (b) { return row(b, 'optional'); }).join('') + '</div></div>' +
+    '<div class="mt"><button type="button" id="gradLibSave">Save library</button></div>', true);
+  const dialog = document.getElementById('modalRoot');
+  const btn = dialog && dialog.querySelector('#gradLibSave');
+  if (!btn) return;
+  btn.onclick = async function () {
+    const req = Array.prototype.map.call(dialog.querySelectorAll('input[data-group="required"]:checked'), function (x) { return x.getAttribute('data-grad-book'); });
+    const opt = Array.prototype.map.call(dialog.querySelectorAll('input[data-group="optional"]:checked'), function (x) { return x.getAttribute('data-grad-book'); })
+      .filter(function (id) { return req.indexOf(id) === -1; });
+    if (req.length !== 5) { toast('Tick exactly 5 required books', 'err'); return; }
+    if (opt.length > 10) { toast('Tick at most 10 optional books', 'err'); return; }
+    try {
+      await API.put('/users/' + encodeURIComponent(user.id) + '/promote', { graduated: true, library: { required: req, optional: opt } });
+      toast('Graduation library saved', 'ok');
+      if (close) close();
+      if (helpers.onSaved) helpers.onSaved();
+    } catch (e) { toast(e.message || 'Could not save the library', 'err'); }
+  };
+}
+
+
+// Profile photos are used when the server exposes one, otherwise initials are
+// painted behind it.
 function performerInitials(name) {
   const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
   if (!parts.length) return '?';

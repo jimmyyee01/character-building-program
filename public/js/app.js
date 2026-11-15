@@ -157,12 +157,15 @@ async function loadVideos() {
   } catch (e) { /* menu is non-critical */ }
 }
 
-function playVideoById(id, afterClose) {
+function playVideoById(id, afterClose, autoPlay) {
   const v = S.videos.find(function (x) { return x.id === id; });
   if (!v || !v.url) { if (afterClose) afterClose(); return; }
+  /* A video the learner chose in the menu starts at once; one that arrived as an
+     ALERT waits for the learner to press play. */
+  const start = autoPlay === false ? '' : 'autoplay ';
   const el = modal(
     '<h3>' + esc(v.title) + '</h3>' +
-    '<video class="video-frame" controls autoplay playsinline src="' + esc(v.url) + '"></video>' +
+    '<video class="video-frame" controls ' + start + 'playsinline src="' + esc(v.url) + '"></video>' +
     '<p class="muted small">You can close this video at any time.</p>' +
     '<button data-close class="ghost">Close video</button>',
     { onClose: function () { markWatched(v.id); if (afterClose) afterClose(); } });
@@ -174,14 +177,15 @@ async function markWatched(id) {
   loadVideos();
 }
 
-/* A video alert in the messages carries a library video: play it right here so
-   the learner never has to leave the page (common.js calls this). */
+/* A video alert in the messages carries a library video. Opening the alert shows
+   the player but does NOT start it: the video waits for the learner to press
+   play, so a video that arrives while they are working never plays over them. */
 window.cbpOpenVideoAlert = function (libraryId, url) {
   const id = String(libraryId || '');
   const known = (S.videos || []).find(function (v) { return String(v.id) === id; });
-  if (known && known.url) { playVideoById(known.id); return true; }
+  if (known && known.url) { playVideoById(known.id, null, false); return true; }
   const item = (S.library || []).find(function (i) { return String(i.id) === id; });
-  if (item && item.url) { openMediaItem(item); return true; }
+  if (item && item.url) { openMediaItem(item, false); return true; }
   if (url) { window.open(url, '_blank', 'noopener'); return true; }
   return false;
 };
@@ -192,13 +196,17 @@ function logBookOpen(payload) {
   API.post('/reading/open', payload).catch(function () { /* history only */ });
 }
 
-/* Every third finished chapter opens a point and earns one library video, sent
-   as an alert. The video is the one the super admin chose for that point. */
+/* A finished chapter earns a library video when the super admin attached one to
+   that chapter, and every third finished chapter opens a counting point. Either
+   way the video is delivered as an ALERT in the messages — it is never played
+   over the learner, so the message says where to find it. */
 function videoAlertNote(response) {
   const alert = response && response.videoAlert;
   if (!alert) return '';
-  return ' Point ' + (alert.point || 1) + ' unlocked: a video was added to your alerts — ' +
-    alert.title + '.';
+  if (!alert.point) {
+    return ' A video has been added to your Alerts — open Messages to watch it.';
+  }
+  return ' Point ' + alert.point + ' unlocked — a video has been added to your Alerts.';
 }
 
 /* --------------------------------------------------------------- boot --- */
@@ -246,7 +254,16 @@ async function boot() {
   const b = S.me.branding;
   applyThemeColor(b.themeColor);
   $('sideName').textContent = b.tenantName || b.programName;
-  if (b.tenantLogo) { $('sideLogo').src = b.tenantLogo; $('sideLogo').classList.remove('hidden'); }
+  /* The account's own mark, at the top of the learner's menu: its logo when one
+     has been uploaded, otherwise its initials drawn in the account colour, so
+     the menu always says which account this is. */
+  const sideLogo = $('sideLogo');
+  if (sideLogo) {
+    sideLogo.src = b.tenantLogo || portalMarkSrc(b.tenantName || b.programName,
+      themeIsHex(b.themeColor) ? b.themeColor : '#24508c');
+    sideLogo.alt = (b.tenantName || b.programName || 'Account') + ' logo';
+    sideLogo.classList.remove('hidden');
+  }
   document.title = (b.tenantName || 'My') + ' — ' + b.programName;
 
   await loadVideos();
@@ -271,6 +288,73 @@ function assessMax(a) {
 function loadAssessment() {
   return API.get('/assessment').then(function (data) { S.assessment = data; return data; })
     .catch(function () { S.assessment = null; return null; });
+}
+/* SECTION B — behaviour indicators. One row per behaviour area the super admin
+   wrote; the learner observes every area twice. At the pre assessment only the
+   PRE column is active; at the post assessment the PRE column shows what was
+   recorded and only the POST column takes input. */
+function behaviorCellHtml(a, phase, col, b) {
+  const rec = col === 'pre' ? a.pre : a.post;
+  const val = rec && rec.behavior ? rec.behavior[b.id] : null;
+  if (val != null && String(val).length) {
+    return '<div class="assess-text-val">' + esc(val) + '</div>';
+  }
+  if (phase === col) {
+    return '<textarea class="assess-input" data-behavior="' + esc(b.id) +
+      '" rows="2" placeholder="Write your observation..."></textarea>';
+  }
+  if (phase) {
+    return '<textarea class="assess-input" rows="2" disabled placeholder="' +
+      (col === 'post' ? 'Opens at the post assessment' : 'Recorded at the pre assessment') +
+      '"></textarea>';
+  }
+  return '<span class="assess-none">&mdash;</span>';
+}
+function behaviorBlockHtml(a, phase) {
+  const list = a.behaviors || [];
+  if (!list.length) return '';
+  return '<div class="assess-section"><h4>Section B &mdash; Behaviour indicators</h4>' +
+    '<p class="muted small">Observe yourself in each behaviour area: once now (pre-program) ' +
+    'and once at the end of the programme (post-program).</p>' +
+    '<div class="table-wrap"><table class="assess-table assess-table-wide"><thead><tr>' +
+    '<th>Behaviour area</th><th class="col-pre">Pre-program observation</th>' +
+    '<th class="col-post">Post-program observation</th></tr></thead><tbody>' +
+    list.map(function (b) {
+      return '<tr><td class="assess-beh-area">' + esc(b.text) + '</td>' +
+        '<td class="col-pre">' + behaviorCellHtml(a, phase, 'pre', b) + '</td>' +
+        '<td class="col-post">' + behaviorCellHtml(a, phase, 'post', b) + '</td></tr>';
+    }).join('') +
+    '</tbody></table></div></div>';
+}
+/* SECTION C — open reflection questions. The pre set is answerable only at the
+   pre assessment, the post set only at the post assessment. */
+function reflectionBlockHtml(a, phase, set) {
+  const list = (set === 'pre' ? a.preQuestions : a.postQuestions) || [];
+  if (!list.length) return '';
+  const rec = set === 'pre' ? a.pre : a.post;
+  return '<div class="assess-section assess-refl"><h4>' + (set === 'pre'
+    ? 'Pre assessment questions' : 'Post assessment questions') + '</h4>' +
+    '<p class="muted small">' + (set === 'pre'
+      ? 'Answered now, at the beginning of the self-assessment.'
+      : 'Answered at the end, with the post assessment.') + '</p>' +
+    list.map(function (q) {
+      const val = rec && rec.reflections ? rec.reflections[q.id] : null;
+      let field;
+      if (val != null && String(val).length) {
+        field = '<div class="assess-text-val">' + esc(val) + '</div>';
+      } else if (phase === set) {
+        field = '<textarea class="assess-input" data-reflection="' + esc(q.id) +
+          '" data-set="' + set + '" rows="3" placeholder="Write your answer..."></textarea>';
+      } else if (phase) {
+        field = '<textarea class="assess-input" rows="3" disabled placeholder="' +
+          (set === 'post' ? 'Opens at the post assessment' : 'Answered at the pre assessment') +
+          '"></textarea>';
+      } else {
+        field = '<span class="assess-none">&mdash;</span>';
+      }
+      return '<div class="assess-refl-q"><div class="assess-refl-text">' + esc(q.text) +
+        '</div>' + field + '</div>';
+    }).join('') + '</div>';
 }
 function assessCellHtml(a, phase, col, stmtId) {
   const rec = col === 'pre' ? a.pre : a.post;
@@ -316,7 +400,46 @@ function assessmentHtml(a, phase) {
     '<span>Pre-score total: <b>' + (preT ? preT.total + ' / ' + preT.max : '&mdash;') + '</b></span>' +
     '<span>Post-score total: <b>' + (postT ? postT.total + ' / ' + postT.max : '&mdash;') + '</b></span>' +
     growth + '</div>';
-  return (a.note ? '<p class="muted small">' + esc(a.note) + '</p>' : '') + legend + live + cats + totals;
+  return (a.note ? '<p class="muted small">' + esc(a.note) + '</p>' : '') +
+    ((a.behaviors || []).length || (a.preQuestions || []).length || (a.postQuestions || []).length
+      ? '<div class="assess-section"><h4>Section A &mdash; Objective statements</h4></div>'
+      : '') +
+    legend + live + cats +
+    behaviorBlockHtml(a, phase) +
+    ((a.preQuestions || []).length || (a.postQuestions || []).length
+      ? '<div class="assess-section"><h4>Section C &mdash; Open reflection questions</h4></div>' +
+        reflectionBlockHtml(a, phase, 'pre') +
+        reflectionBlockHtml(a, phase, 'post')
+      : '') +
+    totals;
+}
+/* SECTION B: what the learner wrote in the active observation column (empty {}
+   when the super admin has defined no behaviour areas, null when something is
+   left blank). */
+function collectBehaviors() {
+  const a = S.assessment || {};
+  const out = {};
+  let missing = 0;
+  (a.behaviors || []).forEach(function (b) {
+    const el = document.querySelector('textarea[data-behavior="' + b.id + '"]');
+    if (!el) { out[b.id] = ''; return; }   /* nothing to answer for this area here */
+    const text = el.value.trim();
+    if (!text) missing++;
+    out[b.id] = text;
+  });
+  return missing ? null : out;
+}
+/* SECTION C: the answers of one set (pre or post). Null when something is
+   blank. */
+function collectReflections(set) {
+  const out = {};
+  let missing = 0;
+  document.querySelectorAll('textarea[data-reflection][data-set="' + set + '"]').forEach(function (el) {
+    const text = el.value.trim();
+    if (!text) missing++;
+    out[el.dataset.reflection] = text;
+  });
+  return missing ? null : out;
 }
 function collectAssessment() {
   const a = S.assessment;
@@ -350,10 +473,12 @@ async function startAssessmentFlow() {
   const a = await loadAssessment();
   if (!a || a.pre) { afterAssessment(); return; }   /* already taken (or unavailable): carry on */
   modal('<h3>Self-assessment — before we begin</h3>' +
-    '<p class="muted">Rate how much you agree with each statement, from 1 to 5. ' +
-    'This is your <b>pre-score</b>; the same table returns at the end of the programme ' +
-    'for your <b>post-score</b>, so your growth can be measured. The post-score column is ' +
-    'inactive until then.</p>' +
+    '<p class="muted">The form has three parts. <b>Section A</b>: rate how much you agree with each ' +
+    'statement, from 1 to 5. <b>Section B</b>: write your <b>pre-program observation</b> for every ' +
+    'behaviour area — the post-program column stays inactive until the end of the programme. ' +
+    '<b>Section C</b>: answer the <b>pre assessment questions</b> — the post assessment questions ' +
+    'also open only at the end. Your ratings are your <b>pre-score</b>; the same form returns at ' +
+    'the end of the programme for your <b>post-score</b>, so your growth can be measured.</p>' +
     assessmentHtml(a, 'pre') +
     '<div class="mt"><button id="assessSubmit">Save my pre-score &amp; continue</button></div>',
     { sticky: true, noClose: true, wide: true });
@@ -361,8 +486,13 @@ async function startAssessmentFlow() {
   document.getElementById('assessSubmit').onclick = async function () {
     const answers = collectAssessment();
     if (!answers) { toast('Please rate every statement (1-5) before continuing.', 'err'); return; }
+    const behavior = collectBehaviors();
+    if (behavior === null) { toast('Write your pre-program observation for every behaviour area.', 'err'); return; }
+    const reflections = collectReflections('pre');
+    if (reflections === null) { toast('Answer every pre assessment question.', 'err'); return; }
     try {
-      const r = await API.post('/assessment/pre', { answers: answers });
+      const r = await API.post('/assessment/pre',
+        { answers: answers, behavior: behavior, reflections: reflections });
       closeModal();
       toast('Pre-score saved — your total is ' + r.total + ' / ' + r.max + '.', 'ok');
       S.flow.assessmentPreDone = true;
@@ -681,6 +811,8 @@ function renderBook() {
       '<span class="muted small">' + esc(d.module.title) + '</span></div>' +
       /* no full-book PDF is offered on this page — only the chapter's own pages */
       '<div>' +
+        (d.book.videoAlert && d.book.videoAlert.url
+          ? '<button class="ghost small" id="bookAlertVideo">▶ Video alert</button> ' : '') +
         (false && d.book.media && d.book.media.url
           ? '<button class="ghost small" id="bookPlayClip">▶ Play clip</button> ' : '') +
         '<button class="ghost small" id="backToBooks3">← Books</button></div>' +
@@ -690,6 +822,14 @@ function renderBook() {
 
   $('backToBooks').onclick = backToModule;
   $('backToBooks3').onclick = backToModule;
+  const alertBtn = $('bookAlertVideo');
+  if (alertBtn) alertBtn.onclick = function () {
+    const v = d.book.videoAlert;
+    /* an alert shows the player but never starts it on its own */
+    modal('<h3>' + esc(v.title || 'Video alert') + '</h3>' +
+      '<video class="video-frame" controls src="' + esc(v.url) + '"></video>' +
+      '<div class="mt"><button data-close class="ghost">Close</button></div>');
+  };
   const b2 = $('backToBooks2'); if (b2) b2.onclick = backToModule;
 
   $('view-book').querySelectorAll('[data-ch]').forEach(function (b) {
@@ -1417,10 +1557,15 @@ async function showCertificate(id) {
   try {
     const data = await API.get('/certificate/' + id);
     const c = data.certificate;
+    let qr = null;
+    try { qr = await API.get('/certificates/' + encodeURIComponent(id) + '/qr'); } catch (e) { qr = null; }
+    const qrImg = qr && qr.qr
+      ? '<div style="position:absolute;left:14px;bottom:14px;background:#fff;padding:4px;border:1px solid #ddd;border-radius:6px"><img src="' + esc(qr.qr) + '" style="width:110px;height:110px" alt="Certificate QR"></div>'
+      : '';
     const general = c.type === 'general';
     const certificateTitle = general ? 'Graduation certificate' : c.title;
-    const output = '<div class="card"><div id="certificatePrint">' +
-      learnerCertSheet(c, data.branding) + '</div>' +
+    const output = '<div class="card"><div id="certificatePrint" style="position:relative">' +
+      learnerCertSheet(c, data.branding) + qrImg + '</div>' +
       '<div class="mt center no-print"><div class="row export-buttons" data-target="#certificatePrint">' +
       '<button type="button" class="ghost" data-record="certificatePrint" data-title="' + esc(certificateTitle) + '">Print certificate</button>' +
       '<button type="button" class="ghost" data-record="certificatePrint" data-title="' + esc(certificateTitle) + '">Save certificate as PDF</button>' +
@@ -1502,19 +1647,21 @@ async function renderCertificates() {
 }
 
 /* ------------------------------------------------------------ library --- */
-function openMediaItem(item) {
+function openMediaItem(item, autoPlay) {
   const type = item.type;
   const media = (S.library || []).filter(function (i) { return i.type === type && i.url; });
   let idx = media.findIndex(function (i) { return String(i.id) === String(item.id); });
   if (idx < 0) { media.unshift(item); idx = 0; }
+  /* opened from an ALERT: show the player, let the learner press play */
+  const start = autoPlay === false ? '' : 'autoplay ';
 
   function renderMedia(i) {
     const it = media[i];
     const old = document.getElementById('libMedia');
     if (old) { try { old.pause(); } catch (e) {} }
     const player = type === 'video'
-      ? '<video id="libMedia" class="video-frame" controls autoplay playsinline src="' + esc(it.url) + '"></video>'
-      : '<audio id="libMedia" controls autoplay src="' + esc(it.url) + '" style="width:100%"></audio>';
+      ? '<video id="libMedia" class="video-frame" controls ' + start + 'playsinline src="' + esc(it.url) + '"></video>'
+      : '<audio id="libMedia" controls ' + start + 'src="' + esc(it.url) + '" style="width:100%"></audio>';
     modal('<h3>' + esc(it.title) + '</h3>' +
       player +
       '<div class="mt" style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">' +
@@ -1595,6 +1742,9 @@ function openLibraryItem(item) {
 }
 
 async function renderLibrary() {
+  let meLib = null;
+  try { meLib = await API.get('/me/library'); } catch (e) { meLib = null; }
+
   const data = await API.get('/library');
   S.library = data.library || [];
   const groups = { book: [], letter: [], video: [], audio: [] };
@@ -1608,21 +1758,79 @@ async function renderLibrary() {
               '<b>' + esc(i.title) + '</b> ' +
               (i.fileName ? '<span class="badge info">file</span>' : '') +
               (i.text ? '<span class="badge lock">text</span>' : '') +
-              ((i.type === 'book' || i.type === 'letter') && i.locked ? '<span class="badge off">locked until you finish every module</span>' : '') +
+              ((i.type === 'book' || i.type === 'letter') && i.locked ? '<span class="badge off">' + esc(i.lockedReason || 'locked until you finish every module') + '</span>' : '') +
+              (i.type === 'book'
+                ? (grad.required.indexOf(i.id) !== -1
+                    ? ' <span class="badge ok">required</span>'
+                    : (grad.optional.indexOf(i.id) !== -1
+                        ? ' <button type="button" class="small ghost" data-unpick="' + esc(i.id) + '">Remove optional</button>'
+                        : ' <button type="button" class="small" data-pick="' + esc(i.id) + '">Add optional</button>'))
+                : '') +
               '</div>';
           }).join('')
         : '<p class="muted">Nothing here yet.</p>') + '</div>';
   }
-  $('view-library').innerHTML = '<h2>Library</h2>' +
+  const grad = meLib && meLib.library ? meLib.library : { required: [], optional: [], addedAt: null, reads: {} };
+  const hits = meLib && meLib.hits ? meLib.hits : {};
+  function titleForBook(id) {
+    const item = S.library.find(function (i) { return i.id === id && i.type === 'book'; });
+    return item ? item.title : id;
+  }
+
+
+  const required = grad.required || [];
+  const optional = grad.optional || [];
+  function pickOptional(bookId, add) {
+    return function () {
+      const next = (grad.optional || []).slice();
+      if (add) {
+        if (next.indexOf(bookId) !== -1) return;
+        if (next.length >= 10) { toast('You can pick up to 10 optional books.', 'err'); return; }
+        next.push(bookId);
+      } else {
+        const at = next.indexOf(bookId);
+        if (at === -1) return;
+        next.splice(at, 1);
+      }
+      API.put('/me/library', { optional: next, picked: add ? [bookId] : [] })
+        .then(function () { renderLibrary(); })
+        .catch(function (e) { toast(e.message || 'Could not update your library', 'err'); });
+    };
+  }
+  const gradHtml = '<div class="card"><h3>My graduation library</h3>' +
+    '<div class="grid cols-2">' +
+      '<div><b>Required (' + required.length + '/5)</b>' +
+      (required.length ? '<ul class="muted small">' + required.map(function (id) { return '<li>' + esc(titleForBook(id)) + '</li>'; }).join('') + '</ul>' : '<p class="muted">No required books set.</p>') +
+      '</div>' +
+      '<div><b>Optional (' + optional.length + '/10)</b>' +
+      (optional.length ? '<ul class="muted small">' + optional.map(function (id) { return '<li>' + esc(titleForBook(id)) + ' <span class="badge ' + (hits[id] ? 'ok' : 'off') + '">' + (hits[id] || 0) + ' pick' + (hits[id] === 1 ? '' : 's') + '</span> <button type="button" class="small ghost" data-unpick="' + esc(id) + '">Remove</button></li>'; }).join('') + '</ul>' : '<p class="muted">No optional books added yet.</p>') +
+      '</div>' +
+    '</div></div>';
+
+  $('view-library').innerHTML = '<h2>My graduation library</h2>' +
     '<p class="muted">Every book, letter, video and audio recording in the programme. Click an item to open it.</p>' +
-    '<div class="grid cols-3">' + list('book', 'Books') + list('letter', 'Letters') + list('video', 'Videos') + list('audio', 'Audio') + '</div>';
+    '<div class="grid cols-3">' + list('book', 'Books') + list('letter', 'Letters') + list('video', 'Videos') + list('audio', 'Audio') + '</div>' + gradHtml;
+
   $('view-library').querySelectorAll('[data-lib]').forEach(function (el) {
     el.onclick = function () {
       const item = data.library.find(function (i) { return i.id === el.dataset.lib; });
-      if (item) openLibraryItem(item);
+      if (!item) return;
+      if (item.selectable && item.locked) {
+        toast(item.lockedReason || 'Add this book to your optional library first.', 'err');
+        return;
+      }
+      openLibraryItem(item);
     };
   });
+  $('view-library').querySelectorAll('[data-pick]').forEach(function (b) {
+    b.onclick = function (ev) { ev.stopPropagation(); pickOptional(b.dataset.pick, true)(); };
+  });
+  $('view-library').querySelectorAll('[data-unpick]').forEach(function (b) {
+    b.onclick = function (ev) { ev.stopPropagation(); pickOptional(b.dataset.unpick, false)(); };
+  });
 }
+/* ------------------------------------------------------------ thoughts -- */
+
 
 /* ------------------------------------------------------------ thoughts -- */
 async function renderThoughts() {
@@ -1708,9 +1916,11 @@ function renderFinalTab() {
   if (FINAL_TAB === 'assessment') {
     const a = S.assessment || {};
     html = '<div class="card"><h3>Self-assessment — post-score</h3>' +
-      '<p class="muted">Rate the same statements again — this is your <b>post-score</b>. ' +
-      'It appears here only after every module is complete, and your growth versus the pre-score ' +
-      'is shown below. Each statement may be rated once.</p>' +
+      '<p class="muted">The end of the programme: <b>Section A</b> — rate the same statements again ' +
+      'for your <b>post-score</b>, and your growth versus the pre-score is shown below. ' +
+      '<b>Section B</b> — the <b>post-program observation</b> column is now active; your pre-program ' +
+      'observation is shown beside it for comparison. <b>Section C</b> — the <b>post assessment ' +
+      'questions</b> are now open; your pre assessment answers are shown above them.</p>' +
       '<div class="assess-legend">' + ((a.scale || []).map(function (s) {
         return '<b>' + s.value + '</b> ' + esc(s.label);
       }).join(' &middot; ')) + '</div>' +
@@ -1828,8 +2038,13 @@ function renderFinalTab() {
     if (btn) btn.onclick = async function () {
       const answers = collectAssessment();
       if (!answers) { toast('Please rate every statement (1-5) before continuing.', 'err'); return; }
+      const behavior = collectBehaviors();
+      if (behavior === null) { toast('Write your post-program observation for every behaviour area.', 'err'); return; }
+      const reflections = collectReflections('post');
+      if (reflections === null) { toast('Answer every post assessment question.', 'err'); return; }
       try {
-        const r = await API.post('/assessment/post', { answers: answers });
+        const r = await API.post('/assessment/post',
+          { answers: answers, behavior: behavior, reflections: reflections });
         toast('Post-score saved — your total is ' + r.total + ' / ' + r.max + (r.growth != null ? ', growth ' + (r.growth >= 0 ? '+' : '') + r.growth : '') + '.', 'ok');
         renderFinal();
       } catch (e) { toast(e.message, 'err'); }

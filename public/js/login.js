@@ -33,6 +33,28 @@ async function init() {
   document.getElementById('tenantName').textContent = tenantInfo.tenant.name;
   document.getElementById('portalTitle').textContent = tenantInfo.portal.name;
   document.title = tenantInfo.tenant.name + ' — Login';
+  /* The account's own logo becomes the tab, desktop, taskbar and Android
+     home-screen icon for this portal. The URL carries the logo's fingerprint, so
+     a logo change (or a deployment update) asks the browser and the launcher to
+     refresh the icon straight away. */
+  const iconBase = '/api/public/tenant/' + encodeURIComponent(slug);
+  let iconVersion = '2026-11-08-live-room-fixes';
+  try {
+    const iconRes = await fetch(iconBase + '/icon', { cache: 'no-store' });
+    const fp = iconRes.headers.get('X-CBP-Icon');
+    if (fp) iconVersion = fp;
+  } catch (e) { /* the build marker is a fine fallback */ }
+  function addLink(rel, href) {
+    const link = document.createElement('link');
+    link.rel = rel;
+    link.href = href;
+    document.head.appendChild(link);
+  }
+  addLink('icon', iconBase + '/icon?v=' + encodeURIComponent(iconVersion));
+  addLink('apple-touch-icon', iconBase + '/icon.png?v=' + encodeURIComponent(iconVersion));
+  addLink('manifest', iconBase + '/manifest.webmanifest');
+
+
   if (tenantInfo.tenant.logo) {
     const i = document.getElementById('logoTenant');
     i.src = tenantInfo.tenant.logo; i.classList.remove('hidden');
@@ -106,6 +128,17 @@ async function loadTopPerformers() {
     /* The login form must stay usable even if the ranking cannot load. */
   }
 }
+
+const pwToggle = document.getElementById('pwToggle');
+if (pwToggle) {
+  pwToggle.addEventListener('click', function () {
+    const pw = document.getElementById('liPw');
+    const show = pw.type === 'password';
+    pw.type = show ? 'text' : 'password';
+    pwToggle.textContent = show ? 'Hide' : 'Show';
+  });
+}
+
 
 document.getElementById('loginForm').addEventListener('submit', async function (e) {
   e.preventDefault();
