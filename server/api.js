@@ -1987,6 +1987,148 @@ route('POST', '/api/certificates/issue', ({ user, body }) => {
   return { ok: true, certificate: cert, generalCertificate: general };
 });
 
+/* ======================================== certificate templates & wording === */
+/* The super admin chooses which of the designs a certificate uses in a given
+   year, and can override it for one module ("level"); he also writes the words
+   that appear on the sheet and adds or removes free lines. The design catalogue
+   itself lives in public/js/certificates.js — the server only stores the choice,
+   so adding a design never needs a server change. */
+const CERT_TPL_RE = /^tpl_[a-z0-9]+_[a-z0-9]+$/;
+
+function certSettings() {
+  const s = dbm.db.settings;
+  if (!s.certificateTemplates || typeof s.certificateTemplates !== 'object') {
+    s.certificateTemplates = {};
+  }
+  const c = s.certificateTemplates;
+  if (!c.byYear || typeof c.byYear !== 'object' || Array.isArray(c.byYear)) c.byYear = {};
+  if (!c.texts || typeof c.texts !== 'object' || Array.isArray(c.texts)) c.texts = {};
+  if (!Array.isArray(c.extraBlocks)) c.extraBlocks = [];
+  c.defaultTemplate = CERT_TPL_RE.test(c.defaultTemplate || '') ? c.defaultTemplate : '';
+  return c;
+}
+
+/* Which design does this certificate wear? module choice → year default →
+   programme default. */
+function certTemplateFor(cert) {
+  const c = certSettings();
+  const year = String((cert && cert.issuedAt) || '').slice(0, 4);
+  const byYear = (year && c.byYear[year]) || {};
+  const modules = (byYear && byYear.modules) || {};
+  const chosen = (cert && cert.moduleId && modules[cert.moduleId]) ||
+    byYear.default || c.defaultTemplate || '';
+  return CERT_TPL_RE.test(chosen) ? chosen : '';
+}
+
+/* The list of years worth offering: this year, plus any year a certificate was
+   already issued in. */
+function certYears() {
+  const c = certSettings();
+  const years = new Set([String(new Date().getFullYear())]);
+  Object.keys(c.byYear).forEach(function (y) { if (/^\d{4}$/.test(y)) years.add(y); });
+  dbm.collection('certificates').forEach(function (x) {
+    const y = String(x.issuedAt || '').slice(0, 4);
+    if (/^\d{4}$/.test(y)) years.add(y);
+  });
+  return Array.from(years).sort();
+}
+
+function certConfigPublic() {
+  const c = certSettings();
+  return {
+    defaultTemplate: c.defaultTemplate || '',
+    byYear: c.byYear,
+    texts: c.texts,
+    extraBlocks: c.extraBlocks,
+    programLogo: dbm.db.settings.programLogo || null,
+    programName: dbm.db.settings.programName || 'Character Building Program'
+  };
+}
+
+route('GET', '/api/super/certificate-templates', ({ user }) => {
+  requireRole(user, SUPER);
+  return {
+    ok: true,
+    config: certConfigPublic(),
+    years: certYears(),
+    modules: (dbm.db.modules || []).map(function (m) {
+      return { id: m.id, title: m.title, certificateName: m.certificateName || null };
+    })
+  };
+});
+
+route('PUT', '/api/super/certificate-templates', ({ user, body }) => {
+  requireRole(user, SUPER);
+  body = body || {};
+  const c = certSettings();
+  const clean = function (v) { return CERT_TPL_RE.test(String(v || '')) ? String(v) : ''; };
+
+  if (body.defaultTemplate !== undefined) c.defaultTemplate = clean(body.defaultTemplate);
+
+  if (body.byYear && typeof body.byYear === 'object') {
+    Object.keys(body.byYear).forEach(function (year) {
+      if (!/^\d{4}$/.test(year)) return;
+      const src = body.byYear[year] || {};
+      const entry = { default: clean(src.default), modules: {} };
+      if (src.modules && typeof src.modules === 'object') {
+        Object.keys(src.modules).forEach(function (modId) {
+          const tpl = clean(src.modules[modId]);
+          if (tpl) entry.modules[String(modId)] = tpl;
+        });
+      }
+      if (!entry.default && !Object.keys(entry.modules).length) delete c.byYear[year];
+      else c.byYear[year] = entry;
+    });
+  }
+
+  if (body.texts && typeof body.texts === 'object') {
+    const texts = {};
+    Object.keys(body.texts).forEach(function (k) {
+      if (!/^[A-Za-z]{2,24}$/.test(k)) return;
+      texts[k] = String(body.texts[k] == null ? '' : body.texts[k]).slice(0, 400);
+    });
+    c.texts = texts;
+  }
+
+  if (Array.isArray(body.extraBlocks)) {
+    c.extraBlocks = body.extraBlocks
+      .filter(function (b) { return b && String(b.text || '').trim(); })
+      .slice(0, 20)
+      .map(function (b, i) {
+        return { id: String(b.id || ('blk_' + (i + 1))), text: String(b.text).slice(0, 400) };
+      });
+  }
+
+  dbm.save();
+  return { ok: true, config: certConfigPublic() };
+});
+
+/* What one certificate needs to be drawn: its design, the words and both logos
+   (the account's own on the left, the programme's on the right). */
+route('GET', '/api/certificates/([a-z0-9_-]+)/config', ({ user, params }) => {
+  const cert = dbm.byId('certificates', params[0]);
+  need(cert, 'Certificate not found', 404);
+  requireRole(user, PARTICIPANTS.concat(ADMINS));
+  const tenant = dbm.byId('tenants', cert.tenantId);
+  if (user.role === 'tenant_admin' || user.role === 'supervisor') {
+    need(cert.tenantId === user.tenantId, 'Not permitted', 403);
+  }
+  if (['student', 'member', 'teacher'].indexOf(user.role) !== -1) {
+    need(cert.userId === user.id, 'Not permitted', 403);
+  }
+  const c = certSettings();
+  return {
+    ok: true,
+    templateId: certTemplateFor(cert),
+    texts: c.texts || {},
+    extraBlocks: c.extraBlocks || [],
+    schoolLogo: (tenant && tenant.logo) || null,
+    programLogo: dbm.db.settings.programLogo || null,
+    tenantName: (tenant && tenant.name) || cert.tenantName || null,
+    year: String(cert.issuedAt || '').slice(0, 4) || null
+  };
+});
+
 route('GET', '/api/certificates', ({ user }) => {
   requireRole(user, PARTICIPANTS.concat(ADMINS));
   ensureGeneralCertificate(user);

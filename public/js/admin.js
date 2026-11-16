@@ -1540,25 +1540,28 @@ async function renderCertificates() {
   }
 }
 
-function certSheetHtml(c) {
+/* The sheet is drawn by the shared renderer (certificates.js) so the design the
+   super admin chose is the same here, on the learner's screen and in print. */
+function certSheetHtml(c, cfg) {
+  cfg = cfg || {};
   const b = ME.branding || {};
-  const books = c.books && c.books.length ? c.books : (c.bestBook ? [c.bestBook] : []);
-  let logos = '';
-  if (b.tenantLogo) logos += '<img class="logo" src="' + esc(b.tenantLogo) + '" alt="Logo">';
-  let bookList = '';
-  books.forEach(function (t) { bookList += '<li>' + esc(t) + '</li>'; });
-  return '<div class="cert-sheet">' +
-    (logos ? '<div class="cert-logos">' + logos + '</div>' : '') +
-    '<h1>' + esc(c.title || 'Certificate') + '</h1>' +
-    '<p>This certificate is proudly presented to</p>' +
-    '<div class="name">' + esc(c.userName || '—') + '</div>' +
-    (books.length ? '<p>for the successful completion of</p>' +
-      '<div class="books"><ul>' + bookList + '</ul></div>' : '') +
-    (c.performance != null ? '<p>Overall performance: <b>' + esc(c.performance) + '%</b></p>' : '') +
-    (c.objectiveScore != null ? '<p class="small muted">Objective score: ' +
-      esc(c.objectiveScore) + '</p>' : '') +
-    '<div class="foot"><span>Code: <b class="mono">' + esc(c.code || '—') + '</b></span>' +
-    '<span>Issued: ' + fmtDate(c.issuedAt) + '</span></div></div>';
+  if (typeof certificateSheetHtml !== 'function') {
+    /* the shared module did not load: keep the old plain sheet rather than fail */
+    return '<div class="cert-sheet"><h1>' + esc(c.title || 'Certificate') + '</h1>' +
+      '<div class="name">' + esc(c.userName || '—') + '</div>' +
+      (c.performance != null ? '<p>Overall performance: <b>' + esc(c.performance) + '%</b></p>' : '') +
+      '<div class="foot"><span>Code: <b class="mono">' + esc(c.code || '—') + '</b></span>' +
+      '<span>Issued: ' + fmtDate(c.issuedAt) + '</span></div></div>';
+  }
+  if (typeof certEnsureStyles === 'function') certEnsureStyles();
+  return certificateSheetHtml({
+    templateId: cfg.templateId,
+    texts: cfg.texts,
+    extraBlocks: cfg.extraBlocks,
+    schoolLogo: cfg.schoolLogo || b.tenantLogo || null,
+    programLogo: cfg.programLogo || b.programLogo || null,
+    data: Object.assign({}, c, { tenantName: cfg.tenantName || c.tenantName })
+  });
 }
 function certPicked() {
   const ids = [];
@@ -1575,7 +1578,12 @@ async function openCertModal(c) {
   } catch (e) {
     qr = null;
   }
-  const base = '<div style="position:relative">' + certSheetHtml(c) +
+  /* the design and wording the super admin chose for this certificate's year
+     and module */
+  let cfg = null;
+  try { cfg = await API.get('/certificates/' + encodeURIComponent(c.id) + '/config'); }
+  catch (e) { cfg = null; }
+  const base = '<div style="position:relative">' + certSheetHtml(c, cfg) +
     (qr ? '<div style="position:absolute;left:14px;bottom:14px;background:#fff;padding:4px;border:1px solid #ddd;border-radius:6px"><img src="' + esc(qr.qr) + '" style="width:110px;height:110px" alt="Certificate QR"></div>' : '') +
     '</div>';
   const qrBlock = '';

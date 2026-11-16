@@ -1,9 +1,9 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Super Admin â€” Character Building Program</title>
+<title>Super Admin — Character Building Program</title>
 <link rel="stylesheet" href="/css/style.css?v=77">
 </head>
 <body class="super-admin">
@@ -20,7 +20,7 @@
         <li>Modules, books, chapters and questions maintained centrally.</li>
         <li>Reports show flagged submissions across all tenants.</li>
       </ul>
-      <p><a href="/" style="color:#ffd979">â† Back to portals</a></p>
+      <p><a href="/" style="color:#ffd979">← Back to portals</a></p>
     </div>
     <div class="auth-panel">
       <h2>Sign in</h2>
@@ -41,7 +41,7 @@
   <div class="topbar">
     <div class="brand">
       <img id="progLogo" class="hidden" alt="Program logo">
-      <span id="brandName">Character Building â€” Super Admin</span>
+      <span id="brandName">Character Building — Super Admin</span>
     </div>
     <div class="spacer"></div>
     <div class="who">
@@ -54,7 +54,7 @@
     <nav class="side">
       <div class="nav-group open" data-group="overview">
         <button type="button" class="nav-group-head" aria-expanded="true">
-          <span class="nav-group-title">Overview</span><span class="nav-group-caret">â–¾</span>
+          <span class="nav-group-title">Overview</span><span class="nav-group-caret"></span>
         </button>
         <div class="nav-group-body">
           <button type="button" class="nav-btn active" data-view="dashboard">Dashboard</button>
@@ -64,7 +64,7 @@
 
       <div class="nav-group open" data-group="accounts">
         <button type="button" class="nav-group-head" aria-expanded="true">
-          <span class="nav-group-title">Accounts &amp; people</span><span class="nav-group-caret">â–¾</span>
+          <span class="nav-group-title">Accounts &amp; people</span><span class="nav-group-caret"></span>
         </button>
         <div class="nav-group-body">
           <button type="button" class="nav-btn" data-view="portals">Portals</button>
@@ -75,7 +75,7 @@
 
       <div class="nav-group open" data-group="content">
         <button type="button" class="nav-group-head" aria-expanded="true">
-          <span class="nav-group-title">Learning content</span><span class="nav-group-caret">â–¾</span>
+          <span class="nav-group-title">Learning content</span><span class="nav-group-caret"></span>
         </button>
         <div class="nav-group-body">
           <button type="button" class="nav-btn" data-view="modules">Modules</button>
@@ -83,23 +83,25 @@
           <button type="button" class="nav-btn" data-view="library">Library</button>
           <button type="button" class="nav-btn" data-view="videos">Video alerts</button>
           <button type="button" class="nav-btn" data-view="assessment">Self-assessment</button>
+          <button type="button" class="nav-btn" data-view="certtemplates">Certificate templates</button>
         </div>
       </div>
 
       <div class="nav-group open" data-group="tracking">
         <button type="button" class="nav-group-head" aria-expanded="true">
-          <span class="nav-group-title">Tracking</span><span class="nav-group-caret">â–¾</span>
+          <span class="nav-group-title">Tracking</span><span class="nav-group-caret"></span>
         </button>
         <div class="nav-group-body">
           <button type="button" class="nav-btn" data-view="progress">Student progress</button>
-          <button type="button" class="nav-btn" data-view="reports">Reports</button>
+          <button type="button" class="nav-btn" data-view="students">Students list &amp; search</button>
+          <button type="button" class="nav-btn" data-view="reports">Submission reports</button>
           <button type="button" class="nav-btn" data-view="lessons">Live classes</button>
         </div>
       </div>
 
       <div class="nav-group open" data-group="system">
         <button type="button" class="nav-group-head" aria-expanded="true">
-          <span class="nav-group-title">System</span><span class="nav-group-caret">â–¾</span>
+          <span class="nav-group-title">System</span><span class="nav-group-caret"></span>
         </button>
         <div class="nav-group-body">
           <button type="button" class="nav-btn" data-view="logs">System log</button>
@@ -119,6 +121,8 @@
       <section id="view-books" class="view hidden"></section>
       <section id="view-users" class="view hidden"></section>
       <section id="view-reports" class="view hidden"></section>
+      <section id="view-students" class="view hidden"></section>
+      <section id="view-certtemplates" class="view hidden"></section>
       <section id="view-progress" class="view hidden"></section>
       <section id="view-assessment" class="view hidden"></section>
       <section id="view-analytics" class="view hidden"></section>
@@ -133,6 +137,7 @@
 <div id="studentDetailModal" class="hidden"></div>
 
 <script src="/js/common.js?v=77"></script>
+<script src="/js/certificates.js?v=77"></script>
 <script src="/js/super.js?v=77"></script>
 </body>
 

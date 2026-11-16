@@ -83,7 +83,8 @@ function showApp() {
 const RENDERERS = {
   dashboard: renderDashboard, portals: renderPortals, accounts: renderAccounts,
   modules: renderModules, library: renderLibrary, books: renderBooks,
-  users: renderUsers, reports: renderReports, progress: renderProgress,
+  users: renderUsers, students: renderStudentList, reports: renderSubmissionReports, progress: renderProgress,
+  certtemplates: renderCertTemplates,
   assessment: renderAssessment, analytics: renderAnalytics,
   settings: renderSettings, lessons: renderLessons,
   videos: renderVideoAlerts, logs: renderLogs, trash: renderTrash
@@ -2739,34 +2740,40 @@ function submissionRow(s) {
       '<div style="white-space:pre-wrap;margin-top:6px">' + esc(s.text || '') + '</div>' +
     '</details></td></tr>';
 }
-async function renderReports() {
-  const v = $('view-reports');
+/* Two separate reports, as two separate menu items:
+     Students list & search  — every learner with class, supervisor, account and
+                               self-assessment, searchable and filterable.
+     Submission reports      — every piece of work (with copy detection and
+                               export), searchable and filterable.
+   They shared one screen before; splitting keeps each one readable at a glance. */
+async function renderStudentList() {
+  const v = $('view-students');
+  if (!v) return;
   v.innerHTML = loadMsg();
-  const params = [];
-  if (S.rpFlagged) params.push('flagged=1');
-  if (S.rpType) params.push('type=' + encodeURIComponent(S.rpType));
   const rosterParams = [];
   if (S.rpSupervisorId) rosterParams.push('supervisorId=' + encodeURIComponent(S.rpSupervisorId));
-  let subs = [], roster = { students: [], supervisors: [] };
+  let roster = { students: [], supervisors: [] };
   let assessmentRows = [], assessCats = [];
   try {
     const results = await Promise.all([
-      API.get('/super/submissions' + (params.length ? '?' + params.join('&') : '')),
       API.get('/reports/student-roster' +
         (rosterParams.length ? '?' + rosterParams.join('&') : '')),
       API.get('/reports/students')
     ]);
-    const d = results[0];
-    subs = d.submissions || [];
-    roster = results[1];
-    assessmentRows = results[2].students || [];
-    assessCats = results[2].assessmentCategories || [];
+    roster = results[0];
+    assessmentRows = results[1].students || [];
+    assessCats = results[1].assessmentCategories || [];
   } catch (e) { v.innerHTML = errBox(e); return; }
   const assessmentById = {};
   assessmentRows.forEach(function (s) { assessmentById[s.id] = s.assessment; });
+  window.__studentsListState = { roster: roster, assessmentById: assessmentById, assessCats: assessCats, v: v };
+  renderStudentListTable();
+}
 
-  const rows = subs.length ? subs.map(submissionRow).join('')
-    : '<tr><td colspan="7" class="muted">No submissions match this filter.</td></tr>';
+function renderStudentListTable() {
+  const st = window.__studentsListState;
+  if (!st) return;
+  const v = st.v, roster = st.roster, assessmentById = st.assessmentById, assessCats = st.assessCats;
   const studentRows = roster.students.length ? roster.students.map(function (s) {
     const assignment = s.supervisorWaitlisted ? '<span class="badge warn">WAITLISTED</span>'
       : s.supervisorName ? esc(s.supervisorName) : '<span class="badge off">NOT ASSIGNED</span>';
@@ -2785,10 +2792,11 @@ async function renderReports() {
         ' (' + s.studentCount + ')';
       return selectOption(s.id, label, S.rpSupervisorId, false);
     }).join('');
-
-  v.innerHTML = '<h2>Reports</h2>' +
-    '<div class="card"><h3>Students list</h3><p class="muted">View learners with their class and assigned supervisor, across all accounts or for one supervisor.</p>' +
-      '<div class="row" style="align-items:flex-end"><div><label>Students</label><select id="rpSupervisor">' +
+  v.innerHTML = '<h2>Students list &amp; search</h2>' +
+    '<div class="card"><h3>Every learner</h3>' +
+      '<p class="muted">Learners with their class and assigned supervisor, across all accounts or for ' +
+      'one supervisor. Search by name, student number, class, supervisor or account.</p>' +
+      '<div class="row" style="align-items:flex-end"><div><label>Supervisor</label><select id="rpSupervisor">' +
         supervisorOptions + '</select></div><div><label>Search students</label>' +
         '<input type="text" id="rpRosterSearch" placeholder="Name, student number, class, supervisor, account…" value="' +
         esc(S.rpRosterSearch) + '"></div><div class="fixed" style="padding-bottom:10px">' +
@@ -2797,14 +2805,47 @@ async function renderReports() {
       '<div class="table-wrap"><table id="rpRosterTable"><thead><tr>' +
         '<th>Student</th><th>Student number</th><th>Class</th><th>Supervisor</th><th>Account</th>' +
         '<th>Self-assessment</th><th>Status</th>' +
-      '</tr></thead><tbody>' + studentRows + '</tbody></table></div></div>' +
-    '<div class="card"><div class="row" style="align-items:flex-end">' +
+      '</tr></thead><tbody>' + studentRows + '</tbody></table></div></div>';
+  $('rpRosterSearch').addEventListener('input', function () {
+    S.rpRosterSearch = this.value;
+    applyTableSearch('rpRosterTable', 'rpRosterSearch');
+  });
+  applyTableSearch('rpRosterTable', 'rpRosterSearch');
+  v.onclick = function (e) {
+    const assess = e.target.closest('[data-assessment]');
+    if (!assess) return;
+    e.preventDefault();
+    openAssessmentModal(assess.dataset.assessment);
+  };
+}
+
+async function renderSubmissionReports() {
+  const v = $('view-reports');
+  if (!v) return;
+  v.innerHTML = loadMsg();
+  const params = [];
+  if (S.rpFlagged) params.push('flagged=1');
+  if (S.rpType) params.push('type=' + encodeURIComponent(S.rpType));
+  let subs = [];
+  try {
+    const d = await API.get('/super/submissions' + (params.length ? '?' + params.join('&') : ''));
+    subs = d.submissions || [];
+  } catch (e) { v.innerHTML = errBox(e); return; }
+
+  const rows = subs.length ? subs.map(submissionRow).join('')
+    : '<tr><td colspan="7" class="muted">No submissions match this filter.</td></tr>';
+
+  v.innerHTML = '<h2>Submission reports</h2>' +
+    '<div class="card"><h3>Every piece of work</h3>' +
+      '<p class="muted">Search all submissions by name, email, chapter, book or text; show only the ' +
+      'ones that look copied; and export the result to print, PDF, Excel or Word.</p>' +
+      '<div class="row" style="align-items:flex-end">' +
       '<div style="min-width:220px"><label>Search reports</label>' +
         '<input type="text" id="rpSearch" placeholder="Name, email, chapter, book, text…" value="' +
         esc(S.rpSearch) + '"></div>' +
       '<div class="fixed" style="padding-bottom:10px">' +
         '<label style="margin:0"><input type="checkbox" id="rpFlagged"' +
-          (S.rpFlagged ? ' checked' : '') + '> Flagged only</label></div>' +
+          (S.rpFlagged ? ' checked' : '') + '> Flagged (copy) only</label></div>' +
       '<div><label>Submission type</label><select id="rpType">' +
         '<option value="">All types</option>' +
         '<option value="chapter_summary"' + (S.rpType === 'chapter_summary' ? ' selected' : '') +
@@ -2826,19 +2867,246 @@ async function renderReports() {
     S.rpSearch = this.value;
     applyTableSearch('rpTable', 'rpSearch');
   });
-  $('rpRosterSearch').addEventListener('input', function () {
-    S.rpRosterSearch = this.value;
-    applyTableSearch('rpRosterTable', 'rpRosterSearch');
-  });
   applyTableSearch('rpTable', 'rpSearch');
-  applyTableSearch('rpRosterTable', 'rpRosterSearch');
-  v.onclick = function (e) {
-    const assess = e.target.closest('[data-assessment]');
-    if (!assess) return;
-    e.preventDefault();
-    openAssessmentModal(assess.dataset.assessment);
-  };
 }
+/* ============================================ certificate templates ======= */
+/* 120 designs (12 layouts x 10 palettes, see certificates.js). The super admin
+   picks the design for a given YEAR and may override it for one module ("level")
+   in that year; he also writes every word on the sheet and adds or removes free
+   lines. The preview uses the same renderer the learner and admin see. */
+async function renderCertTemplates() {
+  const v = $('view-certtemplates');
+  if (!v) return;
+  v.innerHTML = loadMsg();
+  let d;
+  try { d = await API.get('/super/certificate-templates'); }
+  catch (e) { v.innerHTML = errBox(e); return; }
+  S.certCfg = d.config || {};
+  S.certYearsList = d.years || [];
+  S.certModules = d.modules || [];
+  const years = S.certYearsList.length ? S.certYearsList : [String(new Date().getFullYear())];
+  if (!S.certYear || years.indexOf(String(S.certYear)) === -1) {
+    S.certYear = years[years.length - 1];
+  }
+  const byYear = (S.certCfg.byYear || {})[S.certYear] || { default: '', modules: {} };
+  const texts = S.certCfg.texts || {};
+  const blocks = S.certCfg.extraBlocks || [];
+
+  const templateOptions = function (selected, blankLabel) {
+    let html = '<option value="">' + esc(blankLabel || '— programme default —') + '</option>';
+    CERT_PALETTES.forEach(function (p) {
+      html += '<optgroup label="' + esc(p.name) + '">';
+      CERT_LAYOUTS.forEach(function (l) {
+        const id = 'tpl_' + p.id + '_' + l.id;
+        html += '<option value="' + esc(id) + '"' +
+          (String(selected) === id ? ' selected' : '') + '>' + esc(l.name) + '</option>';
+      });
+      html += '</optgroup>';
+    });
+    return html;
+  };
+  const textField = function (key, label, hint) {
+    return '<div><label>' + esc(label) + '</label>' +
+      '<input type="text" data-cert-text="' + esc(key) + '" value="' +
+      esc(texts[key] == null ? (CERT_DEFAULT_TEXTS[key] || '') : texts[key]) + '"' +
+      (hint ? ' placeholder="' + esc(hint) + '"' : '') + '></div>';
+  };
+  const moduleRows = (S.certModules || []).map(function (m) {
+    const picked = (byYear.modules || {})[m.id] || '';
+    return '<tr><td><b>' + esc(m.title || m.id) + '</b>' +
+      '<div class="small muted">' + esc(m.certificateName || '') + '</div></td>' +
+      '<td><select data-cert-module="' + esc(m.id) + '">' +
+        templateOptions(picked, '— use the year’s design —') + '</select></td></tr>';
+  }).join('');
+  S.certHelpers = { templateOptions: templateOptions, textField: textField, moduleRows: moduleRows, years: years, byYear: byYear, blocks: blocks };
+  certRenderTemplatesBody();
+}
+
+/* The body of the certificate-templates screen (drawn from S.certHelpers). */
+function certRenderTemplatesBody() {
+  const v = $('view-certtemplates');
+  const h = S.certHelpers || {};
+  const years = h.years || [];
+  const byYear = h.byYear || { default: '', modules: {} };
+  const blocks = h.blocks || [];
+  const cfg = S.certCfg || {};
+  v.innerHTML = '<h2>Certificate templates</h2>' +
+    '<div class="grid cols-2">' +
+      '<div>' +
+        '<div class="card"><h3>Year</h3>' +
+          '<p class="muted small">A certificate uses the design of the year it was issued in.</p>' +
+          '<div class="row" style="align-items:flex-end"><div><label>Year</label>' +
+            '<select id="certYear">' + years.map(function (y) {
+              return '<option value="' + esc(y) + '"' + (String(y) === String(S.certYear) ? ' selected' : '') +
+                '>' + esc(y) + '</option>';
+            }).join('') + '</select></div>' +
+          '<div><label>Add another year</label>' +
+            '<input type="number" id="certNewYear" min="2000" max="2100" placeholder="2027"></div>' +
+          '<div class="fixed" style="padding-bottom:10px">' +
+            '<button type="button" class="ghost" id="certAddYear">Add year</button></div></div>' +
+        '</div>' +
+        '<div class="card"><h3>Design for ' + esc(S.certYear) + '</h3>' +
+          '<label>Design used across this year</label>' +
+          '<select id="certYearDefault">' + h.templateOptions(byYear.default || '', '— programme default —') + '</select>' +
+          '<p class="muted small mt">Leave a module on “use the year’s design” unless that level or module ' +
+          'needs its own look.</p>' +
+          '<label>Programme default design</label>' +
+          '<select id="certDefault">' + h.templateOptions(cfg.defaultTemplate || '', '— none —') + '</select>' +
+        '</div>' +
+        '<div class="card"><h3>Design per level / module</h3>' +
+          ((S.certModules || []).length
+            ? '<div class="table-wrap"><table><thead><tr><th>Module</th><th>Design</th></tr></thead><tbody>' +
+              h.moduleRows + '</tbody></table></div>'
+            : '<p class="muted">No modules yet — create one in <b>Modules</b> first.</p>') +
+        '</div>' +
+        '<div class="card"><h3>Words on the certificate</h3>' +
+          '<p class="muted small">Leave a box empty to use the default wording.</p>' +
+          '<div class="grid cols-2">' +
+            h.textField('title', 'Heading', 'Certificate of Completion') +
+            h.textField('subtitle', 'Sub-heading (optional)') +
+            h.textField('presentedTo', '“Presented to” line') +
+            h.textField('completion', 'Completion line') +
+            h.textField('performanceLabel', 'Performance label') +
+            h.textField('signLeftLabel', 'Left signature label') +
+            h.textField('signRightLabel', 'Right signature label') +
+            h.textField('footerNote', 'Footer note (optional)') +
+          '</div></div>' +
+        '<div class="card"><h3>Extra lines</h3>' +
+          '<p class="muted small">Free lines printed under the completion list — a motto, a scripture, a ' +
+          'note about the award.</p>' +
+          '<div id="certBlocks">' + (blocks.length ? blocks.map(function (b, i) {
+            const id = b.id || ('blk_' + i);
+            return '<div class="opt-row"><input type="text" data-cert-block="' + esc(id) +
+              '" value="' + esc(b.text || '') + '" placeholder="e.g. “Well done, good and faithful servant.”">' +
+              '<button type="button" class="small danger" data-cert-rmblock="' + esc(id) +
+              '">Remove</button></div>';
+          }).join('') : '<p class="muted small">No extra lines.</p>') + '</div>' +
+          '<div class="mt"><button type="button" class="ghost small" id="certAddBlock">Add a line</button></div>' +
+        '</div>' +
+        '<div class="card"><button type="button" id="certSave">Save certificate settings</button></div>' +
+      '</div>' +
+      '<div><div class="card"><h3>Preview</h3>' +
+        '<p class="muted small">Sample data, drawn exactly as the learner and the account admin see it. ' +
+        'The school logo sits on the left and the programme logo on the right.</p>' +
+        '<div id="certPreview" style="overflow:auto"></div>' +
+      '</div></div>' +
+    '</div>';
+  certWireTemplates();
+}
+
+/* Event wiring for the certificate-templates screen. */
+function certWireTemplates() {
+  const v = $('view-certtemplates');
+  if (!v) return;
+  if (typeof certEnsureStyles === 'function') certEnsureStyles();
+  certPreviewRefresh();
+  v.querySelectorAll('#certYearDefault,#certDefault,[data-cert-module],[data-cert-text],[data-cert-block]')
+    .forEach(function (el) {
+      el.addEventListener('input', certPreviewRefresh);
+      el.addEventListener('change', certPreviewRefresh);
+    });
+  const yearSel = $('certYear');
+  if (yearSel) yearSel.addEventListener('change', function () {
+    S.certYear = this.value;
+    renderCertTemplates();
+  });
+  const addYear = $('certAddYear');
+  if (addYear) addYear.addEventListener('click', function () {
+    const y = String(($('certNewYear') || {}).value || '').trim();
+    if (!/^\d{4}$/.test(y)) { toast('Type a four-digit year', 'err'); return; }
+    if (S.certYearsList.indexOf(y) === -1) S.certYearsList.push(y);
+    S.certYear = y;
+    renderCertTemplates();
+  });
+  const addBlock = $('certAddBlock');
+  if (addBlock) addBlock.addEventListener('click', function () {
+    certCollectSettings();
+    S.certCfg.extraBlocks = (S.certCfg.extraBlocks || [])
+      .concat([{ id: 'blk_' + Date.now().toString(36), text: '' }]);
+    renderCertTemplates();
+  });
+  v.querySelectorAll('[data-cert-rmblock]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      certCollectSettings();
+      S.certCfg.extraBlocks = (S.certCfg.extraBlocks || []).filter(function (b) {
+        return String(b.id) !== String(btn.dataset.certRmblock);
+      });
+      renderCertTemplates();
+    });
+  });
+  const save = $('certSave');
+  if (save) save.addEventListener('click', saveCertTemplates);
+}
+
+/* Read the form into S.certCfg without saving, so add/remove keeps the typing. */
+function certCollectSettings() {
+  const cfg = S.certCfg || {};
+  cfg.byYear = cfg.byYear || {};
+  const year = String(S.certYear || '');
+  const entry = cfg.byYear[year] || { default: '', modules: {} };
+  const yearDefault = $('certYearDefault');
+  if (yearDefault) entry.default = yearDefault.value || '';
+  entry.modules = {};
+  document.querySelectorAll('[data-cert-module]').forEach(function (sel) {
+    if (sel.value) entry.modules[sel.dataset.certModule] = sel.value;
+  });
+  cfg.byYear[year] = entry;
+  const def = $('certDefault');
+  if (def) cfg.defaultTemplate = def.value || '';
+  cfg.texts = {};
+  document.querySelectorAll('[data-cert-text]').forEach(function (el) {
+    cfg.texts[el.dataset.certText] = el.value;
+  });
+  cfg.extraBlocks = [];
+  document.querySelectorAll('[data-cert-block]').forEach(function (el) {
+    if (String(el.value || '').trim()) cfg.extraBlocks.push({ id: el.dataset.certBlock, text: el.value });
+  });
+  S.certCfg = cfg;
+  return cfg;
+}
+
+function certPreviewRefresh() {
+  const box = $('certPreview');
+  if (!box || typeof certificateSheetHtml !== 'function') return;
+  const cfg = certCollectSettings();
+  const yearEntry = ((cfg.byYear || {})[String(S.certYear)] || {});
+  const firstModule = (S.certModules || [])[0];
+  const modTpl = firstModule ? ((yearEntry.modules || {})[firstModule.id] || '') : '';
+  const templateId = modTpl || yearEntry.default || cfg.defaultTemplate || '';
+  box.innerHTML = certificateSheetHtml({
+    templateId: templateId,
+    texts: cfg.texts,
+    extraBlocks: cfg.extraBlocks,
+    schoolLogo: null,
+    programLogo: cfg.programLogo || null,
+    data: {
+      title: (cfg.texts && cfg.texts.title) || 'Certificate of Completion',
+      userName: 'Jane Student',
+      tenantName: 'Greenfield Academy',
+      books: ['The Foundation of Character', 'Roots of Righteous Living'],
+      performance: 87,
+      objectiveScore: 92,
+      code: 'CBP-2026-0001',
+      issuedAt: new Date().toISOString(),
+      moduleId: firstModule ? firstModule.id : null
+    }
+  });
+}
+
+async function saveCertTemplates() {
+  const cfg = certCollectSettings();
+  try {
+    const r = await API.put('/super/certificate-templates', {
+      defaultTemplate: cfg.defaultTemplate || '',
+      byYear: cfg.byYear || {},
+      texts: cfg.texts || {},
+      extraBlocks: cfg.extraBlocks || []
+    });
+    S.certCfg = r.config || cfg;
+    toast('Certificate settings saved', 'ok');
+  } catch (e) { fail(e); }
+}
+
 /* ================================================== self-assessment ====== */
 /* The learner form is generated from this definition, so edits here change
    the pre/post assessment in every account immediately. */
@@ -3668,17 +3936,17 @@ function onChange(e) {
   }
   if (id === 'rpFlagged') {
     S.rpFlagged = e.target.checked;
-    renderReports();
+    renderSubmissionReports();
     return;
   }
   if (id === 'rpType') {
     S.rpType = e.target.value;
-    renderReports();
+    renderSubmissionReports();
     return;
   }
   if (id === 'rpSupervisor') {
     S.rpSupervisorId = e.target.value;
-    renderReports();
+    renderStudentList();
     return;
   }
   const previews = {

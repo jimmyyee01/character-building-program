@@ -1519,24 +1519,28 @@ async function issueCertificate(moduleId, videoId) {
   } catch (e) { toast(e.message, 'err'); }
 }
 
-function learnerCertSheet(c, b) {
+/* The learner's certificate is drawn by the shared renderer with the design and
+   wording the super admin chose (see certificates.js); the fallback keeps a
+   plain sheet if that module is missing. */
+function learnerCertSheet(c, b, cfg) {
   b = b || {};
-  const booksHtml = (c.books && c.books.length)
-    ? '<b>Books attended:</b><ul>' + c.books.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>'
-    : '';
-  return '<div class="cert-sheet">' +
-    '<h1>' + esc(c.title) + '</h1>' +
-    '<p>This certificate is proudly presented to</p>' +
-    '<div class="name">' + esc(c.userName) + '</div>' +
-    '<p class="muted">' + esc(c.tenantName || '') + '</p>' +
-    '<div class="books">' + booksHtml +
-      (c.bestBook ? '<div><b>Best book:</b> ' + esc(c.bestBook) + '</div>' : '') +
-      '<div class="mt"><b>Performance:</b> ' + esc(String(c.performance)) + '%' +
-      (c.objectiveScore != null ? ' — objectives ' + esc(String(c.objectiveScore)) + '%' : '') + '</div>' +
-    '</div>' +
-    '<div class="foot"><span>Certificate code: <b>' + esc(c.code) + '</b></span>' +
-    '<span>Issued: ' + fmtDate(c.issuedAt) + '</span></div>' +
-  '</div>';
+  cfg = cfg || {};
+  if (typeof certificateSheetHtml !== 'function') {
+    return '<div class="cert-sheet"><h1>' + esc(c.title) + '</h1>' +
+      '<div class="name">' + esc(c.userName) + '</div>' +
+      '<div class="mt"><b>Performance:</b> ' + esc(String(c.performance)) + '%</div>' +
+      '<div class="foot"><span>Certificate code: <b>' + esc(c.code) + '</b></span>' +
+      '<span>Issued: ' + fmtDate(c.issuedAt) + '</span></div></div>';
+  }
+  if (typeof certEnsureStyles === 'function') certEnsureStyles();
+  return certificateSheetHtml({
+    templateId: cfg.templateId,
+    texts: cfg.texts,
+    extraBlocks: cfg.extraBlocks,
+    schoolLogo: cfg.schoolLogo || b.tenantLogo || null,
+    programLogo: cfg.programLogo || b.programLogo || null,
+    data: Object.assign({}, c, { tenantName: cfg.tenantName || c.tenantName || b.tenantName })
+  });
 }
 function learnerTranscriptSheet(c) {
   const transcript = Array.isArray(c.transcript) ? c.transcript : [];
@@ -1563,13 +1567,17 @@ async function showCertificate(id) {
     const c = data.certificate;
     let qr = null;
     try { qr = await API.get('/certificates/' + encodeURIComponent(id) + '/qr'); } catch (e) { qr = null; }
+    /* the design and wording chosen for this certificate's year and module */
+    let cfg = null;
+    try { cfg = await API.get('/certificates/' + encodeURIComponent(id) + '/config'); }
+    catch (e) { cfg = null; }
     const qrImg = qr && qr.qr
       ? '<div style="position:absolute;left:14px;bottom:14px;background:#fff;padding:4px;border:1px solid #ddd;border-radius:6px"><img src="' + esc(qr.qr) + '" style="width:110px;height:110px" alt="Certificate QR"></div>'
       : '';
     const general = c.type === 'general';
     const certificateTitle = general ? 'Graduation certificate' : c.title;
     const output = '<div class="card"><div id="certificatePrint" style="position:relative">' +
-      learnerCertSheet(c, data.branding) + qrImg + '</div>' +
+      learnerCertSheet(c, data.branding, cfg) + qrImg + '</div>' +
       '<div class="mt center no-print"><div class="row export-buttons" data-target="#certificatePrint">' +
       '<button type="button" class="ghost" data-record="certificatePrint" data-title="' + esc(certificateTitle) + '">Print certificate</button>' +
       '<button type="button" class="ghost" data-record="certificatePrint" data-title="' + esc(certificateTitle) + '">Save certificate as PDF</button>' +
@@ -1598,7 +1606,9 @@ function printLearnerRecord(id, title) {
     'table{width:100%;border-collapse:collapse;margin:18px 0}th,td{border:1px solid #999;padding:8px;text-align:left}' +
     '.cert-sheet{border:8px double #b99a48;padding:40px;text-align:center;min-height:480px}' +
     '.cert-sheet h1{font:700 30px Georgia,serif}.cert-sheet .name{font:700 28px Georgia,serif;margin:20px}' +
-    '.cert-sheet .foot{display:flex;justify-content:space-between;margin-top:30px}</style></head><body>' +
+    '.cert-sheet .foot{display:flex;justify-content:space-between;margin-top:30px}' +
+    (typeof CERT_TEMPLATE_CSS === 'string' ? CERT_TEMPLATE_CSS : '') +
+    '</style></head><body>' +
     source.innerHTML + '</body></html>');
   d.close();
   win.focus();
@@ -1613,7 +1623,10 @@ async function exportAllCertificates(type) {
     for (let i = 0; i < list.length; i++) {
       try {
         const d = await API.get('/certificate/' + encodeURIComponent(list[i].id));
-        sheets += '<div class="cert-page">' + learnerCertSheet(d.certificate, d.branding) + '</div>';
+        let cfg = null;
+        try { cfg = await API.get('/certificates/' + encodeURIComponent(list[i].id) + '/config'); }
+        catch (e2) { cfg = null; }
+        sheets += '<div class="cert-page">' + learnerCertSheet(d.certificate, d.branding, cfg) + '</div>';
       } catch (e) { /* skip anything that cannot be loaded */ }
     }
     if (!sheets) { toast('Could not load the certificates', 'err'); return; }
