@@ -2621,6 +2621,9 @@ function setView(name) {
   document.querySelectorAll('#nav .nav-btn').forEach(function (b) {
     b.classList.toggle('active', b.dataset.view === name);
   });
+  /* open the dropdown that holds the view, and hide a heading whose items are
+     all hidden from this role */
+  if (typeof syncNavGroups === 'function') syncNavGroups(document.getElementById('nav'));
   document.querySelectorAll('.view').forEach(function (s) {
     s.classList.toggle('active', s.id === 'view-' + name);
   });
@@ -2689,6 +2692,7 @@ async function boot() {
     });
     document.getElementById('navUsers').textContent = 'My Users';
   }
+  if (typeof wireNavGroups === 'function') wireNavGroups(document.getElementById('nav'));
   document.getElementById('nav').onclick = function (e) {
     const b = e.target.closest('.nav-btn');
     if (b && b.dataset.view) setView(b.dataset.view);

@@ -332,6 +332,66 @@ function fileToBase64(file) {
     r.readAsDataURL(file);
   });
 }
+/* ================================================ collapsible side menu ==== */
+/* A sidebar menu is a set of dropdown groups. Clicking a heading opens or closes
+   its items; the choice is remembered per page, so a person who closes a group
+   finds it closed next time. The group that holds the view on screen is always
+   open, and a group whose items were all hidden by a role rule hides itself —
+   a supervisor never sees an empty heading. */
+function navGroupStoreKey() {
+  return 'cbp_nav_groups:' + location.pathname;
+}
+function readNavGroupState() {
+  try { return JSON.parse(localStorage.getItem(navGroupStoreKey()) || '{}') || {}; }
+  catch (e) { return {}; }
+}
+function writeNavGroupState(state) {
+  try { localStorage.setItem(navGroupStoreKey(), JSON.stringify(state || {})); }
+  catch (e) { /* private mode: the menu still works, it just forgets */ }
+}
+function wireNavGroups(root) {
+  root = root || document;
+  const groups = Array.prototype.slice.call(root.querySelectorAll('.nav-group'));
+  if (!groups.length) return;
+  const state = readNavGroupState();
+  groups.forEach(function (g) {
+    const id = g.dataset.group || '';
+    const head = g.querySelector('.nav-group-head');
+    if (!head) return;
+    /* the current view always opens its group, whatever was remembered */
+    const holdsActive = !!g.querySelector('.nav-btn.active');
+    const open = holdsActive ? true
+      : Object.prototype.hasOwnProperty.call(state, id) ? !!state[id] : true;
+    g.classList.toggle('open', open);
+    head.setAttribute('aria-expanded', open ? 'true' : 'false');
+    head.addEventListener('click', function () {
+      const next = !g.classList.contains('open');
+      g.classList.toggle('open', next);
+      head.setAttribute('aria-expanded', next ? 'true' : 'false');
+      state[id] = next;
+      writeNavGroupState(state);
+    });
+  });
+  syncNavGroups(root);
+}
+/* Called whenever the view changes: open the group that holds it, and hide a
+   heading whose every item is hidden. */
+function syncNavGroups(root) {
+  root = root || document;
+  Array.prototype.slice.call(root.querySelectorAll('.nav-group')).forEach(function (g) {
+    const items = Array.prototype.slice.call(g.querySelectorAll('.nav-btn'));
+    const visible = items.filter(function (b) { return !b.classList.contains('hidden'); });
+    if (items.length && !visible.length) g.classList.add('hidden');
+    else g.classList.remove('hidden');
+    const active = g.querySelector('.nav-btn.active');
+    if (active) {
+      g.classList.add('open');
+      const head = g.querySelector('.nav-group-head');
+      if (head) head.setAttribute('aria-expanded', 'true');
+    }
+  });
+}
+
 /* ================================================ library media helpers ==== */
 /* Every video/audio container the server will serve with a proper MIME type.
    A browser still decides what it can decode — anything else is offered as a

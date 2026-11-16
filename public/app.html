@@ -1,10 +1,10 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>My Program</title>
-<link rel="stylesheet" href="/css/style.css?v=74">
+<link rel="stylesheet" href="/css/style.css?v=77">
 </head>
 <body>
 <div class="app-shell">
@@ -13,17 +13,45 @@
       <img id="sideLogo" class="hidden" alt="">
       <b id="sideName">Character Building</b>
     </div>
-    <div class="sec">Program</div>
-    <button data-view="home" class="active">Dashboard</button>
-    <button data-view="modules">My Modules</button>
-    <button data-view="lessons">Live Lessons</button>
-    <div class="sec">Video menu</div>
-    <div id="videoMenu"><span class="small" style="color:#8ea2c6">Loading…</span></div>
-    <div class="sec">Library</div>
-    <button data-view="library">Books &amp; Letters</button>
-    <div class="sec">Records</div>
-    <button data-view="certificates">Certificates</button>
-    <button data-view="final" id="finalBtn">Final Records</button>
+
+    <div class="nav-group open" data-group="program">
+      <button type="button" class="nav-group-head" aria-expanded="true">
+        <span class="nav-group-title">Program</span><span class="nav-group-caret">â–¾</span>
+      </button>
+      <div class="nav-group-body">
+        <button data-view="home" class="active nav-btn">Dashboard</button>
+        <button data-view="modules" class="nav-btn">My Modules</button>
+        <button data-view="lessons" class="nav-btn">Live Lessons</button>
+      </div>
+    </div>
+
+    <div class="nav-group open" data-group="videos">
+      <button type="button" class="nav-group-head" aria-expanded="true">
+        <span class="nav-group-title">Video menu</span><span class="nav-group-caret">â–¾</span>
+      </button>
+      <div class="nav-group-body">
+        <div id="videoMenu"><span class="small" style="color:#8ea2c6">Loadingâ€¦</span></div>
+      </div>
+    </div>
+
+    <div class="nav-group open" data-group="library">
+      <button type="button" class="nav-group-head" aria-expanded="true">
+        <span class="nav-group-title">Library</span><span class="nav-group-caret">â–¾</span>
+      </button>
+      <div class="nav-group-body">
+        <button data-view="library" class="nav-btn">Books &amp; Letters</button>
+      </div>
+    </div>
+
+    <div class="nav-group open" data-group="records">
+      <button type="button" class="nav-group-head" aria-expanded="true">
+        <span class="nav-group-title">Records</span><span class="nav-group-caret">â–¾</span>
+      </button>
+      <div class="nav-group-body">
+        <button data-view="certificates" class="nav-btn">Certificates</button>
+        <button data-view="final" id="finalBtn" class="nav-btn">Final Records</button>
+      </div>
+    </div>
 
     <div style="flex:1"></div>
     <button id="logoutBtn">Log out</button>
@@ -47,7 +75,7 @@
 <div id="pinnedVideo" class="pinned-video hidden">
   <video id="pinnedPlayer" controls playsinline></video>
   <div class="bar">
-    <span>Video (minimised) — read the letter</span>
+    <span>Video (minimised) â€” read the letter</span>
     <span>
       <button id="pinExpand" class="small ghost">Expand</button>
       <button id="pinClose" class="small">Close</button>
@@ -55,7 +83,7 @@
   </div>
 </div>
 
-<script src="/js/common.js?v=76"></script>
-<script src="/js/app.js?v=76"></script>
+<script src="/js/common.js?v=77"></script>
+<script src="/js/app.js?v=77"></script>
 </body>
 </html>

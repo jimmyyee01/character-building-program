@@ -96,6 +96,8 @@ function showView(name) {
   for (let i = 0; i < btns.length; i++) {
     btns[i].classList.toggle('active', btns[i].dataset.view === name);
   }
+  /* the dropdown that holds the view just opened stays open */
+  if (typeof syncNavGroups === 'function') syncNavGroups(document.querySelector('.side'));
   const secs = document.querySelectorAll('.main section');
   for (let i = 0; i < secs.length; i++) {
     secs[i].classList.toggle('hidden', secs[i].id !== 'view-' + name);
@@ -116,6 +118,7 @@ async function init() {
 function startApp(user) {
   showApp();
   $('whoName').textContent = (user && (user.fullName || user.username)) || 'Super admin';
+  if (typeof wireNavGroups === 'function') wireNavGroups(document.querySelector('.side'));
   if (typeof initCommunicationWidget === 'function') initCommunicationWidget();
   showView(S.view);
   loadProgramBrand();

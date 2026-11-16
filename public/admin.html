@@ -1,10 +1,10 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Admin Console</title>
-<link rel="stylesheet" href="/css/style.css?v=74">
+<link rel="stylesheet" href="/css/style.css?v=77">
 <style>
   .view { display: none; }
   .view.active { display: block; }
@@ -46,18 +46,56 @@
 <div class="shell">
   <aside class="side">
     <nav id="nav">
-      <button type="button" class="nav-btn active" data-view="dashboard">Dashboard</button>
-      <button type="button" class="nav-btn" data-view="users" id="navUsers">Users</button>
-      <button type="button" class="nav-btn admin-only" data-view="supervisors">Supervisors</button>
-      <button type="button" class="nav-btn admin-only" data-view="library">Library</button>
-      <button type="button" class="nav-btn admin-only" data-view="books">Modules &amp; Books</button>
-      <button type="button" class="nav-btn" data-view="submissions">Submissions</button>
-      <button type="button" class="nav-btn" data-view="certificates">Certificates</button>
-      <button type="button" class="nav-btn" data-view="analytics">Analytics</button>
-      <button type="button" class="nav-btn" data-view="progress">Student progress</button>
-      <button type="button" class="nav-btn" data-view="lessons">Live classes</button>
-      <button type="button" class="nav-btn admin-only" data-view="branding">Branding</button>
+      <div class="nav-group open" data-group="overview">
+        <button type="button" class="nav-group-head" aria-expanded="true">
+          <span class="nav-group-title">Overview</span><span class="nav-group-caret">â–¾</span>
+        </button>
+        <div class="nav-group-body">
+          <button type="button" class="nav-btn active" data-view="dashboard">Dashboard</button>
+          <button type="button" class="nav-btn" data-view="analytics">Analytics</button>
+        </div>
+      </div>
 
+      <div class="nav-group open" data-group="people">
+        <button type="button" class="nav-group-head" aria-expanded="true">
+          <span class="nav-group-title">People</span><span class="nav-group-caret">â–¾</span>
+        </button>
+        <div class="nav-group-body">
+          <button type="button" class="nav-btn" data-view="users" id="navUsers">Users</button>
+          <button type="button" class="nav-btn admin-only" data-view="supervisors">Supervisors</button>
+        </div>
+      </div>
+
+      <div class="nav-group open" data-group="content">
+        <button type="button" class="nav-group-head" aria-expanded="true">
+          <span class="nav-group-title">Learning content</span><span class="nav-group-caret">â–¾</span>
+        </button>
+        <div class="nav-group-body">
+          <button type="button" class="nav-btn admin-only" data-view="library">Library</button>
+          <button type="button" class="nav-btn admin-only" data-view="books">Modules &amp; Books</button>
+        </div>
+      </div>
+
+      <div class="nav-group open" data-group="work">
+        <button type="button" class="nav-group-head" aria-expanded="true">
+          <span class="nav-group-title">Work &amp; progress</span><span class="nav-group-caret">â–¾</span>
+        </button>
+        <div class="nav-group-body">
+          <button type="button" class="nav-btn" data-view="submissions">Submissions</button>
+          <button type="button" class="nav-btn" data-view="certificates">Certificates</button>
+          <button type="button" class="nav-btn" data-view="progress">Student progress</button>
+        </div>
+      </div>
+
+      <div class="nav-group open" data-group="account">
+        <button type="button" class="nav-group-head" aria-expanded="true">
+          <span class="nav-group-title">Classes &amp; account</span><span class="nav-group-caret">â–¾</span>
+        </button>
+        <div class="nav-group-body">
+          <button type="button" class="nav-btn" data-view="lessons">Live classes</button>
+          <button type="button" class="nav-btn admin-only" data-view="branding">Branding</button>
+        </div>
+      </div>
     </nav>
   </aside>
   <main class="main">
@@ -84,7 +122,7 @@
 <div id="modalRoot"></div>
 <div id="studentDetailModal" class="hidden"></div>
 
-<script src="/js/common.js?v=74"></script>
-<script src="/js/admin.js?v=74"></script>
+<script src="/js/common.js?v=77"></script>
+<script src="/js/admin.js?v=77"></script>
 </body>
 </html>

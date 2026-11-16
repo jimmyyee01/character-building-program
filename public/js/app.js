@@ -21,6 +21,8 @@ function show(view) {
   document.querySelectorAll('.app-side button[data-view]').forEach(function (b) {
     b.classList.toggle('active', b.dataset.view === view);
   });
+  /* the dropdown holding the new view opens itself */
+  if (typeof syncNavGroups === 'function') syncNavGroups(document.querySelector('.app-side'));
   window.scrollTo(0, 0);
 
   if (view === 'lessons') {
@@ -214,6 +216,8 @@ document.querySelectorAll('.app-side button[data-view]').forEach(function (b) {
   b.onclick = function () { openView(b.dataset.view); };
 });
 $('logoutBtn').onclick = function () { API.logout(); };
+/* the learner's side menu is a set of dropdowns too */
+if (typeof wireNavGroups === 'function') wireNavGroups(document.querySelector('.app-side'));
 
 async function openView(view) {
   show(view);

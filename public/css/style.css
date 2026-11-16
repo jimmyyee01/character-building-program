@@ -44,6 +44,31 @@ img { max-width: 100%; }
 .assess-refl-text { font-weight: 600; margin-bottom: 6px; }
 .assess-refl-q .assess-input { min-height: 80px; }
 
+/* ================================================== collapsible side menu == */
+/* Every console and the learner app group their menu items into dropdowns: the
+   heading toggles its items, the group holding the current view is always open,
+   and a group whose items were all hidden by a role rule hides itself. */
+.nav-group { margin-bottom: 4px; }
+.nav-group.hidden { display: none; }
+.nav-group-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; background: none; border: 0; cursor: pointer; text-align: left;
+  padding: 10px 12px; border-radius: 10px; font: inherit;
+  font-size: 11.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+  color: #6b7794;
+}
+.nav-group-head:hover { background: #eef2fa; color: var(--brand); }
+.nav-group-head:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.nav-group-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-group-caret { flex: 0 0 auto; font-size: 10px; line-height: 1; transition: transform .16s ease; }
+.nav-group.open > .nav-group-head .nav-group-caret { transform: rotate(180deg); }
+.nav-group-body { display: none; padding-left: 6px; }
+.nav-group.open > .nav-group-body { display: block; }
+/* the learner's dark sidebar */
+.app-side .nav-group-head { color: #8ea2c6; }
+.app-side .nav-group-head:hover { background: #1d2f55; color: #fff; }
+.app-side .nav-group-body { padding-left: 4px; }
+
 /* ========================================================== layout ====== */
 .topbar {
   background: linear-gradient(120deg, var(--brand-2), var(--brand));
