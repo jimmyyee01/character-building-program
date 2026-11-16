@@ -308,6 +308,7 @@ function userFormHtml(limit) {
 }
 let bulkRows = [];
 let bulkResult = null;
+let userEditState = null;
 
 function bulkDefaultRole() {
   const t = ME.portal ? ME.portal.type : null;
@@ -478,7 +479,9 @@ function usersTableHtml() {
     const supervisor = u.supervisorName || u.supervisorId ? esc(u.supervisorName || 'Assigned')
       : u.supervisorWaitlisted ? '<span class="badge off" title="No supervisor capacity is currently available">Waiting list</span>'
         : '—';
-    let acts = '<button type="button" class="ghost small" data-act="reset" data-id="' +
+    let acts = '<button type="button" class="ghost small" data-act="edit" data-id="' +
+      esc(u.id) + '">Edit</button> ' +
+      '<button type="button" class="ghost small" data-act="reset" data-id="' +
       esc(u.id) + '">Password</button> ';
     if (isAdmin()) {
       acts += '<button type="button" class="ghost small" data-act="toggle" data-id="' + esc(u.id) +
@@ -653,8 +656,85 @@ async function userRowClick(e) {
     if (!confirm('Move ' + u.fullName + ' to the Trash? The account is kept and the super admin can put it back.')) return;
     await API.del('/users/' + u.id);
     toast('User deleted', 'ok');
+  } else if (act === 'edit') {
+    openUserEdit(u);
+    return;
   }
   renderUsers();
+/* ---------- user (student) detail editing ----------- */
+
+function userEditHtml(u) {
+  const supOpts = [];
+  if (isAdmin() && supOverview && supOverview.supervisors) {
+    supOverview.supervisors.forEach(function (s) {
+      const label = (s.fullName || 'Supervisor') + (s.tenantName ? ' — ' + s.tenantName : '') + ' (' + s.users + '/' + s.limit + ')';
+      supOpts.push('<option value="' + esc(s.id) + '"' + (String(u.supervisorId) === String(s.id) ? ' selected' : '') + '>' + esc(label) + '</option>');
+    });
+  }
+  const supRow = (u.role === 'student' || u.role === 'teacher') && supOverview && supOverview.supervisors
+    ? '<div><label>Supervisor</label><select id="ueSup">' + supOpts.join('') + '</select></div>'
+    : '';
+  const roleLabel = '<p><b>Role:</b> ' + roleBadge(u.role) + '</p>';
+  return '<div class="card"><h3 id="ueTitle">Edit user</h3>' +
+    roleLabel +
+    '<form id="userEditForm"><div class="row">' +
+    '<div><label>Full name</label><input type="text" id="ueName" required value="' + esc(u.fullName || '') + '"></div>' +
+    '</div><div class="row" id="ueStudentRow"' + (u.role === 'student' ? '' : ' class="hidden"') + '>' +
+    '<div><label>Student number</label><input type="text" id="ueNumber" value="' + esc(u.studentNumber || '') + '"></div>' +
+    '<div><label>School class</label><input type="text" id="ueClass" placeholder="e.g. Grade 10A" value="' + esc(u.className || '') + '"></div>' +
+    '</div><div class="row" id="ueEmailRow"' + (u.role === 'student' ? ' class="hidden"' : '') + '>' +
+    '<div><label>Email</label><input type="email" id="ueEmail" value="' + esc(u.email || '') + '"></div>' +
+    '</div><div class="row">' + supRow +
+    '<div><label>Status</label><input type="checkbox" id="ueSuspended"' + (u.suspended ? ' checked' : '') + '> <span class="muted small">' + (u.suspended ? 'Suspended' : 'Active') + '</span></div>' +
+    '<div class="fixed"><button type="submit">Save changes</button></div>' +
+    '</div></form>' +
+    '<div class="fixed" style="padding-bottom:12px"><button type="button" class="ghost small" id="ueClose">Close</button></div>' +
+    '</div>';
+}
+
+function openUserEdit(u) {
+  const modal = document.getElementById('modalRoot');
+  if (!modal) { console.error('[openUserEdit] modalRoot missing'); return; }
+  modal.innerHTML = userEditHtml(u);
+  modal.classList.remove('hidden');
+  const ueClose = document.getElementById('ueClose');
+  if (ueClose) ueClose.addEventListener('click', closeUserEdit);
+  const ueForm = document.getElementById('userEditForm');
+  if (ueForm) ueForm.addEventListener('submit', saveUserEdit);
+}
+
+function closeUserEdit() {
+  const modal = document.getElementById('modalRoot');
+  if (modal) { modal.innerHTML = ''; modal.classList.add('hidden'); }
+  userEditState = null;
+}
+
+async function saveUserEdit(e) {
+  e.preventDefault();
+  const id = userEditState ? userEditState.id : null;
+  if (!id) { toast('Nothing to save', 'err'); return; }
+  const name = document.getElementById('ueName');
+  const num = document.getElementById('ueNumber');
+  const cls = document.getElementById('ueClass');
+  const email = document.getElementById('ueEmail');
+  const susp = document.getElementById('ueSuspended');
+  const payload = { fullName: name.value.trim() };
+  if (num && num.value.trim()) payload.studentNumber = num.value.trim();
+  if (cls && cls.value.trim()) payload.className = cls.value.trim();
+  if (email && email.value.trim()) payload.email = email.value.trim();
+  if (susp && susp.checked) payload.suspended = true;
+  try {
+    await API.put('/users/' + id, payload);
+    toast('User details saved', 'ok');
+    closeUserEdit();
+    renderUsers();
+  } catch (e2) {
+    toast(msg(e2), 'err');
+  }
+}
+
+/* ========================================================== supervisors ==== */
+
 }
 
 /* ========================================================== supervisors ==== */

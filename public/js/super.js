@@ -747,6 +747,83 @@ function closeStudentDetail() {
   if (modal) modal.classList.add('hidden');
 }
 
+/* ========================================================= students ======= */
+/* Edit the learner's profile details from the Students list. */
+
+function studentEditHtml(u) {
+  const supOpts = '<option value="">— assign automatically —</option>' +
+    ((S.studentEditState && S.studentEditState.supervisors) || []).map(function (s) {
+      const label = (s.fullName || 'Supervisor') + (s.tenantName ? ' — ' + s.tenantName : '') + ' (' + s.studentCount + ')';
+      return selectOption(s.id, label, String(u.supervisorId) || '', false);
+    }).join('');
+  return '<div class="card"><h3 id="seTitle">Edit student</h3>' +
+    '<form id="studentEditForm"><div class="row">' +
+    '<div><label>Full name</label><input type="text" id="seName" required value="' + esc(u.fullName || '') + '"></div>' +
+    '<div class="row" style="align-items:flex-end">' +
+    '<div><label>Student number</label><input type="text" id="seNumber" value="' + esc(u.studentNumber || '') + '" placeholder="e.g. STU-101"></div>' +
+    '<div><label>School class</label><input type="text" id="seClass" placeholder="e.g. Grade 10A" value="' + esc(u.className || '') + '"></div>' +
+    '</div></div>' +
+    '<div class="row">' +
+    '<div id="seEmailRow"><label>Email</label><input type="email" id="seEmail" value="' + esc(u.email || '') + '"></div>' +
+    '<div><label>Supervisor</label><select id="seSup">' + supOpts + '</select></div>' +
+    '</div><div class="row">' +
+    '<div><label>Status</label><input type="checkbox" id="seSuspended"> <span class="muted small" id="seSuspendedHint">' + (u.suspended ? 'Unsuspend' : 'Suspend') + '</span></div>' +
+    '<div class="fixed"><button type="submit">Save changes</button></div>' +
+    '</div></form>' +
+    '<div class="fixed" style="padding-bottom:12px"><button type="button" class="ghost small" id="seClose">Close</button></div>' +
+    '</div>';
+}
+
+function openStudentEdit(studentId) {
+  const st = window.__studentsListState;
+  if (!st || !st.roster) { toast('Student list is not available', 'err'); return; }
+  const u = st.roster.students.find(function (x) { return x.id === studentId; });
+  if (!u) { toast('Student not found', 'err'); return; }
+  S.studentEditState = { studentId: studentId, supervisors: st.roster.supervisors || [] };
+  const modal = document.getElementById('studentEditModal');
+  if (!modal) { console.error('[openStudentEdit] studentEditModal missing'); return; }
+  modal.innerHTML = studentEditHtml(u);
+  modal.classList.remove('hidden');
+  const seClose = document.getElementById('seClose');
+  if (seClose) seClose.addEventListener('click', closeStudentEdit);
+  const seForm = document.getElementById('studentEditForm');
+  if (seForm) seForm.addEventListener('submit', saveStudentEdit);
+}
+
+function closeStudentEdit() {
+  const modal = document.getElementById('studentEditModal');
+  if (modal) { modal.innerHTML = ''; modal.classList.add('hidden'); }
+  S.studentEditState = null;
+}
+
+async function saveStudentEdit(e) {
+  e.preventDefault();
+  const id = S.studentEditState ? S.studentEditState.studentId : null;
+  if (!id) { toast('Nothing to save', 'err'); return; }
+  const name = document.getElementById('seName');
+  const num = document.getElementById('seNumber');
+  const cls = document.getElementById('seClass');
+  const email = document.getElementById('seEmail');
+  const sup = document.getElementById('seSup');
+  const susp = document.getElementById('seSuspended');
+  const payload = { fullName: name.value.trim() };
+  if (num && num.value.trim()) payload.studentNumber = num.value.trim();
+  if (cls && cls.value.trim()) payload.className = cls.value.trim();
+  if (email && email.value.trim()) payload.email = email.value.trim();
+  if (sup && sup.value) payload.supervisorId = sup.value;
+  if (susp && susp.checked) payload.suspended = true;
+  try {
+    await API.put('/users/' + id, payload);
+    toast('Student details saved', 'ok');
+    closeStudentEdit();
+    renderStudentList();
+  } catch (e2) {
+    toast(errBox(e2), 'err');
+  }
+}
+
+/* ================================================== self-assessment ====== */
+
 /* Build the full student detail view with dropdown tabs. */
 function studentDetailHtml(s) {
   const done = s.moduleCount > 0 && s.modulesCompleted === s.moduleCount;
@@ -2767,6 +2844,14 @@ async function renderStudentList() {
   const assessmentById = {};
   assessmentRows.forEach(function (s) { assessmentById[s.id] = s.assessment; });
   window.__studentsListState = { roster: roster, assessmentById: assessmentById, assessCats: assessCats, v: v };
+  v.onclick = function (e) {
+    const b = e.target.closest('button[data-edit-student]');
+    if (b) {
+      e.preventDefault();
+      openStudentEdit(b.dataset.editStudent);
+      return;
+    }
+  };
   renderStudentListTable();
 }
 
@@ -2784,7 +2869,9 @@ function renderStudentListTable() {
       '<td>' + esc(s.className || '—') + '</td><td>' + assignment + '</td>' +
       '<td>' + esc(s.tenantName || '—') + '</td>' +
       '<td class="assessment-cell">' + assessmentMiniHtml(assessmentById[s.id], assessCats) + '</td>' +
-      '<td>' + status + '</td></tr>';
+      '<td>' + status + '</td>' +
+      '<td class="nowrap"><button type="button" class="ghost small" data-edit-student="' + esc(s.id) + '">Edit</button></td>' +
+      '</tr>';
   }).join('') : '<tr><td colspan="7" class="muted">No students match this supervisor.</td></tr>';
   const supervisorOptions = '<option value="">All students</option>' +
     roster.supervisors.map(function (s) {
