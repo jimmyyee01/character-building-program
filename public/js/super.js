@@ -776,16 +776,27 @@ function studentEditHtml(u) {
 }
 
 function openStudentEdit(studentId) {
+  let u = null;
   const st = window.__studentsListState;
-  if (!st || !st.roster) { toast('Student list is not available', 'err'); return; }
-  const u = st.roster.students.find(function (x) { return x.id === studentId; });
-  if (!u) { toast('Student not found', 'err'); return; }
-  S.studentEditState = {
-    studentId: studentId,
-    supervisors: (st.roster.supervisors || []).filter(function (s) {
-      return String(s.tenantId) === String(u.tenantId);
-    })
-  };
+  if (st && st.roster) {
+    u = st.roster.students.find(function (x) { return x.id === studentId; });
+    S.studentEditState = {
+      studentId: studentId,
+      supervisors: (st.roster.supervisors || []).filter(function (s) {
+        return String(s.tenantId) === String(u && u.tenantId);
+      })
+    };
+  }
+  if (!u) {
+    u = (S.users || []).find(function (x) { return String(x.id) === String(studentId); });
+    if (!u) { toast('Student not found', 'err'); return; }
+    S.studentEditState = {
+      studentId: studentId,
+      supervisors: (S.tenantSupervisors || []).filter(function (s) {
+        return String(s.tenantId) === String(u.tenantId);
+      })
+    };
+  }
   openModal(studentEditHtml(u));
   const seClose = document.getElementById('seClose');
   if (seClose) seClose.addEventListener('click', closeStudentEdit);
@@ -822,7 +833,7 @@ async function saveStudentEdit(e) {
     await API.put('/users/' + id, payload);
     toast('Student details saved', 'ok');
     closeStudentEdit();
-    renderStudentList();
+    if (typeof renderStudentList === 'function' && document.getElementById('view-student-roster') && !document.getElementById('view-student-roster').classList.contains('hidden')) renderStudentList(); else renderUsers();
   } catch (e2) {
     fail(e2);
   }
@@ -2613,6 +2624,8 @@ function userRow(u) {
           (u.graduated ? '<button type="button" class="small ghost" data-act="u-make-sup" data-id="' +
             esc(String(u.id)) + '">Make supervisor</button> ' : '')
         : '') +
+      '<button type="button" class="small ghost" data-act="u-edit" data-id="' +
+        esc(String(u.id)) + '">Edit</button> ' +
       '<button type="button" class="small ' + (u.suspended ? 'ghost' : 'danger') +
         '" data-act="u-susp" data-id="' + esc(String(u.id)) + '">' +
         (u.suspended ? 'Unsuspend' : 'Suspend') + '</button> ' +
@@ -2627,6 +2640,9 @@ async function renderUsers() {
   let tenants = [];
   try { tenants = await ensure('tenants', '/super/tenants', 'tenants'); }
   catch (e) { v.innerHTML = errBox(e); return; }
+  S.tenantSupervisors = (tenants && tenants.flatMap
+    ? tenants.flatMap(function (t) { return (t.supervisors || []).map(function (s) {
+        s.tenantName = t.name; return s; }); }) : []);
 
   let users = [];
   try {
@@ -3988,6 +4004,9 @@ async function onAction(btn, e) {
         break;
       case 'u-make-sup':
         makeSupervisor(id);
+        break;
+      case 'u-edit':
+        openStudentEdit(id);
         break;
       case 'u-susp':
         toggleSuspend(id);
