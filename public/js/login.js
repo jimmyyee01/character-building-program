@@ -200,6 +200,29 @@ if (pwToggle) {
 }
 
 
+/* Set account favicon - called from init */
+function setAccountFavicon() {
+  const favicon = document.getElementById('page-favicon');
+  if (!favicon) {
+    const link = document.createElement('link');
+    link.id = 'page-favicon';
+    link.rel = 'icon';
+    link.href = '/images/default-favicon.png';
+    link.sizes = '32x32';
+    document.head.appendChild(link);
+    return;
+  }
+  if (tenantInfo && tenantInfo.tenant.logo) {
+    favicon.href = tenantInfo.tenant.logo + '?v=' + new Date().getTime();
+    favicon.sizes = '32x32';
+  } else {
+    favicon.href = '/images/default-favicon.png';
+  }
+}
+
+/* Set account favicon on login page load */
+setAccountFavicon();
+
 document.getElementById('loginForm').addEventListener('submit', async function (e) {
   e.preventDefault();
   try {
