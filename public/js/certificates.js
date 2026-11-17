@@ -239,7 +239,7 @@ function certificateSheetHtml(opts) {
     extra + signs +
     (x.footerNote ? '<p class="cert-extra">' + esc(x.footerNote) + '</p>' : '') +
     '<div class="foot">' +
-      '<span>Code: <b class="mono">' + esc(d.code || '—') + '</b></span>' +
+      // QR code in lower-left corner, above Code\n      '<div class="qr-above-code" style="position:absolute;left:12px;bottom:12px;width:80px;height:80px;background:#fff;border:2px solid var(--c-accent);z-index:10"><img src="' + (await generateQRCode('code:' + esc(d.code || '—') + '\\\\nperformance:' + String(d.performance || 0) + '%\\\\nissued:' + esc(fmtDate(d.issuedAt))) + '\" style="width:100%%; height:100%%; object-fit:contain"></div>' +\n      '<span>Code: <b class="mono">' + esc(d.code || '—') + '</b></span>' +
       '<span>Issued: ' + esc(fmtDate(d.issuedAt)) + '</span>' +
     '</div>' +
     (t.layout.id === 'seal' ? '<div class="cert-seal">Certified</div>' : '') +
