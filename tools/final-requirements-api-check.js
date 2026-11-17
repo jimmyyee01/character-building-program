@@ -66,6 +66,10 @@ async function main() {
     if (i === 79) throw new Error('Test server did not start');
     await new Promise(resolve => setTimeout(resolve, 150));
   }
+  const health = await (await fetch(base + '/api/health')).json();
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'public', 'build.json'), 'utf8'));
+  check('health reports the exact release manifest',
+    health.build === manifest.build && manifest.features.every(f => health.features.includes(f)));
   let r = await call('/auth/super-login', { method: 'POST',
     body: { username: 'superadmin', password: 'SuperAdmin@123' } });
   const superToken = r.data.token;

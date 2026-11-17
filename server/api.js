@@ -20,19 +20,12 @@ class HttpError extends Error {
 }
 function need(cond, message, status) { if (!cond) throw new HttpError(message, status || 400); }
 
-/* Which build is actually running? Bump this on every release — /api/health
-   reports it, so a server that was not updated is easy to spot. */
-const BUILD = '2026-11-14-account-icons';
-const FEATURES = ['health', 'super.analytics', 'admin.analytics', 'reports.students', 'reports.student-roster',
-  'reports.student-detail', 'reports.student-assessment', 'reports.module-performers', 'reports.top-performers',
-  'public.top-performers', 'reading.activity', 'reading.video-alerts', 'reading.video-alert-points',
-  'messaging', 'notifications', 'users.supervisor-auto-assignment', 'keywords',
-  'reader.book', 'library.lock', 'library.media', 'library.letters', 'certificates', 'chapter.pages',
-  'chapter.reading-gate', 'exports', 'assessment', 'assessment.admin', 'read-aloud',
-  'letter.after-module', 'auth.student-leave-lock', 'super.activity-log', 'super.trash',
-  'live.video-room', 'live.captions', 'live.transcript', 'live.scheduling', 'live.alerts',
-  /* an account's own logo is its desktop / taskbar / Android icon */
-  'icons.account', 'icons.manifest', 'icons.auto-refresh'];
+/* Read the release marker once at boot. Keeping health and the public manifest
+    on the same source prevents a successful file update from reporting an old
+    hard-coded build after the service restarts. */
+const BUILD_META = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'public', 'build.json'), 'utf8'));
+const BUILD = BUILD_META.build;
+const FEATURES = Array.isArray(BUILD_META.features) ? BUILD_META.features : [];
 
 
 function send(res, code, obj) {
