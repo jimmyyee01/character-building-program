@@ -298,7 +298,10 @@ function userFormHtml(limit) {
     '</div><div class="row" id="ufStudentRow">' +
     '<div><label>Student number</label><input type="text" id="ufNumber"></div>' +
     '<div><label>School class</label><input type="text" id="ufClass" placeholder="e.g. Grade 10A"></div>' +
-    '</div><div class="row">' + supRow +
+    '</div><div class="row" id="ufPhotoRow">' +
+    '<div><label>Photo (optional)</label><input type="file" id="ufPhoto" accept="image/*">' +
+    '<div class="mt"><img id="ufPhotoPreview" alt="Photo preview" class="hidden" style="height:72px;border-radius:8px;border:1px solid var(--line);padding:4px;background:#fff"></div>' +
+    '</div></div><div class="row">' + supRow +
     '<div><label>Password (min 6 characters)</label><input type="password" id="ufPw" required minlength="6"></div>' +
     '<div class="fixed"><button type="submit">Create user</button></div>' +
     '</div></form>' +
@@ -458,11 +461,14 @@ function wireBulkPanel() {
   });
 }
 
+let bulkSelected = new Set();
+
 function usersTableHtml() {
-  let h = '<div class="table-wrap"><table><thead><tr><th>User</th><th>Role</th>' +
+  let h = '<div class="table-wrap"><table><thead><tr><th style="width:34px"><input type="checkbox" id="bulkSelAll" title="Select all"></th><th>User</th><th>Role</th>' +
     '<th>Email / Number</th><th>Class</th><th>Supervisor</th><th style="width:130px">Progress</th>' +
     '<th>Status</th><th>Actions</th></tr></thead><tbody>';
   usersCache.forEach(function (u) {
+    const checked = bulkSelected.has(u.id) ? ' checked' : '';
     const av = u.photo ? '<img class="avatar-sm" src="' + esc(u.photo) + '" alt="">'
       : '<span class="badge lock">' + esc(String(u.fullName || '?').charAt(0).toUpperCase()) + '</span>';
     let code = '';
@@ -499,7 +505,7 @@ function usersTableHtml() {
     }
     acts += '<button type="button" class="danger small" data-act="del" data-id="' +
       esc(u.id) + '">Delete</button>';
-    h += '<tr data-search="' + esc(searchText(u)) + '"><td>' + av + '<b>' + esc(u.fullName) + '</b>' + code + '</td>' +
+    h += '<tr data-search="' + esc(searchText(u)) + '"><td style="width:34px"><label class="small"><input type="checkbox" class="bulkSel" data-id="' + esc(u.id) + '"' + checked + '></label></td><td>' + av + '<b>' + esc(u.fullName) + '</b>' + code + '</td>' +
       '<td>' + roleBadge(u.role) + '</td><td>' + det + '</td>' +
       '<td>' + esc(u.className || '—') + '</td><td>' + supervisor + '</td>' +
       '<td>' + prog + '</td><td>' + status + '</td>' +
@@ -527,6 +533,13 @@ async function renderUsers() {
     return;
   }
   usersCache = d.users || [];
+  const supSel = document.getElementById('bulkSup');
+  if (supSel && isAdmin() && supOverview && supOverview.supervisors) {
+    const html = supOverview.supervisors.map(function (s) {
+      return '<option value="' + esc(s.id) + '">' + esc(s.fullName) + '</option>';
+    }).join('');
+    supSel.innerHTML = '<option value="">— none —</option>' + html;
+  }
   const heading = isAdmin() ? 'Users' : 'My members';
   let html = ribbonHtml(performers) + newSupCodeHtml();
   if (!isAdmin() && ME.user.supervisorCode) {
@@ -555,6 +568,15 @@ async function renderUsers() {
   '<p class="muted small">The list below shows the users that match what you type in the search box.</p>' +
   '<div id="usersArea">' +
     (usersCache.length ? usersTableHtml() : '<p class="muted">No users yet.</p>') +
+  '</div>' +
+  (usersCache.length ? '<div class="card bulk-toolbar" id="bulkToolbar" style="display:none">' +
+    '<h3 style="margin:0 0 8px 0">Bulk edit <span id="bulkCount">0</span> selected</h3>' +
+    '<div class="row">' +
+    '<div><label>Action</label><select id="bulkAction"><option value="suspend">Suspend</option><option value="unsuspend">Unsuspend</option><option value="assign-supervisor">Assign supervisor</option><option value="delete">Delete</option></select></div>' +
+    '<div id="bulkSupRow"><label>Assign supervisor</label><select id="bulkSup"><option value="">— none —</option></select></div>' +
+    '<div class="fixed"><button type="button" id="bulkApply">Apply to selected</button> <button type="button" id="bulkCancel" class="ghost">Cancel</button></div>' +
+    '</div><div id="bulkMsg" class="mt"></div>' +
+    '</div>' : '') +
   '</div></div>';
   el.innerHTML = html;
   el.querySelectorAll('[data-grad]').forEach(function (cb) {
@@ -570,6 +592,17 @@ async function renderUsers() {
   roleSel.onchange = syncUserForm;
   syncUserForm();
   document.getElementById('userForm').onsubmit = wrap(createUser);
+  const ufPhoto = document.getElementById('ufPhoto');
+  const ufPreview = document.getElementById('ufPhotoPreview');
+  if (ufPhoto && ufPreview) {
+    ufPhoto.onchange = function () {
+      const f = this.files && this.files[0];
+      if (!f) { ufPreview.classList.add('hidden'); ufPreview.src = ''; return; }
+      const r = new FileReader();
+      r.onload = function () { ufPreview.src = r.result; ufPreview.classList.remove('hidden'); };
+      r.readAsDataURL(f);
+    };
+  }
   wireBulkPanel();
   const usSearch = document.getElementById('usSearch');
   const usTable = el.querySelector('table');
@@ -579,7 +612,79 @@ async function renderUsers() {
   });
   applyTableSearch(usTable, usSearch, document.getElementById('usTableCount'));
   el.onclick = wrap(userRowClick);
+  wireBulkToolbar();
 }
+
+function wireBulkToolbar() {
+  const selAll = document.getElementById('bulkSelAll');
+  const toolbar = document.getElementById('bulkToolbar');
+  const countEl = document.getElementById('bulkCount');
+  const actSel = document.getElementById('bulkAction');
+  const supRow = document.getElementById('bulkSupRow');
+  const supSel = document.getElementById('bulkSup');
+  const btnApply = document.getElementById('bulkApply');
+  const btnCancel = document.getElementById('bulkCancel');
+
+  if (!selAll || !toolbar || !countEl || !btnApply || !btnCancel) return;
+
+  function refresh() {
+    const n = bulkSelected.size;
+    toolbar.style.display = n ? '' : 'none';
+    countEl.textContent = String(n);
+    if (actSel) actSel.disabled = !n;
+    if (btnApply) btnApply.disabled = !n;
+    if (selAll) selAll.checked = n === usersCache.length && n > 0;
+    if (supRow && supSel) {
+      supRow.style.display = (actSel && actSel.value === 'assign-supervisor') ? '' : 'none';
+    }
+  }
+
+  selAll.onclick = function () {
+    const check = this.checked;
+    usersCache.forEach(function (u) {
+      const cb = document.querySelector('.bulkSel[data-id="' + escCss(u.id) + '"]');
+      if (cb) cb.checked = check;
+      if (check) bulkSelected.add(u.id); else bulkSelected.delete(u.id);
+    });
+    refresh();
+  };
+
+  el.querySelectorAll('.bulkSel').forEach(function (cb) {
+    cb.onchange = function () {
+      if (this.checked) bulkSelected.add(this.dataset.id); else bulkSelected.delete(this.dataset.id);
+      refresh();
+    };
+  });
+
+  if (actSel) actSel.onchange = refresh;
+  if (btnCancel) btnCancel.onclick = function () { bulkSelected.clear(); refresh(); };
+
+  if (btnApply) btnApply.onclick = wrap(async function () {
+    const action = actSel ? actSel.value : '';
+    const ids = Array.from(bulkSelected);
+    if (!ids.length) return;
+    if (action === 'delete') {
+      if (!confirm('Delete ' + ids.length + ' selected user(s)? This cannot be undone.')) return;
+    }
+    const updates = {};
+    if (action === 'suspend') updates.suspended = true;
+    else if (action === 'unsuspend') updates.suspended = false;
+    else if (action === 'assign-supervisor') {
+      updates.supervisorId = supSel ? supSel.value : '';
+      if (!updates.supervisorId) { toast('Choose a supervisor', 'err'); return; }
+    }
+    try {
+      const res = await API.post('/api/users/bulk-edit', { ids: ids, updates: updates });
+      toast(res.updated + ' of ' + res.total + ' updated' + (res.errors.length ? ', ' + res.errors.length + ' failed' : ''), res.errors.length ? 'err' : 'ok');
+      bulkSelected.clear();
+      renderUsers();
+    } catch (e) { toast(msg(e), 'err'); }
+  });
+
+  refresh();
+}
+
+function escCss(s) { return String(s).replace(/[!"#$%&'()*+,./:;<=>?@[\\]^`{|}~]/g, '\\$&'); }
 
 function syncUserForm() {
   const sel = document.getElementById('ufRole');
@@ -619,6 +724,10 @@ async function createUser(e) {
   }
   const sup = document.getElementById('ufSup');
   if (sup && sup.value) body.supervisorId = sup.value;
+  const photoInput = document.getElementById('ufPhoto');
+  if (photoInput && photoInput.files && photoInput.files[0]) {
+    body.photo = await fileToAvatarDataUrl(photoInput.files[0], 256);
+  }
   const res = await API.post('/users', body);
   if (res.user && res.user.supervisorCode) {
     newSupCode = { name: res.user.fullName, code: res.user.supervisorCode };
@@ -687,6 +796,7 @@ function userEditHtml(u) {
     '<div><label>School class</label><input type="text" id="ueClass" placeholder="e.g. Grade 10A" value="' + esc(u.className || '') + '"></div>' +
     '</div><div class="row" id="ueEmailRow"' + (u.role === 'student' ? ' class="hidden"' : '') + '>' +
     '<div><label>Email</label><input type="email" id="ueEmail" value="' + esc(u.email || '') + '"></div>' +
+    '<div id="uePhotoRow"></div>' +
     '</div><div class="row">' + supRow + statusField +
     '<div class="fixed"><button type="submit">Save changes</button></div>' +
     '</div></form>' +
@@ -697,6 +807,25 @@ function userEditHtml(u) {
 function openUserEdit(u) {
   userEditState = u;
   openModal(userEditHtml(u));
+  const uePhotoRow = document.getElementById('uePhotoRow');
+  if (uePhotoRow && u.role === 'student') {
+    uePhotoRow.innerHTML = '<div><label>Photo (optional)</label>' +
+      '<input type="file" id="uePhoto" accept="image/*">' +
+      (u.photo ? '<div class="mt"><img id="uePhotoCurrent" src="' + esc(u.photo) + '" alt="Current" style="height:72px;border-radius:8px;border:1px solid var(--line);padding:4px;background:#fff"></div>' : '') +
+      '<div class="mt"><img id="uePhotoPreview" alt="Photo preview" class="hidden" style="height:72px;border-radius:8px;border:1px solid var(--line);padding:4px;background:#fff"></div>' +
+      '</div>';
+    const uePhoto = document.getElementById('uePhoto');
+    const uePreview = document.getElementById('uePhotoPreview');
+    if (uePhoto && uePreview) {
+      uePhoto.onchange = function () {
+        const f = this.files && this.files[0];
+        if (!f) { uePreview.classList.add('hidden'); uePreview.src = ''; return; }
+        const r = new FileReader();
+        r.onload = function () { uePreview.src = r.result; uePreview.classList.remove('hidden'); };
+        r.readAsDataURL(f);
+      };
+    }
+  }
   const ueClose = document.getElementById('ueClose');
   if (ueClose) ueClose.addEventListener('click', closeUserEdit);
   const ueForm = document.getElementById('userEditForm');
@@ -722,7 +851,11 @@ async function saveUserEdit(e) {
   const email = document.getElementById('ueEmail');
   const sup = document.getElementById('ueSup');
   const susp = document.getElementById('ueSuspended');
+  const uePhoto = document.getElementById('uePhoto');
   const payload = { fullName: name.value.trim() };
+  if (uePhoto && uePhoto.files && uePhoto.files[0]) {
+    payload.photo = await fileToAvatarDataUrl(uePhoto.files[0], 256);
+  }
   if (num) payload.studentNumber = num.value.trim();
   if (cls) payload.className = cls.value.trim();
   if (email) payload.email = email.value.trim();

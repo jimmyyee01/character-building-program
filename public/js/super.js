@@ -16,7 +16,8 @@ const S = {
   /* system log + trash */
   logFilters: { q: '', action: '', entity: '', role: '', tenantId: '', from: '', to: '', limit: 200, offset: 0 },
   trashFilters: { q: '', entity: '' },
-  settings: {}
+  settings: {},
+  superSel: null
 };
 
 function $(id) { return document.getElementById(id); }
@@ -2593,7 +2594,8 @@ function userRow(u) {
   if (u.studentNumber) ident.push(esc(u.studentNumber));
   if (!ident.length) ident.push('<span class="muted">—</span>');
   const photoHtml = u.photo ? '<img src="' + esc(u.photo) + '" class="user-photo-sm" alt="">' : '<span class="user-photo-empty">?</span>';
-  return '<tr data-search="' + esc(searchText(u)) + '"><td>' + photoHtml + '<div class="user-name-wrap"><b>' + esc(u.fullName || '—') + '</b><div>' + roleBadge(u.role) + '</div></div></td>' +
+  const sChecked = S.superSel && S.superSel.has(u.id) ? ' checked' : '';
+  return '<tr data-search="' + esc(searchText(u)) + '"><td style="width:34px"><label class="small"><input type="checkbox" class="bulkSupSel" data-id="' + esc(String(u.id)) + '"' + sChecked + '></label></td><td>' + photoHtml + '<div class="user-name-wrap"><b>' + esc(u.fullName || '—') + '</b><div>' + roleBadge(u.role) + '</div></div></td>' +
     '<td class="small">' + ident.join('<br>') + '</td>' +
     '<td class="small">' + esc(u.className || '—') + '</td>' +
     '<td class="small">' + esc(u.supervisorName || '—') + '</td>' +
@@ -2621,6 +2623,7 @@ function userRow(u) {
 async function renderUsers() {
   const v = $('view-users');
   v.innerHTML = loadMsg();
+  S.superSel = new Set();
   let tenants = [];
   try { tenants = await ensure('tenants', '/super/tenants', 'tenants'); }
   catch (e) { v.innerHTML = errBox(e); return; }
@@ -2685,9 +2688,17 @@ async function renderUsers() {
     '</div>' +
     '<div class="row export-buttons"><button type="button" class="ghost" data-export="print">Print</button><button type="button" class="ghost" data-export="pdf">PDF</button><button type="button" class="ghost" data-export="excel">Excel</button><button type="button" class="ghost" data-export="word">Word</button></div>' +
     '<table id="usTable"><thead><tr>' +
+      '<th style="width:34px"><input type="checkbox" id="supSelAll" title="Select all"></th>' +
       '<th>Name</th><th>Email / number</th><th>Class</th><th>Supervisor</th>' +
       '<th>Progress</th><th>Status</th><th>Actions</th>' +
-    '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+    '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    (users.length ? '<div class="card bulk-toolbar" id="supBulkToolbar" style="display:none">' +
+    '<h3 style="margin:0 0 8px 0">Bulk edit <span id="supBulkCount">0</span> selected</h3>' +
+    '<div class="row">' +
+    '<div><label>Action</label><select id="supBulkAction"><option value="suspend">Suspend</option><option value="unsuspend">Unsuspend</option><option value="delete">Delete</option></select></div>' +
+    '<div class="fixed"><button type="button" id="supBulkApply">Apply to selected</button> <button type="button" id="supBulkCancel" class="ghost">Cancel</button></div>' +
+    '</div><div id="supBulkMsg" class="mt"></div>' +
+    '</div>' : '');
   $('usSearch').addEventListener('input', function () {
     S.usersSearch = this.value;
     applyTableSearch('usTable', 'usSearch');
@@ -2703,6 +2714,65 @@ async function renderUsers() {
     };
   });
   initUserPhotoPreview();
+  wireSuperBulkToolbar();
+}
+
+function wireSuperBulkToolbar() {
+  const selAll = $('supSelAll');
+  const toolbar = $('supBulkToolbar');
+  const countEl = $('supBulkCount');
+  const actSel = $('supBulkAction');
+  const btnApply = $('supBulkApply');
+  const btnCancel = $('supBulkCancel');
+  if (!selAll || !toolbar || !countEl || !btnApply || !btnCancel) return;
+
+  function refresh() {
+    const n = S.superSel.size;
+    toolbar.style.display = n ? '' : 'none';
+    countEl.textContent = String(n);
+    if (actSel) actSel.disabled = !n;
+    if (btnApply) btnApply.disabled = !n;
+    if (selAll) selAll.checked = n === S.users.length && n > 0;
+  }
+
+  selAll.onclick = function () {
+    const check = this.checked;
+    S.users.forEach(function (u) {
+      if (check) S.superSel.add(String(u.id)); else S.superSel.delete(String(u.id));
+    });
+    v.querySelectorAll('.bulkSupSel').forEach(function (cb) { cb.checked = check; });
+    refresh();
+  };
+
+  v.querySelectorAll('.bulkSupSel').forEach(function (cb) {
+    cb.onchange = function () {
+      if (this.checked) S.superSel.add(this.dataset.id); else S.superSel.delete(this.dataset.id);
+      refresh();
+    };
+  });
+
+  if (actSel) actSel.onchange = refresh;
+  if (btnCancel) btnCancel.onclick = function () { S.superSel.clear(); refresh(); };
+
+  if (btnApply) btnApply.onclick = wrap(async function () {
+    const action = actSel ? actSel.value : '';
+    const ids = Array.from(S.superSel);
+    if (!ids.length) return;
+    if (action === 'delete') {
+      if (!confirm('Delete ' + ids.length + ' selected user(s)? This cannot be undone.')) return;
+    }
+    const updates = {};
+    if (action === 'suspend') updates.suspended = true;
+    else if (action === 'unsuspend') updates.suspended = false;
+    try {
+      const res = await API.post('/api/users/bulk-edit', { ids: ids, updates: updates });
+      toast(res.updated + ' of ' + res.total + ' updated' + (res.errors.length ? ', ' + res.errors.length + ' failed' : ''), res.errors.length ? 'err' : 'ok');
+      S.superSel.clear();
+      renderUsers();
+    } catch (e) { fail(e); }
+  });
+
+  refresh();
 }
 /* Photo preview for user creation form. */
 function initUserPhotoPreview() {

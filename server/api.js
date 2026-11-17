@@ -3873,6 +3873,88 @@ route('POST', '/api/users/bulk', ({ user, body }) => {
   return { ok: true, total: rows.length, created, errors };
 });
 
+/* Bulk edit: update the same field(s) on many users at once.
+   Super admin can edit any user; tenant_admin only users in their own tenant;
+   supervisor only their own supervisees.  The super role is protected.
+   All validation happens before any record is touched, so a bad row never
+   leaves a partially-applied change behind. */
+route('POST', '/api/users/bulk-edit', ({ user, body }) => {
+  need(user, 'Sign in required', 401);
+  body = body || {};
+  const ids = Array.isArray(body.ids) ? body.ids : [];
+  need(ids.length, 'No users selected');
+  need(ids.length <= 500, 'Maximum 500 users per bulk edit');
+  const updates = body.updates || {};
+  const allowedFields = ['fullName', 'email', 'studentNumber', 'className', 'supervisorId', 'suspended', 'photo'];
+  const keys = Object.keys(updates).filter(function (k) { return allowedFields.indexOf(k) !== -1; });
+  need(keys.length, 'No updatable fields supplied');
+
+  /* Phase 1: resolve targets and check permissions. */
+  const targets = [];
+  ids.forEach(function (id, i) {
+    const t = dbm.byId('users', id);
+    need(t, 'User not found', 404);
+    const allowed = user.role === 'super' ||
+      (user.role === 'tenant_admin' && t.tenantId === user.tenantId) ||
+      (user.role === 'supervisor' && t.supervisorId === user.id);
+    need(allowed, 'Not permitted', 403);
+    if (t.role === 'super' && user.role !== 'super') need(false, 'Not permitted', 403);
+    targets.push({ index: i, id: id, target: t });
+  });
+
+  /* Phase 2: validate every intended change before touching any record. */
+  const changes = [];
+  const errors = [];
+  targets.forEach(function (item) {
+    const ch = {};
+    try {
+      if (keys.indexOf('fullName') !== -1 && updates.fullName !== undefined)
+        ch.fullName = String(updates.fullName).trim();
+      if (keys.indexOf('className') !== -1)
+        ch.className = String(updates.className || '').trim() || null;
+      if (keys.indexOf('photo') !== -1) ch.photo = updates.photo;
+      if (keys.indexOf('suspended') !== -1) ch.suspended = Boolean(updates.suspended);
+      if (keys.indexOf('supervisorId') !== -1) {
+        need(user.role === 'super' || user.role === 'tenant_admin', 'Not permitted', 403);
+        const supervisorId = updates.supervisorId || null;
+        if (supervisorId) {
+          const supervisor = dbm.byId('users', String(supervisorId));
+          need(supervisor && supervisor.role === 'supervisor', 'Choose a valid supervisor account', 400);
+          need(user.role === 'super' || (user.role === 'tenant_admin' && supervisor.tenantId === user.tenantId), 'You may only appoint supervisors in your own account', 403);
+        }
+        ch.supervisorId = supervisorId;
+      }
+      if (keys.indexOf('email') !== -1 && updates.email !== undefined) {
+        const email = String(updates.email || '').trim().toLowerCase() || null;
+        if (email) {
+          need(!dbm.db.users.some(function (u) { return u.id !== item.target.id && u.tenantId === item.target.tenantId && String(u.email || '').toLowerCase() === email; }), 'That email is already used in this account', 409);
+        }
+        ch.email = email;
+      }
+      if (keys.indexOf('studentNumber') !== -1 && updates.studentNumber !== undefined) {
+        const studentNumber = String(updates.studentNumber || '').trim() || null;
+        if (studentNumber) {
+          need(!dbm.db.users.some(function (u) { return u.id !== item.target.id && u.tenantId === item.target.tenantId && String(u.studentNumber || '').toLowerCase() === studentNumber.toLowerCase(); }), 'That student number is already used in this account', 409);
+        }
+        ch.studentNumber = studentNumber;
+      }
+    } catch (e) {
+      errors.push({ index: item.index + 1, id: item.id, error: (e && e.message) || 'Failed' });
+      return;
+    }
+    changes.push({ target: item.target, ch: ch });
+  });
+
+  /* Phase 3: apply all validated changes, then save once. */
+  const updated = [];
+  changes.forEach(function (c) {
+    Object.assign(c.target, c.ch);
+    updated.push(publicUser(c.target));
+  });
+  dbm.save();
+  return { ok: true, total: ids.length, updated: updated.length, errors };
+});
+
 /* Super admin creates a user inside any tenant (uses the same rules as POST /api/users). */
 /* The super console lists every user through /api/super/users (same payload
    as GET /api/users, optionally filtered with ?tenantId=). */
