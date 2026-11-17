@@ -33,6 +33,40 @@ try {
 } catch (e) {
   /* Permissions may be blocked or unavailable - continue anyway */
 }
+
+/* Show account install prompt for students, accounts admin, and supervisors */
+const userRole = user ? user.role : '';
+const allowedRoles = ['student', 'tenant_admin', 'supervisor'];
+const isAllowedRole = allowedRoles.includes(userRole);
+const installPrompt = isAllowedRole && tenantInfo && tenantInfo.tenant.logo;
+if (installPrompt) {
+  const promptHtml = '<div id="accountInstallPrompt" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.8);z-index:9999;color:#fff;padding:20px;text-align:center;">' +
+    '<div style="background:#fff;color:#000;max-width:300px;margin:20px auto;padding:20px;border-radius:8px;">' +
+    '<img src="' + esc(tenantInfo.tenant.logo) + '" alt="Account logo" style="width:64px;height:64px;border-radius:50%;margin-bottom:10px;"></div>' +
+    '<h3>Add to Home Screen</h3>' +
+    '<p>Would you like to add this account\'s portal to your home screen?</p>' +
+    '<div style="margin-top:20px;display:flex;gap:10px;justify-content:center;">' +
+    '<button id="installYes" style="background:#24508c;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:yes;">Yes, Add</button>' +
+    '<button id="installNo" style="background:#666;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:no;">No</button>' +
+    '</div>' +
+    '</div>';
+  document.body.insertAdjacentHTML('afterbegin', promptHtml);
+  document.getElementById('installYes').addEventListener('click', function() {
+    /* Install the web app for this account */
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').then(function(registration) {
+        registration.showNotification('Portal Added', {
+          body: 'The ' + esc(tenantInfo.tenant.name) + ' portal has been added to your home screen.',
+          icon: '/api/public/tenant/' + encodeURIComponent(slug) + '/icon'
+        });
+      });
+    }
+    window.location.href = '/';
+  });
+  document.getElementById('installNo').addEventListener('click', function() {
+    document.getElementById('accountInstallPrompt').remove();
+  });
+}
 function showLeftNote() {
   const box = document.getElementById('leftBanner');
   if (!box) return;
