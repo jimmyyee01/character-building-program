@@ -3917,9 +3917,24 @@ route('PUT', '/api/users/([a-z0-9_-]+)', ({ user, params, body }) => {
   body = body || {};
   if (t.role === 'super' && user.role !== 'super') need(false, 'Not permitted', 403);
   if (body.fullName) t.fullName = String(body.fullName).trim();
-  if (body.className !== undefined) t.className = body.className || null;
-  if (body.email) t.email = String(body.email).trim().toLowerCase();
-  if (body.studentNumber) t.studentNumber = String(body.studentNumber).trim();
+  if (body.className !== undefined) t.className = String(body.className || '').trim() || null;
+  if (body.email !== undefined) {
+    const email = String(body.email || '').trim().toLowerCase() || null;
+    if (email) {
+      need(!dbm.db.users.some(u => u.id !== t.id && u.tenantId === t.tenantId &&
+        String(u.email || '').toLowerCase() === email), 'That email is already used in this account', 409);
+    }
+    t.email = email;
+  }
+  if (body.studentNumber !== undefined) {
+    const studentNumber = String(body.studentNumber || '').trim() || null;
+    if (studentNumber) {
+      need(!dbm.db.users.some(u => u.id !== t.id && u.tenantId === t.tenantId &&
+        String(u.studentNumber || '').toLowerCase() === studentNumber.toLowerCase()),
+        'That student number is already used in this account', 409);
+    }
+    t.studentNumber = studentNumber;
+  }
   if (body.photo !== undefined) t.photo = body.photo;
   if (body.supervisorId !== undefined) {
     need(user.role === 'super' || user.role === 'tenant_admin', 'Not permitted', 403);
@@ -3957,7 +3972,12 @@ route('PUT', '/api/users/([a-z0-9_-]+)', ({ user, params, body }) => {
   }
   if (body.suspended !== undefined && user.role !== 'supervisor') {
     t.suspended = !!body.suspended;
-    if (t.suspended) dbm.db.sessions = dbm.db.sessions.filter(s => s.userId !== t.id);
+    if (t.suspended) {
+      if (!t.suspendedAt) t.suspendedAt = dbm.nowISO();
+      dbm.db.sessions = dbm.db.sessions.filter(s => s.userId !== t.id);
+    } else {
+      t.suspendedAt = null;
+    }
   }
   if (isLearnerRole(t.role) && !t.supervisorId) t.supervisorWaitlisted = true;
   if (assignWaitlistedLearners(t.tenantId)) dbm.save();

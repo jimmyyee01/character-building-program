@@ -751,23 +751,23 @@ function closeStudentDetail() {
 /* Edit the learner's profile details from the Students list. */
 
 function studentEditHtml(u) {
-  const supOpts = '<option value="">— assign automatically —</option>' +
+  const supOpts = '<option value="">— automatic / not assigned —</option>' +
     ((S.studentEditState && S.studentEditState.supervisors) || []).map(function (s) {
       const label = (s.fullName || 'Supervisor') + (s.tenantName ? ' — ' + s.tenantName : '') + ' (' + s.studentCount + ')';
       return selectOption(s.id, label, String(u.supervisorId) || '', false);
     }).join('');
   return '<div class="card"><h3 id="seTitle">Edit student</h3>' +
-    '<form id="studentEditForm"><div class="row">' +
-    '<div><label>Full name</label><input type="text" id="seName" required value="' + esc(u.fullName || '') + '"></div>' +
-    '<div class="row" style="align-items:flex-end">' +
+    '<form id="studentEditForm">' +
+    '<div class="row"><div><label>Full name</label><input type="text" id="seName" required value="' + esc(u.fullName || '') + '"></div></div>' +
+    '<div class="row">' +
     '<div><label>Student number</label><input type="text" id="seNumber" value="' + esc(u.studentNumber || '') + '" placeholder="e.g. STU-101"></div>' +
     '<div><label>School class</label><input type="text" id="seClass" placeholder="e.g. Grade 10A" value="' + esc(u.className || '') + '"></div>' +
-    '</div></div>' +
-    '<div class="row">' +
+    '</div><div class="row">' +
     '<div id="seEmailRow"><label>Email</label><input type="email" id="seEmail" value="' + esc(u.email || '') + '"></div>' +
     '<div><label>Supervisor</label><select id="seSup">' + supOpts + '</select></div>' +
     '</div><div class="row">' +
-    '<div><label>Status</label><input type="checkbox" id="seSuspended"> <span class="muted small" id="seSuspendedHint">' + (u.suspended ? 'Unsuspend' : 'Suspend') + '</span></div>' +
+    '<div><label>Status</label><label class="small"><input type="checkbox" id="seSuspended"' +
+      (u.suspended ? ' checked' : '') + '> Suspended</label></div>' +
     '<div class="fixed"><button type="submit">Save changes</button></div>' +
     '</div></form>' +
     '<div class="fixed" style="padding-bottom:12px"><button type="button" class="ghost small" id="seClose">Close</button></div>' +
@@ -779,20 +779,25 @@ function openStudentEdit(studentId) {
   if (!st || !st.roster) { toast('Student list is not available', 'err'); return; }
   const u = st.roster.students.find(function (x) { return x.id === studentId; });
   if (!u) { toast('Student not found', 'err'); return; }
-  S.studentEditState = { studentId: studentId, supervisors: st.roster.supervisors || [] };
-  const modal = document.getElementById('studentEditModal');
-  if (!modal) { console.error('[openStudentEdit] studentEditModal missing'); return; }
-  modal.innerHTML = studentEditHtml(u);
-  modal.classList.remove('hidden');
+  S.studentEditState = {
+    studentId: studentId,
+    supervisors: (st.roster.supervisors || []).filter(function (s) {
+      return String(s.tenantId) === String(u.tenantId);
+    })
+  };
+  openModal(studentEditHtml(u));
   const seClose = document.getElementById('seClose');
   if (seClose) seClose.addEventListener('click', closeStudentEdit);
   const seForm = document.getElementById('studentEditForm');
   if (seForm) seForm.addEventListener('submit', saveStudentEdit);
+  const x = document.getElementById('modalX');
+  if (x) x.onclick = closeStudentEdit;
+  const bg = document.getElementById('modalBg');
+  if (bg) bg.onclick = function (e) { if (e.target.id === 'modalBg') closeStudentEdit(); };
 }
 
 function closeStudentEdit() {
-  const modal = document.getElementById('studentEditModal');
-  if (modal) { modal.innerHTML = ''; modal.classList.add('hidden'); }
+  closeModal();
   S.studentEditState = null;
 }
 
@@ -807,18 +812,18 @@ async function saveStudentEdit(e) {
   const sup = document.getElementById('seSup');
   const susp = document.getElementById('seSuspended');
   const payload = { fullName: name.value.trim() };
-  if (num && num.value.trim()) payload.studentNumber = num.value.trim();
-  if (cls && cls.value.trim()) payload.className = cls.value.trim();
-  if (email && email.value.trim()) payload.email = email.value.trim();
-  if (sup && sup.value) payload.supervisorId = sup.value;
-  if (susp && susp.checked) payload.suspended = true;
+  if (num) payload.studentNumber = num.value.trim();
+  if (cls) payload.className = cls.value.trim();
+  if (email) payload.email = email.value.trim();
+  if (sup) payload.supervisorId = sup.value || null;
+  if (susp) payload.suspended = !!susp.checked;
   try {
     await API.put('/users/' + id, payload);
     toast('Student details saved', 'ok');
     closeStudentEdit();
     renderStudentList();
   } catch (e2) {
-    toast(errBox(e2), 'err');
+    fail(e2);
   }
 }
 
@@ -2844,14 +2849,6 @@ async function renderStudentList() {
   const assessmentById = {};
   assessmentRows.forEach(function (s) { assessmentById[s.id] = s.assessment; });
   window.__studentsListState = { roster: roster, assessmentById: assessmentById, assessCats: assessCats, v: v };
-  v.onclick = function (e) {
-    const b = e.target.closest('button[data-edit-student]');
-    if (b) {
-      e.preventDefault();
-      openStudentEdit(b.dataset.editStudent);
-      return;
-    }
-  };
   renderStudentListTable();
 }
 
@@ -2872,7 +2869,7 @@ function renderStudentListTable() {
       '<td>' + status + '</td>' +
       '<td class="nowrap"><button type="button" class="ghost small" data-edit-student="' + esc(s.id) + '">Edit</button></td>' +
       '</tr>';
-  }).join('') : '<tr><td colspan="7" class="muted">No students match this supervisor.</td></tr>';
+  }).join('') : '<tr><td colspan="8" class="muted">No students match this supervisor.</td></tr>';
   const supervisorOptions = '<option value="">All students</option>' +
     roster.supervisors.map(function (s) {
       const label = (s.fullName || 'Supervisor') + (s.tenantName ? ' — ' + s.tenantName : '') +
@@ -2891,7 +2888,7 @@ function renderStudentListTable() {
         '<span class="badge lock" id="rpRosterTableCount">' + roster.count + ' shown</span></div></div>' +
       '<div class="table-wrap"><table id="rpRosterTable"><thead><tr>' +
         '<th>Student</th><th>Student number</th><th>Class</th><th>Supervisor</th><th>Account</th>' +
-        '<th>Self-assessment</th><th>Status</th>' +
+        '<th>Self-assessment</th><th>Status</th><th>Actions</th>' +
       '</tr></thead><tbody>' + studentRows + '</tbody></table></div></div>';
   $('rpRosterSearch').addEventListener('input', function () {
     S.rpRosterSearch = this.value;
@@ -2899,6 +2896,12 @@ function renderStudentListTable() {
   });
   applyTableSearch('rpRosterTable', 'rpRosterSearch');
   v.onclick = function (e) {
+    const edit = e.target.closest('button[data-edit-student]');
+    if (edit) {
+      e.preventDefault();
+      openStudentEdit(edit.dataset.editStudent);
+      return;
+    }
     const assess = e.target.closest('[data-assessment]');
     if (!assess) return;
     e.preventDefault();
@@ -2965,12 +2968,22 @@ async function renderCertTemplates() {
   const v = $('view-certtemplates');
   if (!v) return;
   v.innerHTML = loadMsg();
-  let d;
-  try { d = await API.get('/super/certificate-templates'); }
+  let d, accounts = [];
+  try {
+    const results = await Promise.all([
+      API.get('/super/certificate-templates'),
+      ensure('tenants', '/super/tenants', 'tenants').catch(function () { return []; })
+    ]);
+    d = results[0];
+    accounts = results[1] || [];
+  }
   catch (e) { v.innerHTML = errBox(e); return; }
   S.certCfg = d.config || {};
   S.certYearsList = d.years || [];
   S.certModules = d.modules || [];
+  /* Use a real account in the sample, so the left-hand school logo is verified
+     here rather than leaving an empty placeholder until a learner opens it. */
+  S.certPreviewAccount = accounts.filter(function (a) { return a && a.logo; })[0] || accounts[0] || null;
   const years = S.certYearsList.length ? S.certYearsList : [String(new Date().getFullYear())];
   if (!S.certYear || years.indexOf(String(S.certYear)) === -1) {
     S.certYear = years[years.length - 1];
@@ -3047,7 +3060,7 @@ function certRenderTemplatesBody() {
             : '<p class="muted">No modules yet — create one in <b>Modules</b> first.</p>') +
         '</div>' +
         '<div class="card"><h3>Words on the certificate</h3>' +
-          '<p class="muted small">Leave a box empty to use the default wording.</p>' +
+          '<p class="muted small">Edit the wording, or clear a box to remove that line from the certificate.</p>' +
           '<div class="grid cols-2">' +
             h.textField('title', 'Heading', 'Certificate of Completion') +
             h.textField('subtitle', 'Sub-heading (optional)') +
@@ -3160,16 +3173,17 @@ function certPreviewRefresh() {
   const firstModule = (S.certModules || [])[0];
   const modTpl = firstModule ? ((yearEntry.modules || {})[firstModule.id] || '') : '';
   const templateId = modTpl || yearEntry.default || cfg.defaultTemplate || '';
+  const account = S.certPreviewAccount || {};
   box.innerHTML = certificateSheetHtml({
     templateId: templateId,
     texts: cfg.texts,
     extraBlocks: cfg.extraBlocks,
-    schoolLogo: null,
+    schoolLogo: account.logo || null,
     programLogo: cfg.programLogo || null,
     data: {
       title: (cfg.texts && cfg.texts.title) || 'Certificate of Completion',
       userName: 'Jane Student',
-      tenantName: 'Greenfield Academy',
+      tenantName: account.name || 'Sample School',
       books: ['The Foundation of Character', 'Roots of Righteous Living'],
       performance: 87,
       objectiveScore: 92,

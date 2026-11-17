@@ -1,5 +1,5 @@
 {
-  "build": "2026-11-14-account-icons",
+  "build": "2026-11-17-final-requirements-https",
   "features": [
     "health",
     "icons.account",
@@ -26,6 +26,9 @@
     "library.media",
     "library.letters",
     "certificates",
+    "certificates.templates",
+    "certificates.year-module",
+    "https.acme-webroot",
     "chapter.pages",
     "chapter.reading-gate",
     "exports",

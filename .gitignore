@@ -2,6 +2,7 @@ node_modules/
 data/
 uploads/
 certs/
+acme-webroot/
 assets/icons/
 assets/launchers/
 assets/qr/

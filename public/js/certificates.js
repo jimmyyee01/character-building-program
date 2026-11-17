@@ -151,12 +151,13 @@ function certEnsureStyles(doc) {
   (doc.head || doc.documentElement).appendChild(style);
 }
 
-/* Fill in the texts the super admin left blank, so a sheet is never empty. */
+/* Missing settings keep their defaults. Once the super admin saves a field,
+   its value is explicit: an empty field removes that wording from the sheet. */
 function certTexts(texts) {
   const out = {};
   Object.keys(CERT_DEFAULT_TEXTS).forEach(function (k) {
-    const v = texts && texts[k] != null ? String(texts[k]) : '';
-    out[k] = v.trim() ? v : CERT_DEFAULT_TEXTS[k];
+    const supplied = texts && Object.prototype.hasOwnProperty.call(texts, k);
+    out[k] = supplied ? String(texts[k] == null ? '' : texts[k]).trim() : CERT_DEFAULT_TEXTS[k];
   });
   return out;
 }
@@ -198,18 +199,24 @@ function certificateSheetHtml(opts) {
   const books = Array.isArray(d.books) && d.books.length ? d.books
     : (d.bestBook ? [d.bestBook] : []);
   const booksHtml = books.length
-    ? '<p>' + esc(x.completion) + '</p><div class="books"><ul>' +
+    ? (x.completion ? '<p>' + esc(x.completion) + '</p>' : '') +
+      '<div class="books"><ul>' +
       books.map(function (b) { return '<li>' + esc(b) + '</li>'; }).join('') + '</ul></div>'
     : '';
   const bestBookHtml = d.bestBook && !books.length
     ? '<p class="cert-org">Best book: ' + esc(d.bestBook) + '</p>' : '';
   const extra = (opts.extraBlocks || []).filter(function (b) { return b && String(b.text || '').trim(); })
     .map(function (b) { return '<div class="cert-extra">' + esc(b.text) + '</div>'; }).join('');
-  const signs = (x.signLeftLabel || x.signRightLabel)
-    ? '<div class="cert-signs">' +
-      '<div class="cert-sign"><div class="line"></div>' + esc(x.signLeftLabel) + '</div>' +
-      '<div class="cert-sign"><div class="line"></div>' + esc(x.signRightLabel) + '</div></div>'
-    : '';
+  const signLeft = x.signLeftLabel
+    ? '<div class="cert-sign"><div class="line"></div>' + esc(x.signLeftLabel) + '</div>' : '';
+  const signRight = x.signRightLabel
+    ? '<div class="cert-sign"><div class="line"></div>' + esc(x.signRightLabel) + '</div>' : '';
+  const signs = (signLeft || signRight)
+    ? '<div class="cert-signs">' + signLeft + signRight + '</div>' : '';
+  /* Existing certificates keep their own title until the admin explicitly saves
+     a heading. After that, the custom heading wins; an empty heading is hidden. */
+  const hasCustomTitle = opts.texts && Object.prototype.hasOwnProperty.call(opts.texts, 'title');
+  const title = hasCustomTitle ? x.title : (d.title || x.title);
 
   return '<div class="cert-sheet cert-tpl" data-layout="' + esc(t.layout.id) + '"' +
     ' style="--c-bg:' + esc(p.bg) + ';--c-ink:' + esc(p.ink) + ';--c-accent:' + esc(p.accent) +
@@ -217,14 +224,15 @@ function certificateSheetHtml(opts) {
     '<div class="cert-head">' + logoLeft +
       '<div class="cert-head-mid">' + esc(d.tenantName || '') + '</div>' +
       logoRight + '</div>' +
-    '<h1>' + esc(d.title || x.title) + '</h1>' +
+    (title ? '<h1>' + esc(title) + '</h1>' : '') +
     (x.subtitle ? '<p class="cert-sub">' + esc(x.subtitle) + '</p>' : '') +
-    '<p>' + esc(x.presentedTo) + '</p>' +
+    (x.presentedTo ? '<p>' + esc(x.presentedTo) + '</p>' : '') +
     '<div class="name">' + esc(d.userName || '—') + '</div>' +
     (d.tenantName ? '<p class="cert-org">' + esc(d.tenantName) + '</p>' : '') +
     booksHtml + bestBookHtml +
     (d.performance != null
-      ? '<p>' + esc(x.performanceLabel) + ': <b>' + esc(String(d.performance)) + '%</b></p>' : '') +
+      ? '<p>' + (x.performanceLabel ? esc(x.performanceLabel) + ': ' : '') +
+        '<b>' + esc(String(d.performance)) + '%</b></p>' : '') +
     (d.objectiveScore != null
       ? '<p class="small muted">Objective score: ' + esc(String(d.objectiveScore)) + '%</p>' : '') +
     extra + signs +

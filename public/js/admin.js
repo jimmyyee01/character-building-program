@@ -664,7 +664,7 @@ async function userRowClick(e) {
 /* ---------- user (student) detail editing ----------- */
 
 function userEditHtml(u) {
-  const supOpts = [];
+  const supOpts = ['<option value="">— automatic / not assigned —</option>'];
   if (isAdmin() && supOverview && supOverview.supervisors) {
     supOverview.supervisors.forEach(function (s) {
       const label = (s.fullName || 'Supervisor') + (s.tenantName ? ' — ' + s.tenantName : '') + ' (' + s.users + '/' + s.limit + ')';
@@ -675,6 +675,9 @@ function userEditHtml(u) {
     ? '<div><label>Supervisor</label><select id="ueSup">' + supOpts.join('') + '</select></div>'
     : '';
   const roleLabel = '<p><b>Role:</b> ' + roleBadge(u.role) + '</p>';
+  const statusField = isAdmin()
+    ? '<div><label>Status</label><label class="small"><input type="checkbox" id="ueSuspended"' +
+      (u.suspended ? ' checked' : '') + '> Suspended</label></div>' : '';
   return '<div class="card"><h3 id="ueTitle">Edit user</h3>' +
     roleLabel +
     '<form id="userEditForm"><div class="row">' +
@@ -684,8 +687,7 @@ function userEditHtml(u) {
     '<div><label>School class</label><input type="text" id="ueClass" placeholder="e.g. Grade 10A" value="' + esc(u.className || '') + '"></div>' +
     '</div><div class="row" id="ueEmailRow"' + (u.role === 'student' ? ' class="hidden"' : '') + '>' +
     '<div><label>Email</label><input type="email" id="ueEmail" value="' + esc(u.email || '') + '"></div>' +
-    '</div><div class="row">' + supRow +
-    '<div><label>Status</label><input type="checkbox" id="ueSuspended"' + (u.suspended ? ' checked' : '') + '> <span class="muted small">' + (u.suspended ? 'Suspended' : 'Active') + '</span></div>' +
+    '</div><div class="row">' + supRow + statusField +
     '<div class="fixed"><button type="submit">Save changes</button></div>' +
     '</div></form>' +
     '<div class="fixed" style="padding-bottom:12px"><button type="button" class="ghost small" id="ueClose">Close</button></div>' +
@@ -693,19 +695,20 @@ function userEditHtml(u) {
 }
 
 function openUserEdit(u) {
-  const modal = document.getElementById('modalRoot');
-  if (!modal) { console.error('[openUserEdit] modalRoot missing'); return; }
-  modal.innerHTML = userEditHtml(u);
-  modal.classList.remove('hidden');
+  userEditState = u;
+  openModal(userEditHtml(u));
   const ueClose = document.getElementById('ueClose');
   if (ueClose) ueClose.addEventListener('click', closeUserEdit);
   const ueForm = document.getElementById('userEditForm');
   if (ueForm) ueForm.addEventListener('submit', saveUserEdit);
+  const x = document.getElementById('modalX');
+  if (x) x.onclick = closeUserEdit;
+  const bg = document.getElementById('modalBg');
+  if (bg) bg.onclick = function (e) { if (e.target.id === 'modalBg') closeUserEdit(); };
 }
 
 function closeUserEdit() {
-  const modal = document.getElementById('modalRoot');
-  if (modal) { modal.innerHTML = ''; modal.classList.add('hidden'); }
+  closeModal();
   userEditState = null;
 }
 
@@ -717,12 +720,14 @@ async function saveUserEdit(e) {
   const num = document.getElementById('ueNumber');
   const cls = document.getElementById('ueClass');
   const email = document.getElementById('ueEmail');
+  const sup = document.getElementById('ueSup');
   const susp = document.getElementById('ueSuspended');
   const payload = { fullName: name.value.trim() };
-  if (num && num.value.trim()) payload.studentNumber = num.value.trim();
-  if (cls && cls.value.trim()) payload.className = cls.value.trim();
-  if (email && email.value.trim()) payload.email = email.value.trim();
-  if (susp && susp.checked) payload.suspended = true;
+  if (num) payload.studentNumber = num.value.trim();
+  if (cls) payload.className = cls.value.trim();
+  if (email) payload.email = email.value.trim();
+  if (sup) payload.supervisorId = sup.value || null;
+  if (susp) payload.suspended = !!susp.checked;
   try {
     await API.put('/users/' + id, payload);
     toast('User details saved', 'ok');

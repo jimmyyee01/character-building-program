@@ -219,6 +219,31 @@ const HAS_TLS = HTTPS_PORT > 0 && fs.existsSync(TLS_CERT) && fs.existsSync(TLS_K
 process.env.APP_TLS = HAS_TLS ? '1' : '';
 process.env.APP_HTTPS_PORT = HAS_TLS ? String(HTTPS_PORT) : '';
 
+/* Certbot writes HTTP-01 tokens below this directory. The port-80 redirect
+   serves only a single safe token filename before sending every other request
+   to HTTPS, so a six-day IP certificate can renew without stopping the app. */
+const ACME_WEBROOT = process.env.ACME_WEBROOT || path.join(ROOT, 'acme-webroot');
+function serveAcmeChallenge(req, res) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+  let pathname;
+  try { pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname); }
+  catch (e) { return false; }
+  const prefix = '/.well-known/acme-challenge/';
+  if (pathname.indexOf(prefix) !== 0) return false;
+  const token = pathname.slice(prefix.length);
+  if (!/^[A-Za-z0-9_-]+$/.test(token)) {
+    sendJSON(res, 400, { ok: false, error: 'Invalid ACME challenge token' });
+    return true;
+  }
+  const file = safeJoin(ACME_WEBROOT, path.join('.well-known', 'acme-challenge', token));
+  if (!file) {
+    sendJSON(res, 403, { ok: false, error: 'Forbidden' });
+    return true;
+  }
+  serveFile(req, res, file);
+  return true;
+}
+
 function loopbackHost(host) {
   return /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(String(host || ''));
 }
@@ -253,6 +278,7 @@ const handler = async (req, res) => {
       throw httpError(400, 'Malformed request path');
     }
 
+    if (serveAcmeChallenge(req, res)) return;
     const toSecure = secureRedirect(req, p);
     if (toSecure) {
       res.writeHead(302, { Location: toSecure, 'Cache-Control': 'no-store' });
@@ -348,6 +374,7 @@ if (HAS_TLS) {
     const port = Number(REDIRECT_PORT) || 80;
     const securePort = HTTPS_PORT === 443 ? '' : ':' + HTTPS_PORT;
     const redirectServer = http.createServer((req, res) => {
+      if (serveAcmeChallenge(req, res)) return;
       const host = String(req.headers.host || '').replace(/:\d+$/, '') || 'localhost';
       res.writeHead(302, { Location: 'https://' + host + securePort + (req.url || '/'), 'Cache-Control': 'no-store' });
       res.end();
