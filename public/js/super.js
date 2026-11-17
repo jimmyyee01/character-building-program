@@ -88,6 +88,7 @@ const RENDERERS = {
   certtemplates: renderCertTemplates,
   assessment: renderAssessment, analytics: renderAnalytics,
   settings: renderSettings, lessons: renderLessons,
+  chatbot: renderChatbot,
   videos: renderVideoAlerts, logs: renderLogs, trash: renderTrash
 };
 
@@ -3622,7 +3623,12 @@ async function renderSettings() {
   } catch (e) { /* keep whatever we have */ }
   S.settings = cur;
 
-  let library = [];
+/* Chatbot configuration - base URL, auth token, and channel */
+S.chatbot = S.chatbot || {
+  baseUrl: '',
+  auth: '',
+  channel: ''
+};;
   try { library = await ensure('library', '/library', 'library'); }
   catch (e) { v.innerHTML = errBox(e); return; }
   const letters = library.filter(function (i) { return i.type === 'letter'; });
