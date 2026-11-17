@@ -763,7 +763,8 @@ function studentEditHtml(u) {
     '<div class="row">' +
     '<div><label>Student number</label><input type="text" id="seNumber" value="' + esc(u.studentNumber || '') + '" placeholder="e.g. STU-101"></div>' +
     '<div><label>School class</label><input type="text" id="seClass" placeholder="e.g. Grade 10A" value="' + esc(u.className || '') + '"></div>' +
-    '</div><div class="row">' +
+    '<div id="sePhotoRow"></div>' +
+    '<div class="row">' +
     '<div id="seEmailRow"><label>Email</label><input type="email" id="seEmail" value="' + esc(u.email || '') + '"></div>' +
     '<div><label>Supervisor</label><select id="seSup">' + supOpts + '</select></div>' +
     '</div><div class="row">' +
@@ -798,6 +799,25 @@ function openStudentEdit(studentId) {
     };
   }
   openModal(studentEditHtml(u));
+  const sePhotoRow = document.getElementById('sePhotoRow');
+  if (sePhotoRow && u.role === 'student') {
+    sePhotoRow.innerHTML = '<div><label>Photo (optional)</label>' +
+      '<input type="file" id="sePhoto" accept="image/*">' +
+      (u.photo ? '<div class="mt"><img id="sePhotoCurrent" src="' + esc(u.photo) + '" alt="Current" style="height:72px;border-radius:8px;border:1px solid var(--line);padding:4px;background:#fff"></div>' : '') +
+      '<div class="mt"><img id="sePhotoPreview" alt="Photo preview" class="hidden" style="height:72px;border-radius:8px;border:1px solid var(--line);padding:4px;background:#fff"></div>' +
+      '</div>';
+    const sePhoto = document.getElementById('sePhoto');
+    const sePreview = document.getElementById('sePhotoPreview');
+    if (sePhoto && sePreview) {
+      sePhoto.onchange = function () {
+        const f = this.files && this.files[0];
+        if (!f) { sePreview.classList.add('hidden'); sePreview.src = ''; return; }
+        const r = new FileReader();
+        r.onload = function () { sePreview.src = r.result; sePreview.classList.remove('hidden'); };
+        r.readAsDataURL(f);
+      };
+    }
+  }
   const seClose = document.getElementById('seClose');
   if (seClose) seClose.addEventListener('click', closeStudentEdit);
   const seForm = document.getElementById('studentEditForm');
@@ -823,12 +843,16 @@ async function saveStudentEdit(e) {
   const email = document.getElementById('seEmail');
   const sup = document.getElementById('seSup');
   const susp = document.getElementById('seSuspended');
+  const sePhoto = document.getElementById('sePhoto');
   const payload = { fullName: name.value.trim() };
   if (num) payload.studentNumber = num.value.trim();
   if (cls) payload.className = cls.value.trim();
   if (email) payload.email = email.value.trim();
   if (sup) payload.supervisorId = sup.value || null;
   if (susp) payload.suspended = !!susp.checked;
+  if (sePhoto && sePhoto.files && sePhoto.files[0]) {
+    payload.photo = await fileToAvatarDataUrl(sePhoto.files[0], 256);
+  }
   try {
     await API.put('/users/' + id, payload);
     toast('Student details saved', 'ok');
