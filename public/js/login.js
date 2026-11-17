@@ -102,11 +102,13 @@ function renderTopPerformers(rows) {
     const title = (performer.name || 'Learner') +
       ' — marks ' + marks + ' · coverage ' + coverage +
       (performer.className ? ' — ' + performer.className : '');
+    // Show school logo instead of student photo for best performers
+    const schoolLogo = tenantInfo.tenant.logo || '/images/default-school-logo.png';
     return '<div class="login-performer rank-' + rank + '" title="' + esc(title) + '">' +
       '<span class="lp-avatar-wrap">' +
         '<span class="lp-avatar"><span class="lp-initials">' +
-          esc(performerInitials(performer.name)) + '</span>' +
-          (performer.photo ? '<img src="' + esc(performer.photo) + '" alt="">' : '') +
+          esc(performerInitials(performer.name)) +
+          '<img src="' + esc(schoolLogo) + '" alt="School logo" class="lp-school-logo">' +
         '</span>' +
         '<span class="lp-rank">' + rank + '</span>' +
       '</span>' +

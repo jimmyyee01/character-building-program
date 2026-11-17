@@ -78,6 +78,7 @@ const CERT_DEFAULT_TEXTS = {
   presentedTo: 'This certificate is proudly presented to',
   completion: 'for the successful completion of',
   performanceLabel: 'Overall performance',
+  qrCodeData: ''
   signLeftLabel: 'Supervisor',
   signRightLabel: 'Program Director',
   footerNote: ''
