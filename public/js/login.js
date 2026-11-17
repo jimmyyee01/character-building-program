@@ -9,6 +9,30 @@ try { localStorage.setItem('cbp_login', location.pathname); } catch (e) {}
 
 /* Say why the sign-in page appeared again, so a learner never wonders whether
    something broke. `left` is set by the app when it signs a student out. */
+/* Request browser permissions for location, microphone, and camera */
+try {
+  /* Microphone - for dictation/recognizer feature */
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    /* Stop the stream immediately - we just want to check permission */
+    micStream.getTracks().forEach(t => t.stop());
+  }
+  /* Camera - for potential video features */
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    const camStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    /* Stop the stream immediately - we just want to check permission */
+    camStream.getTracks().forEach(t => t.stop());
+  }
+  /* Location - for geolocation features */
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      /* success */ () => { /* permission granted */ },
+      /* error */ () => { /* permission denied or unavailable */ }
+    );
+  }
+} catch (e) {
+  /* Permissions may be blocked or unavailable - continue anyway */
+}
 function showLeftNote() {
   const box = document.getElementById('leftBanner');
   if (!box) return;

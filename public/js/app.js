@@ -476,7 +476,7 @@ function afterAssessment() {
 async function startAssessmentFlow() {
   const a = await loadAssessment();
   if (!a || a.pre) { afterAssessment(); return; }   /* already taken (or unavailable): carry on */
-  modal('<h3>Self-assessment — before we begin</h3>' +
+  modal('<h3>Self-assessment — <b>BE TRUE</b> before we begin</h3>' +
     '<p class="muted">The form has three parts. <b>Section A</b>: rate how much you agree with each ' +
     'statement, from 1 to 5. <b>Section B</b>: write your <b>pre-program observation</b> for every ' +
     'behaviour area — the post-program column stays inactive until the end of the programme. ' +
