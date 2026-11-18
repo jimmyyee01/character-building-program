@@ -1,0 +1,68 @@
+// Login System - Fixed Version (18/11/2026)
+// IIFE wrapper fixes the await SyntaxError
+document.addEventListener('DOMContentLoaded', function() {
+    var form = document.getElementById('loginForm');
+    if (!form) return;
+    
+    form.addEventListener('submit', (function() {
+        return async function(e) {
+            e.preventDefault();
+            var btn = form.querySelector('button');
+            var orig = btn.innerHTML;
+            
+            btn.innerHTML = 'Logging in...';
+            btn.disabled = true;
+            
+            // ƒo. IIFE wrapper fixes the await SyntaxError
+            var data = await fetch('/api/auth/super-login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username: form.elements['username'].value, password: form.elements['password'].value})
+            });
+            
+            var result = await data.json();
+            
+            btn.innerHTML = orig;
+            btn.disabled = false;
+            
+            if (result.ok && result.token) {
+                localStorage.setItem('cbp_token', result.token);
+                localStorage.setItem('cbp_user', JSON.stringify(result.user));
+                
+                // Role-based redirect with navigation error handling
+                var role = result.user ? result.user.role : '';
+                var targetUrl = role === 'superadmin' || role === 'super' ? '/super'
+                              : role === 'tenant_admin' ? '/admin' : '/app';
+                
+                // Attempt navigation
+                try {
+                    window.location.href = targetUrl;
+                } catch (e) {
+                    // Navigation failed - show error and stay on page
+                    showError('Login successful but navigation failed: ' + (e.message || ''));
+                    return;
+                }
+                
+                // If we didn't redirect (e.g., same page), show error and retry
+                if (document.location.href === targetUrl.replace(/\/super$/, '') || document.location.href === targetUrl.replace(/\/admin$/, '') || document.location.href === targetUrl.replace(/\/app$/, '')) {
+                    showError('Login successful but navigation blocked - please click below to continue');
+                    return;
+                }
+            } else {
+                showError(result.error || 'Invalid credentials');
+            }
+        };
+    })();
+    
+    function showError(msg) {
+        var e = document.querySelector('.login-error');
+        if(e) e.remove();
+        var d = document.createElement('div');
+        d.className = 'login-error';
+        d.style = 'background:#fee2e2; border:1px solid #fecaca; color:#991b1b; padding:10px; margin-top:10px;';
+        d.innerHTML = 'Warning: ' + msg;
+        var f = document.getElementById('loginForm');
+        if(f && f.parentNode) f.parentNode.insertBefore(d, f.nextSibling);
+    }
+});
+

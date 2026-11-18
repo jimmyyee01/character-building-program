@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portal Login</title>
+<link rel="stylesheet" href="/css/style.css?v=78">
+<link rel="icon" id="page-favicon" href="/images/default-favicon.png" sizes="32x32">
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-side">
+    <h2 id="portalTitle">Portal</h2>
+    <p id="portalDesc">Sign in to continue with the Character Building Program.</p>
+    <div id="loginPerformers" class="login-performers hidden" aria-live="polite">
+      <div class="login-performers-head">
+        <h3>Best performers</h3>
+        <span>Live top 10</span>
+      </div>
+      <div id="loginPerformersGrid" class="login-performers-grid"></div>
+      <p class="login-performers-note">Updated after every scored activity and every chapter covered. Learners who have completed every module are not shown.</p>
+    </div>
+    <ul>
+      <li>Your account shows only your own data.</li>
+      <li>Accounts are created by your administrator — no self-registration.</li>
+      <li>Chapters unlock one at a time after each submission.</li>
+      <li>Certificates are issued when a module is completed.</li>
+    </ul>
+    <p><a href="/" style="color:#ffd979">← Back to portal list</a></p>
+  </div>
+  <div class="auth-panel">
+    <img id="loginMark" class="login-mark hidden" alt="">
+    <div class="auth-logos">
+      <img id="logoTenant" class="hidden" alt="Organization logo">
+    </div>
+    <h2 id="tenantName">Loading…</h2>
+    <div id="closedBanner" class="closed-banner hidden">This portal is currently closed. It opens on the scheduled dates.</div>
+    <div id="leftBanner" class="closed-banner hidden"></div>
+
+    <form id="loginForm">
+      <label>Email or Student Number</label>
+      <input type="text" id="liId" autocomplete="username" required>
+      <label>Password</label>
+      <input type="password" id="liPw" autocomplete="current-password" required>
+      <div class="mt"><button type="button" id="pwToggle" style="background:none;border:none;color:#24508c;text-decoration:underline;padding:0;font:inherit">Show</button></div>
+      <div class="mt"><button type="submit" style="width:100%">Sign in</button></div>
+      <p class="muted small center mt">No account? Self-registration is disabled —
+        ask your administrator to add you to the system.</p>
+    </form>
+  </div>
+</div>
+
+<script src="/js/common.js?v=78"></script>
+<script src="/js/login.js?v=78"></script>
+</body>
+</html>

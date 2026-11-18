@@ -1,0 +1,56 @@
+// Login System - 16/11/2026 (Pre-Session State)
+// Had top-level await SyntaxError - the original bug
+document.addEventListener('DOMContentLoaded', function() {
+    var form = document.getElementById('loginForm');
+    if (!form) return;
+    
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        var btn = form.querySelector('button');
+        var orig = btn.innerHTML;
+        
+        btn.innerHTML = 'Logging in...';
+        btn.disabled = true;
+        
+        // ❌ top-level await in non-async wrapper - causes SyntaxError
+        var data = await fetch('/api/auth/super-login', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({username: form.elements['username'].value, password: form.elements['password'].value})
+        });
+        
+        var result = await data.json();
+        
+        btn.innerHTML = orig;
+        btn.disabled = true;
+        
+        if (result.ok && result.token) {
+            localStorage.setItem('cbp_token', result.token);
+            localStorage.setItem('cbp_user', JSON.stringify(result.user));
+            
+            // Role-based redirect
+            var role = result.user ? result.user.role : '';
+            if (role === 'superadmin' || role === 'super') {
+                window.location.href = '/super';
+            } else if (role === 'tenant_admin') {
+                window.location.href = '/admin';
+            } else {
+                window.location.href = '/app';
+            }
+        } else {
+            showError(result.error || 'Invalid credentials');
+        }
+    });
+});
+
+function showError(msg) {
+    var e = document.querySelector('.login-error');
+    if(e) e.remove();
+    var d = document.createElement('div');
+    d.className = 'login-error';
+    d.style = 'background:#fee2e2; border:1px solid #fecaca; color:#991b1b; padding:10px; margin-top:10px;';
+    d.innerHTML = 'Warning: ' + msg;
+    var f = document.getElementById('loginForm');
+    if(f && f.parentNode) f.parentNode.insertBefore(d, f.nextSibling);
+}
+

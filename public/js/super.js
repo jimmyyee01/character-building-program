@@ -88,7 +88,7 @@ const RENDERERS = {
   certtemplates: renderCertTemplates,
   assessment: renderAssessment, analytics: renderAnalytics,
   settings: renderSettings, lessons: renderLessons,
-  chatbot: renderChatbot,
+  // chatbot: renderChatbot,  // Function not defined - commented out - function not defined yet
   videos: renderVideoAlerts, logs: renderLogs, trash: renderTrash
 };
 
